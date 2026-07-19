@@ -1,0 +1,19 @@
+#!/bin/sh
+# ===========================================================================
+# POSIX wrapper for the hexpair release packaging.
+#
+# All packaging logic lives in pack-release.py: every platform produces
+# the tarball with the same implementation, so the output is
+# byte-identical by construction (see CONTRIBUTING.md, "Reproducible
+# Builds"). pack-release.cmd is the Windows counterpart.
+# ===========================================================================
+set -eu
+
+cd "$(dirname "$0")"
+
+if ! command -v python3 >/dev/null 2>&1; then
+    echo "pack-release: python3 not found (it is also required by the test suite)" >&2
+    exit 1
+fi
+
+exec python3 pack-release.py

@@ -1,0 +1,163 @@
+*hexpair.txt*  Hex viewing with hex<->ASCII pair highlighting
+
+Author:  Michal Růžička <ruzicka.mich@gmail.com>
+URL:     https://github.com/michal-ruzicka/hexpair
+License: Vim License - same terms as Vim itself (see |license|)
+
+==============================================================================
+CONTENTS                                                    *hexpair-contents*
+
+    1. Introduction ................ |hexpair-introduction|
+    2. Usage ....................... |hexpair-usage|
+    3. Mappings .................... |hexpair-mappings|
+    4. Configuration ............... |hexpair-configuration|
+    5. Writing in hex mode ......... |hexpair-writing|
+    6. Limitations ................. |hexpair-limitations|
+
+==============================================================================
+1. Introduction                                         *hexpair-introduction*
+
+hexpair toggles the current buffer between its normal representation and an
+xxd hex dump with 'filetype' set to xxd (standard syntax highlighting).
+
+While hex mode is active, the byte under the cursor is highlighted in BOTH
+columns of the dump: placing the cursor on a hex byte highlights the
+corresponding ASCII character, and placing it on an ASCII character
+highlights the corresponding pair of hex digits.
+
+Requires the `xxd` utility, which ships with Vim.  It is looked up on
+$PATH first and then in the Vim runtime directory ($VIMRUNTIME), so on
+Windows the bundled xxd.exe is found even when it is not on PATH.  No
+other external tools are needed.
+
+==============================================================================
+2. Usage                                                       *hexpair-usage*
+
+Preferably open the file in binary mode: >
+
+    vim -b file.bin
+<
+If the file was opened WITHOUT -b, the plugin re-reads it with `:edit ++bin`
+on the first toggle to obtain the exact on-disk bytes (read-time conversions
+such as CR stripping for fileformat=dos cannot be undone otherwise).  This
+requires an unmodified buffer backed by a readable file; for modified or
+unnamed buffers the plugin falls back to dumping the in-memory content and
+prints a warning.  After a ++bin reload the buffer stays in binary mode even
+when hex mode is toggled off.
+
+Only the HEX column matters when converting back: the offset column and the
+ASCII column are stripped before the reverse conversion and are therefore
+purely decorative.  This means you can freely insert, delete or reorder
+lines while editing - inserted lines need no offset and no ASCII part, just
+hex pairs.  After |:w| the dump is regenerated, so offsets and the ASCII
+column become correct again automatically.
+
+Editing rules:
+- keep bytes in the hex area separated by at most ONE space; a run of two
+  spaces marks the start of the (ignored) ASCII column,
+- always write full byte pairs (an odd number of hex digits shifts all
+  following bytes by a nibble).
+
+The cursor position is preserved across toggling as a BYTE OFFSET: the
+byte the cursor was on in the normal view is the byte it lands on in the
+HEX column of the dump, and vice versa.  For a multibyte character this is
+the offset of its first byte in the file encoding.  The same mechanism
+keeps the cursor on the same byte across |:w| in hex mode, even when the
+regenerated dump shifts all offsets because bytes were inserted or deleted.
+
+For a buffer opened without -b the cursor is mapped around the ++bin
+reload in two phases: the line and the within-line file-byte column are
+captured from the converted view (with BOM and single-byte fileencoding
+transcoding accounted for), and the line-start offset is then anchored
+with line2byte() over the raw bytes - exact by construction regardless of
+line endings, including files with mixed CRLF/LF.  Multibyte
+fileencodings other than utf-8 (e.g. utf-16) do not preserve line
+boundaries across the reload and remain approximate; the same applies to
+the non-reloadable fallback (modified or unnamed buffers).
+
+While editing the dump, the byte offset of the cursor is derived from the
+hex pairs actually present before it, so after inserting bytes (on a bare
+line or into an existing line) a |:w| keeps the cursor on the newly added
+byte it was on, even though the regenerated dump reflows all lines.
+
+Toggle hex mode with the mapping (|hexpair-mappings|) or the command:
+
+                                                              *:HexPairToggle*
+:HexPairToggle          Toggle between the normal buffer content and the
+                        hex dump view.  The same command switches back.
+
+                              *:HexPairGoHex* *:HexPairGoAscii* *:HexPairSwap*
+:HexPairGoHex           Move the cursor to the HEX column, staying on the
+                        same byte.
+:HexPairGoAscii         Move the cursor to the ASCII column, staying on the
+                        same byte.
+:HexPairSwap            Move the cursor to the opposite column, staying on
+                        the same byte.
+
+The jump commands clamp to a sensible target: from the offset column they
+land on the first byte of the line, from beyond the ASCII column on the
+last byte, and on a short last line on its last existing byte.
+
+==============================================================================
+3. Mappings                                                 *hexpair-mappings*
+
+                                                        *<Plug>(HexPairToggle)*
+           *<Plug>(HexPairGoHex)* *<Plug>(HexPairGoAscii)* *<Plug>(HexPairSwap)*
+The plugin defines NO key mappings by default; it only provides the
+commands above and <Plug> mappings.  Choose your own keys in your vimrc,
+e.g.: >
+
+    nmap §h <Plug>(HexPairToggle)
+    nmap §< <Plug>(HexPairGoHex)
+    nmap §> <Plug>(HexPairGoAscii)
+    nmap §- <Plug>(HexPairSwap)
+<
+or map the commands directly: >
+
+    nnoremap <silent> §h :HexPairToggle<CR>
+<
+==============================================================================
+4. Configuration                                       *hexpair-configuration*
+
+                                                    *g:hexpair_bytes_per_line*
+g:hexpair_bytes_per_line
+                        Number of bytes per dump line (xxd -c).  Default: 16.
+                        Example for wide terminals: >
+                            let g:hexpair_bytes_per_line = 32
+<
+                                                *HexPairActive* *HexPairMirror*
+HexPairActive           Highlight for the byte representation in the column
+                        the cursor is currently in.  Default: underline.
+HexPairMirror           Highlight for the counterpart in the other column.
+                        Links to IncSearch by default.
+                        Override either group with e.g.: >
+                            highlight HexPairActive cterm=bold gui=bold
+                            highlight HexPairMirror ctermbg=52 guibg=#5f0000
+<
+==============================================================================
+5. Writing in hex mode                                       *hexpair-writing*
+
+Writing with |:w| while hex mode is active is safe.  The buffer is
+transparently converted back to binary (xxd -r) before the write and
+re-converted to the dump afterwards, so the file on disk always contains the
+real binary content, never the textual dump.
+
+==============================================================================
+6. Limitations                                           *hexpair-limitations*
+
+- The column arithmetic assumes the dump format produced by
+  `xxd -g 1 -c N` (one-byte groups).  Do not re-filter the buffer with a
+  different xxd invocation while hex mode is active.
+- Undo history crosses the conversion boundary: an |u| in hex mode can undo
+  the conversion itself.  Toggle back with |:HexPairToggle| instead.
+- The plugin operates on the whole buffer; very large files may be slow to
+  convert.
+- Cursor mapping from the dump to the normal view is byte-exact for any
+  byte the cursor can rest on in a text buffer.  A 0a byte acting as the
+  line separator is the exception: the cursor cannot rest on it, so it
+  clamps to the last byte of the line and a subsequent toggle lands there
+  instead.  If the buffer was reloaded with ++bin and the file needed
+  fileencoding transcoding, the position carried over the reload is a
+  best-effort line/column match.
+
+vim:tw=78:ts=8:ft=help:norl:

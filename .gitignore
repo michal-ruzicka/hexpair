@@ -1,0 +1,17 @@
+# Released tarballs
+dist/
+
+# VS Code (keep workspace-level config out of the repo unless intentionally shared)
+.vscode/
+
+# Claude Code Assistant
+.claude/
+
+# OS junk
+Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Editor temp
+*.swp
+*~

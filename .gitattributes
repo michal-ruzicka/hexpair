@@ -1,0 +1,4 @@
+# Normalize line endings: everything text is committed with LF.
+* text=auto eol=lf
+# The Windows batch script must keep CRLF to run under cmd.exe.
+*.cmd text eol=crlf

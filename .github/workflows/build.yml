@@ -1,0 +1,72 @@
+name: Build
+
+# Runs on every push (all branches) and on every pull request.
+# Purpose: run the regression suite and prove that the release
+# packaging is reproducible across platforms (identical SHA-256 from
+# the POSIX and the Windows packaging scripts).
+# Releases are NOT published here — artifacts are signed locally and
+# uploaded to GitHub Releases by hand (see CONTRIBUTING.md).
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+# Restrict the GITHUB_TOKEN to the minimum required — read-only checkout.
+permissions:
+  contents: read
+
+# Cancel any in-progress run for the same ref so a fast-follow push does
+# not queue up behind a stale one.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test-and-pack-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Install Vim
+        run: sudo apt-get update && sudo apt-get install -y vim xxd
+      - name: Run the regression suite
+        run: test/run-tests.sh
+      - name: Package the release tarball
+        run: ./pack-release
+      - name: Record the tarball hash
+        run: sha256sum dist/*.tar | tee linux.sha256
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: tarball-linux
+          path: |
+            dist/*.tar
+            linux.sha256
+
+  pack-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Package the release tarball
+        shell: cmd
+        run: pack-release.cmd
+      - name: Record the tarball hash
+        shell: pwsh
+        run: (Get-FileHash dist\*.tar -Algorithm SHA256).Hash.ToLower() + '  ' + (Get-Item dist\*.tar).Name | Tee-Object windows.sha256
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: tarball-windows
+          path: |
+            dist/*.tar
+            windows.sha256
+
+  reproducibility-check:
+    needs: [test-and-pack-linux, pack-windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      - name: Compare cross-platform hashes
+        run: |
+          l=$(awk '{print $1}' tarball-linux/linux.sha256)
+          w=$(awk '{print $1}' tarball-windows/windows.sha256)
+          echo "linux:   $l"
+          echo "windows: $w"
+          test "$l" = "$w"
