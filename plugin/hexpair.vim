@@ -1,7 +1,7 @@
 " hexpair.vim - Hex viewing with hex<->ASCII pair highlighting
 " Maintainer:  Michal Růžička <ruzicka.mich@gmail.com>
 " URL:         https://github.com/michal-ruzicka/hexpair
-" Version:     1.0.0
+" Version:     1.1.0
 " Date:        2026-07-19
 " License:     Vim License - same terms as Vim itself (see LICENSE.md
 "              or :help license); SPDX-License-Identifier: Vim
@@ -21,9 +21,16 @@
 "
 " Configuration (set in your vimrc before the plugin loads):
 "   g:hexpair_bytes_per_line   bytes per dump line (default 16)
+"   g:hexpair_paste            set to 0 to stop the plugin from managing
+"                              the global 'paste' option while the cursor
+"                              is in a hex buffer (default 1)
 "   g:hexpair_debug            set to 1 to echo position-mapping traces
 "                              (inspect with :messages)
 "   HexPairActive, HexPairMirror  highlight groups (cursor side / counterpart)
+"
+" Editing defaults for the dump (tabstop, shiftwidth, no automatic
+" formatting) live in the bundled ftplugin/xxd.vim; see
+" :help hexpair-ftplugin for how to overrule them.
 
 if exists('g:loaded_hexpair')
   finish
@@ -39,6 +46,10 @@ set cpo&vim
 
 if !exists('g:hexpair_bytes_per_line')
   let g:hexpair_bytes_per_line = 16
+endif
+
+if !exists('g:hexpair_paste')
+  let g:hexpair_paste = 1
 endif
 
 " Highlight groups for the byte-pair highlight:
@@ -92,6 +103,12 @@ function! s:Highlight() abort
   if !get(b:, 'hexpair_active', 0)
     return
   endif
+
+  " Track the cursor for s:PostReload(): when BufReadPre fires the old
+  " buffer content is already gone, so the position must be remembered
+  " while the dump is still in the buffer.  This runs on every
+  " CursorMoved, which keeps it current for any interactive movement.
+  let b:hexpair_last_pos = [line('.'), col('.')]
 
   let [n, hexstart, hexend, asciistart] = s:Layout()
   let lnum    = line('.')
@@ -167,6 +184,46 @@ function! s:StripDumpLine(line) abort
   let l = substitute(l, '^[^:]*:', '', '')
   let l = substitute(l, '  .*$', '', '')
   return substitute(l, '[^0-9a-fA-F ]', '', 'g')
+endfunction
+
+" Scan the dump for input that the reverse conversion would otherwise
+" mangle silently.  Returns {} when the dump is clean, or a dictionary
+" with 'msg' and - for a locatable offender - 'lnum'/'col' (1-based,
+" column in the original line).  Two classes of errors:
+"   - a character in the hex area that is not a hex digit or a space
+"     (it would be dropped by the safety net of s:StripDumpLine()),
+"   - an odd TOTAL number of hex digits (the last nibble would be
+"     dropped by xxd -r -p).
+" The scanned payload region of each line MUST mirror the stripping
+" logic of s:StripDumpLine() exactly: skip leading whitespace and the
+" offset column (up to the first ':'), stop at the first run of two
+" spaces (the ASCII column) - keep the two in sync.
+function! s:ValidateDump() abort
+  let digits = 0
+  for lnum in range(1, line('$'))
+    let line = getline(lnum)
+    let start = matchend(line, '^\s*')
+    let colon = stridx(line, ':')
+    if colon >= 0
+      let start = colon + 1
+    endif
+    let end = match(line, '  ', start)
+    if end < 0
+      let end = strlen(line)
+    endif
+    let bad = match(line, '[^0-9a-fA-F ]', start)
+    if bad >= 0 && bad < end
+      return {'lnum': lnum, 'col': bad + 1,
+            \ 'msg': printf('invalid character %s in the hex area (line %d, column %d)',
+            \               string(matchstr(line, '.', bad)), lnum, bad + 1)}
+    endif
+    let digits += strlen(substitute(strpart(line, start, end - start),
+          \                         '[^0-9a-fA-F]', '', 'g'))
+  endfor
+  if digits % 2
+    return {'msg': 'odd number of hex digits - the last nibble would be dropped'}
+  endif
+  return {}
 endfunction
 
 " Convert the dump back to binary while ignoring the offset and ASCII
@@ -285,10 +342,21 @@ endfunction
 " ---------------------------------------------------------------------------
 
 " Before a write: convert the dump back to binary so the file on disk gets
-" the real content, not the textual dump.
+" the real content, not the textual dump.  An invalid dump aborts the
+" write instead: the exception propagates out of the BufWritePre
+" autocommand, Vim cancels the write, and both the file on disk and the
+" dump in the buffer keep their previous content.
 function! s:PreWrite() abort
   if !get(b:, 'hexpair_active', 0)
     return
+  endif
+  let err = s:ValidateDump()
+  if !empty(err)
+    if has_key(err, 'lnum')
+      call cursor(err.lnum, err.col)
+      call s:Highlight()
+    endif
+    throw 'hexpair: ' . err.msg . '; nothing was written'
   endif
   let b:hexpair_off = s:DumpOffset()
   call s:ReverseDump()
@@ -308,6 +376,88 @@ function! s:PostWrite() abort
     unlet b:hexpair_off
   endif
   setlocal nomodified
+  call s:Highlight()
+  redraw!
+endfunction
+
+" ---------------------------------------------------------------------------
+" Global 'paste' management
+" ---------------------------------------------------------------------------
+
+" 'paste' is a GLOBAL option - there is no buffer-local variant - so it
+" cannot simply be set for the dump buffer.  Instead it is switched on
+" whenever the cursor enters a hex-mode buffer and restored to its
+" previous value whenever the cursor leaves it (and when hex mode is
+" toggled off): insert-mode mappings and abbreviations then cannot
+" mangle typed hex and no automatic formatting interferes, while every
+" other buffer keeps the user's own 'paste' state.  Disable with
+" g:hexpair_paste = 0.
+function! s:PasteOn() abort
+  if !g:hexpair_paste || !get(b:, 'hexpair_active', 0)
+    return
+  endif
+  if !exists('b:hexpair_paste_save')
+    let b:hexpair_paste_save = &paste
+  endif
+  " Switching 'paste' on resets 'expandtab' as a side effect; preserve
+  " the buffer's value (set by the bundled xxd ftplugin, or by the
+  " user's override) so a <Tab> typed into the dump still expands to
+  " spaces.  Switching 'paste' off later restores the same value, so
+  " the two stay consistent.
+  let expandtab = &l:expandtab
+  set paste
+  let &l:expandtab = expandtab
+endfunction
+
+function! s:PasteOff() abort
+  if exists('b:hexpair_paste_save')
+    let &paste = b:hexpair_paste_save
+    unlet b:hexpair_paste_save
+  endif
+endfunction
+
+" ---------------------------------------------------------------------------
+" Surviving a file reload (:e, :e!)
+" ---------------------------------------------------------------------------
+
+" Without this hook a reload would leave the raw binary content in a
+" buffer that still believes it is a dump - the highlight arithmetic
+" would point nowhere and the next :w would feed the binary content to
+" the reverse conversion.  Instead, the freshly read content is dumped
+" again: hex mode survives the reload and the cursor stays on the same
+" byte offset.
+function! s:PostReload() abort
+  if !get(b:, 'hexpair_active', 0)
+    return
+  endif
+  " Refresh the parts of the toggle-off snapshot that the reload
+  " re-detected from disk; the reloaded buffer is unmodified by
+  " definition.
+  let b:hexpair_saved.binary   = &l:binary
+  let b:hexpair_saved.eol      = &l:eol
+  let b:hexpair_saved.modified = 0
+  silent execute '%!' . s:xxd . ' -g 1 -c ' . b:hexpair_n
+  setlocal filetype=xxd
+  setlocal nomodified
+  " Map the last tracked cursor position back to a byte offset by
+  " canonical layout: exact for an unedited dump (:e), best-effort for
+  " a discarded edited one (:e!), where the old content that an exact
+  " mapping would need no longer exists.
+  if exists('b:hexpair_last_pos')
+    let [n, hexstart, hexend, asciistart] = s:Layout()
+    let [lnum, col] = b:hexpair_last_pos
+    if col >= asciistart
+      let idx = col - asciistart
+    elseif col >= hexstart
+      let idx = (col - hexstart) / 3
+    else
+      let idx = 0
+    endif
+    if idx >= n
+      let idx = n - 1
+    endif
+    call cursor(s:DumpPos((lnum - 1) * n + idx))
+  endif
   call s:Highlight()
   redraw!
 endfunction
@@ -398,24 +548,51 @@ function! s:ToHex() abort
     setlocal nomodified
   endif
 
-  " Buffer-local autocommands: pair highlighting + write safety.
+  " Buffer-local autocommands: pair highlighting + write safety + 'paste'
+  " tracking + reload survival.
   augroup HexPairBuffer
     autocmd! * <buffer>
     autocmd CursorMoved,CursorMovedI <buffer> call s:Highlight()
     autocmd BufWinLeave              <buffer> call s:ClearHighlight()
     autocmd BufWritePre              <buffer> call s:PreWrite()
     autocmd BufWritePost             <buffer> call s:PostWrite()
+    autocmd BufEnter                 <buffer> call s:PasteOn()
+    autocmd BufLeave                 <buffer> call s:PasteOff()
+    autocmd BufReadPost              <buffer> call s:PostReload()
   augroup END
 
+  call s:PasteOn()
   call s:Highlight()
   redraw!
 endfunction
 
 function! s:FromHex() abort
-  " Remove the buffer-local autocommands first.
+  " Refuse to convert a dump that the reverse conversion would mangle;
+  " the cursor is parked on the offender instead.  This also catches
+  " the case where an |u| in hex mode undid the conversion itself: the
+  " buffer then holds non-dump content, which almost always contains a
+  " non-hex character - :redo brings the dump back.
+  let err = s:ValidateDump()
+  if !empty(err)
+    if has_key(err, 'lnum')
+      call cursor(err.lnum, err.col)
+      call s:Highlight()
+    endif
+    echohl ErrorMsg
+    echomsg 'hexpair: ' . err.msg . '; still in hex mode'
+    echohl None
+    return
+  endif
+
+  " Remove the buffer-local autocommands first, then restore 'paste'
+  " while its saved value is still around.  This must happen BEFORE the
+  " filetype is restored below: switching 'paste' off restores the
+  " option values it overrode (e.g. 'expandtab'), and only then may
+  " b:undo_ftplugin revert them to the buffer's pre-hex state.
   augroup HexPairBuffer
     autocmd! * <buffer>
   augroup END
+  call s:PasteOff()
   call s:ClearHighlight()
 
   " Convert back, then place the cursor on the SAME BYTE it was on in the
@@ -442,6 +619,7 @@ function! s:FromHex() abort
   if exists('b:hexpair_n')
     unlet b:hexpair_n
   endif
+  unlet! b:hexpair_last_pos
 
   " Restore the settings saved by s:ToHex().
   if exists('b:hexpair_saved')
@@ -454,6 +632,19 @@ function! s:FromHex() abort
     unlet b:hexpair_saved
   else
     setlocal filetype=
+  endif
+
+  " Restoring a NON-empty filetype fires the FileType autocmd, whose
+  " runtime loader runs b:undo_ftplugin and clears the b:did_ftplugin
+  " guard before sourcing the new filetype's plugins.  Restoring an
+  " empty filetype (typical for binary files) fires nothing, so the xxd
+  " ftplugin would linger: run its undo and drop the guard explicitly.
+  if &l:filetype ==# ''
+    if exists('b:undo_ftplugin')
+      execute b:undo_ftplugin
+      unlet b:undo_ftplugin
+    endif
+    unlet! b:did_ftplugin
   endif
 endfunction
 
@@ -528,10 +719,10 @@ command! -bar HexPairSwap    call s:JumpTo('swap')
 
 " No default key mappings are defined; map the <Plug> mappings (or the
 " commands directly) in your vimrc, e.g.:
-"   nmap §h <Plug>(HexPairToggle)
-"   nmap §< <Plug>(HexPairGoHex)
-"   nmap §> <Plug>(HexPairGoAscii)
-"   nmap §- <Plug>(HexPairSwap)
+"   nmap <Leader>h <Plug>(HexPairToggle)
+"   nmap <Leader>< <Plug>(HexPairGoHex)
+"   nmap <Leader>> <Plug>(HexPairGoAscii)
+"   nmap <Leader>- <Plug>(HexPairSwap)
 nnoremap <silent> <Plug>(HexPairToggle)  :<C-U>HexPairToggle<CR>
 nnoremap <silent> <Plug>(HexPairGoHex)   :<C-U>HexPairGoHex<CR>
 nnoremap <silent> <Plug>(HexPairGoAscii) :<C-U>HexPairGoAscii<CR>

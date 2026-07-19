@@ -67,6 +67,12 @@ code, releases and issue tracker.
   automatic `:edit ++bin` reload, so the dump always shows the exact
   on-disk bytes (and a plain `:w` cannot silently re-encode a binary
   file).
+- **Errors are refused, not guessed.** A non-hex character in the hex
+  area, or an odd total number of hex digits, aborts `:w` and hex-mode
+  toggle-off with an error and the cursor parked on the offender — the
+  file and the dump keep their previous content. Reloading with `:e`
+  while in hex mode regenerates the dump from the fresh file content
+  and stays in hex mode instead of breaking the view.
 
 ## Installation
 
@@ -90,11 +96,18 @@ The plugin defines **no key mappings by default**. Add your own to
 `~/.vimrc`:
 
 ```vim
-nmap §h <Plug>(HexPairToggle)     " toggle hex view
-nmap §< <Plug>(HexPairGoHex)      " jump to the HEX column (same byte)
-nmap §> <Plug>(HexPairGoAscii)    " jump to the ASCII column (same byte)
-nmap §- <Plug>(HexPairSwap)       " jump to the opposite column
+nmap <Leader>h <Plug>(HexPairToggle)     " toggle hex view
+nmap <Leader>< <Plug>(HexPairGoHex)      " jump to the HEX column (same byte)
+nmap <Leader>> <Plug>(HexPairGoAscii)    " jump to the ASCII column (same byte)
+nmap <Leader>- <Plug>(HexPairSwap)       " jump to the opposite column
 ```
+
+`<Leader>` expands to the `mapleader` variable at the time a mapping is
+defined — backslash by default; put e.g. `let mapleader = ','` *before*
+the mappings to use a different prefix. The `<Plug>(HexPair…)` targets
+are named virtual keys exposed by the plugin — map onto them with
+`nmap`, not `nnoremap` (the latter forbids the remapping through which
+a `<Plug>` target expands). Details: `:help hexpair-mappings`.
 
 ### Verifying Releases
 
@@ -139,6 +152,10 @@ start of the (ignored) ASCII column — and always write full byte pairs.
 " bytes per dump line (default 16)
 let g:hexpair_bytes_per_line = 16
 
+" keep the global 'paste' option on while the cursor is in a hex buffer,
+" restored when the cursor leaves it (set to 0 to leave 'paste' alone)
+let g:hexpair_paste = 1
+
 " highlight overrides
 highlight HexPairActive cterm=bold,underline gui=bold,underline
 highlight HexPairMirror ctermbg=52 guibg=#5f0000
@@ -146,6 +163,14 @@ highlight HexPairMirror ctermbg=52 guibg=#5f0000
 " position-mapping trace for debugging (inspect with :messages)
 let g:hexpair_debug = 1
 ```
+
+The plugin also bundles a filetype plugin (`ftplugin/xxd.vim`) with
+editing defaults for the dump: `tabstop=10`, `expandtab`,
+`shiftwidth=3` (one hex byte) and no automatic formatting, all reverted
+when hex mode is toggled off. To suppress it, put
+`let b:did_ftplugin = 1` into your own `~/.vim/ftplugin/xxd.vim`; to
+tweak individual settings, use `~/.vim/after/ftplugin/xxd.vim` (see
+`:help hexpair-ftplugin`).
 
 Full documentation: `:help hexpair` after installation, or
 [doc/hexpair.txt](doc/hexpair.txt).

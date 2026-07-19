@@ -7,6 +7,44 @@ and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html); the
 `Version:` header in `plugin/hexpair.vim` is the single source of truth.
 
+## [v1.1.0] – 2026-07-19
+
+### Added
+- Bundled filetype plugin (`ftplugin/xxd.vim`) with dump-editing
+  defaults — `tabstop=10`, `expandtab`, `shiftwidth=3` (one hex byte),
+  no automatic formatting, wrapping or indenting — applied to any
+  buffer with `filetype=xxd` and fully reverted via `b:undo_ftplugin`
+  when the hex view is toggled off (including buffers whose original
+  filetype was empty, where no `FileType` event fires). Suppress with
+  `let b:did_ftplugin = 1` in a personal `ftplugin/xxd.vim`, or
+  override individual settings in `after/ftplugin/xxd.vim`
+  (`:help hexpair-ftplugin`).
+- `g:hexpair_paste` (default on): the global `'paste'` option is
+  switched on while the cursor is in a hex-mode buffer and restored to
+  its previous value when the cursor leaves it or hex mode is toggled
+  off, so insert-mode mappings and abbreviations cannot mangle typed
+  hex; all other buffers keep the user's own `'paste'` state. The
+  buffer's `'expandtab'` is preserved across the switch.
+
+- Dump validation: a character in the hex area that is not a hex
+  digit, or an odd total number of hex digits, now aborts `:w` and
+  hex-mode toggle-off with an error and the cursor parked on the
+  offender, instead of silently dropping data — the file on disk and
+  the dump keep their previous content. This also limits the damage
+  after an `u` that undid the conversion itself: the non-dump content
+  is refused rather than converted.
+- `:e` / `:e!` while hex mode is active now regenerates the dump from
+  the freshly read file and keeps hex mode and the cursor byte offset,
+  instead of leaving raw binary content in a buffer that still
+  believed it was a dump.
+
+### Changed
+- Documented mapping examples now use the conventional `<Leader>`
+  prefix instead of `§`, which only exists on some keyboard layouts
+  (e.g. Czech); the plugin still defines no mappings of its own. The
+  help and README now also explain the `<Leader>`/`mapleader` and
+  `<Plug>` mechanisms for readers new to them.
+
 ## [v1.0.0] – 2026-07-19
 
 Initial public release, consolidating fourteen internal iterations that
@@ -57,4 +95,5 @@ in one place:
   full redraw.
 
 
+[v1.1.0]: https://github.com/michal-ruzicka/hexpair/compare/v1.0.0...v1.1.0
 [v1.0.0]: https://github.com/michal-ruzicka/hexpair/releases/tag/v1.0.0

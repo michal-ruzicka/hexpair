@@ -30,6 +30,8 @@ pack-release.py       - the packaging implementation (python3, stdlib
                         by construction
 plugin/hexpair.vim    - the plugin; header carries Version: and Date:
                         (single source of truth, parsed by pack-release.py)
+ftplugin/xxd.vim      - dump-editing defaults (guarded by b:did_ftplugin,
+                        reverted via b:undo_ftplugin)
 doc/hexpair.txt       - Vim help (:help hexpair)
 test/run-tests.sh     - headless regression suite (vim -es)
 dist/                 - packaged release tarballs (gitignored)
@@ -83,15 +85,36 @@ Key function map:
 - Write path — buffer-local `BufWritePre`/`BufWritePost`: convert
   back, let Vim write, regenerate the dump, restore the cursor to the
   *same byte* (offsets may have shifted if bytes were inserted).
+- `s:ValidateDump()` — runs before every reverse conversion (`:w` and
+  toggle-off): a non-hex character in the payload region or an odd
+  total digit count refuses the conversion (throw aborts the write;
+  toggle-off errors and stays in hex mode), cursor parked on the
+  offender. Mirrors the payload-region logic of `s:StripDumpLine()` —
+  keep them in sync (invariant 1).
+- `s:PostReload()` — `BufReadPost` on the hex buffer: `:e`/`:e!`
+  re-dumps the fresh content, refreshes the toggle-off snapshot and
+  restores the cursor from `b:hexpair_last_pos` (tracked on every
+  `CursorMoved` in `s:Highlight()`, because at `BufReadPre` time the
+  old buffer content is already gone).
+- `s:PasteOn()` / `s:PasteOff()` — the global `'paste'` option is
+  switched on while the cursor is in a hex buffer (`BufEnter`/`BufLeave`
+  plus the toggle lifecycle) and restored elsewhere; `g:hexpair_paste`
+  opts out. In `s:FromHex()`, `s:PasteOff()` must run *before* the
+  filetype restore ('paste' off restores the options it overrode, only
+  then may `b:undo_ftplugin` revert them), and when the restored
+  filetype is empty no `FileType` event fires, so the plugin executes
+  `b:undo_ftplugin` and clears `b:did_ftplugin` itself.
 - `g:hexpair_debug` — echomsg trace of every position mapping step
   (`:messages`); keep it working, it has already caught two field bugs.
 
 ### Invariants — do not break
 
-1. The double-space rule is shared between `s:StripDumpLine()` and
-   `s:DumpOffset()`: a run of two spaces ends the hex payload of a
-   line in *both*. A cursor past a double space must never map to a
-   byte that the reverse conversion would not write.
+1. The double-space rule is shared among `s:StripDumpLine()`,
+   `s:DumpOffset()` and `s:ValidateDump()`: a run of two spaces ends
+   the hex payload of a line in *all three*. A cursor past a double
+   space must never map to a byte that the reverse conversion would
+   not write, and the validator must scan exactly the payload region
+   that the stripper would keep.
 2. Round trip (toggle on → toggle off, no edits) is byte-identical for
    any input, and the cursor offset is preserved exactly.
 3. `:w` in hex mode writes the real binary content and leaves the

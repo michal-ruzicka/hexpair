@@ -11,8 +11,9 @@ CONTENTS                                                    *hexpair-contents*
     2. Usage ....................... |hexpair-usage|
     3. Mappings .................... |hexpair-mappings|
     4. Configuration ............... |hexpair-configuration|
-    5. Writing in hex mode ......... |hexpair-writing|
-    6. Limitations ................. |hexpair-limitations|
+    5. Filetype plugin ............. |hexpair-ftplugin|
+    6. Writing in hex mode ......... |hexpair-writing|
+    7. Limitations ................. |hexpair-limitations|
 
 ==============================================================================
 1. Introduction                                         *hexpair-introduction*
@@ -57,6 +58,17 @@ Editing rules:
   spaces marks the start of the (ignored) ASCII column,
 - always write full byte pairs (an odd number of hex digits shifts all
   following bytes by a nibble).
+
+Violations are refused, not guessed: a character in the hex area that is
+not a hex digit makes both |:w| and toggling hex mode off fail with an
+error, with the cursor parked on the offender - the dump and the file on
+disk keep their previous content.  An odd TOTAL number of hex digits
+(the last nibble would be dropped silently) is refused the same way.
+
+Reloading the file with |:e| (or discarding dump edits with :e!) while
+hex mode is active is safe: the freshly read content is converted to a
+new dump, hex mode stays active and the cursor stays on the same byte
+offset (best-effort after :e! discarded an edited dump).
 
 The cursor position is preserved across toggling as a BYTE OFFSET: the
 byte the cursor was on in the normal view is the byte it lands on in the
@@ -107,15 +119,46 @@ The plugin defines NO key mappings by default; it only provides the
 commands above and <Plug> mappings.  Choose your own keys in your vimrc,
 e.g.: >
 
-    nmap §h <Plug>(HexPairToggle)
-    nmap §< <Plug>(HexPairGoHex)
-    nmap §> <Plug>(HexPairGoAscii)
-    nmap §- <Plug>(HexPairSwap)
+    nmap <Leader>h <Plug>(HexPairToggle)
+    nmap <Leader>< <Plug>(HexPairGoHex)
+    nmap <Leader>> <Plug>(HexPairGoAscii)
+    nmap <Leader>- <Plug>(HexPairSwap)
 <
 or map the commands directly: >
 
-    nnoremap <silent> §h :HexPairToggle<CR>
+    nnoremap <silent> <Leader>h :HexPairToggle<CR>
 <
+About the two pieces used above:
+
+|<Leader>| is a placeholder that expands to the value of the
+"mapleader" variable at the moment a mapping is DEFINED - backslash by
+default, so `nmap <Leader>h ...` means `\h` out of the box.  To use a
+different prefix, set the variable in your vimrc BEFORE the mappings
+that use it: >
+
+    let mapleader = ','       " comma as the prefix: ,h ,< ,> ,-
+    nmap <Leader>h <Plug>(HexPairToggle)
+<
+Popular choices are comma and space (`let mapleader = ' '`); any other
+non-conflicting prefix key works just as well.  See |mapleader|.
+
+To inspect the effective value, use: >
+
+    :echo string(get(g:, 'mapleader', '\'))
+<
+A plain `:echo mapleader` fails with E121 in the default setup: the
+variable does not exist until you set it, Vim only falls back to
+backslash internally.  The string() wrapper makes an invisible value
+such as space visible.  Also note that because <Leader> is substituted
+when a mapping is DEFINED, |:nmap| lists already-defined mappings under
+their real keys (e.g. \h), not under <Leader>h.
+
+|<Plug>| is a special key that can never be typed.  The plugin hangs
+its functionality on <Plug>(HexPair...) targets and leaves the choice
+of real keys entirely to you - that is why it defines no key mappings
+of its own.  Mappings onto a <Plug> target must be created with |nmap|,
+NOT |nnoremap|: the "nore" variants forbid the remapping through which
+the <Plug> target expands, so the mapping would do nothing.
 ==============================================================================
 4. Configuration                                       *hexpair-configuration*
 
@@ -124,6 +167,24 @@ g:hexpair_bytes_per_line
                         Number of bytes per dump line (xxd -c).  Default: 16.
                         Example for wide terminals: >
                             let g:hexpair_bytes_per_line = 32
+<
+                                                             *g:hexpair_paste*
+g:hexpair_paste         The 'paste' option is global, so it cannot be set
+                        just for the dump buffer.  When this option is 1
+                        (the default), the plugin switches 'paste' on
+                        whenever the cursor enters a hex-mode buffer and
+                        restores its previous value whenever the cursor
+                        leaves it or hex mode is toggled off.  Insert-mode
+                        mappings and abbreviations are then disabled in the
+                        dump (they could mangle typed hex), and no automatic
+                        indenting or formatting interferes; all other
+                        buffers keep the user's own 'paste' state.  The
+                        buffer's 'expandtab' is preserved across the
+                        switch (turning 'paste' on would otherwise reset
+                        it); 'softtabstop' is forced to 0 by 'paste' by
+                        design while it is active (see |'paste'|).  Set
+                        to 0 to leave 'paste' alone: >
+                            let g:hexpair_paste = 0
 <
                                                 *HexPairActive* *HexPairMirror*
 HexPairActive           Highlight for the byte representation in the column
@@ -135,21 +196,62 @@ HexPairMirror           Highlight for the counterpart in the other column.
                             highlight HexPairMirror ctermbg=52 guibg=#5f0000
 <
 ==============================================================================
-5. Writing in hex mode                                       *hexpair-writing*
+5. Filetype plugin                                          *hexpair-ftplugin*
+
+The plugin bundles a filetype plugin (ftplugin/xxd.vim) with editing
+defaults for xxd dumps.  It is sourced for every buffer with 'filetype'
+set to xxd - which hexpair sets whenever the hex view is active - provided
+filetype plugins are enabled (|:filetype-plugin-on|; any modern vimrc or
+|defaults.vim| does this).  The defaults are buffer-local:
+
+    'tabstop'       10   a <Tab> aligns past the offset column prefix
+    'expandtab'          indent with spaces, never literal tabs
+    'shiftwidth'    3    one shift = one hex byte (two digits + space)
+    'formatoptions' ""   no automatic formatting
+    'textwidth'     0    no automatic wrapping
+    'autoindent'    off  no automatic indenting
+
+Everything is reverted through |b:undo_ftplugin| when the hex view is
+toggled off (also for buffers whose original filetype was empty, where no
+|FileType| event fires and the plugin runs the undo itself).
+
+To overrule the defaults (|ftplugin-overrule|): a personal
+~/.vim/ftplugin/xxd.vim is sourced BEFORE the bundled file, so its
+settings alone would be overwritten.  Either disable the bundled defaults
+entirely by adding >
+    let b:did_ftplugin = 1
+<
+to your ~/.vim/ftplugin/xxd.vim, or put individual overrides into
+~/.vim/after/ftplugin/xxd.vim, which is sourced after the bundled file
+and always has the last word.
+
+The global 'paste' option is not part of the filetype plugin; it is
+managed by the main plugin so it can be restored when the cursor leaves
+the hex buffer - see |g:hexpair_paste|.
+
+==============================================================================
+6. Writing in hex mode                                       *hexpair-writing*
 
 Writing with |:w| while hex mode is active is safe.  The buffer is
 transparently converted back to binary (xxd -r) before the write and
 re-converted to the dump afterwards, so the file on disk always contains the
 real binary content, never the textual dump.
 
+Before the conversion the dump is validated (see the editing rules in
+|hexpair-usage|): an invalid dump aborts the write with an error and both
+the file on disk and the dump in the buffer keep their previous content.
+
 ==============================================================================
-6. Limitations                                           *hexpair-limitations*
+7. Limitations                                           *hexpair-limitations*
 
 - The column arithmetic assumes the dump format produced by
   `xxd -g 1 -c N` (one-byte groups).  Do not re-filter the buffer with a
   different xxd invocation while hex mode is active.
 - Undo history crosses the conversion boundary: an |u| in hex mode can undo
-  the conversion itself.  Toggle back with |:HexPairToggle| instead.
+  the conversion itself.  Toggle back with |:HexPairToggle| instead; if it
+  happens, use |:redo| to return to the dump.  The dump validation limits
+  the damage: content that no longer looks like valid hex is refused by
+  both |:w| and toggle-off instead of being converted.
 - The plugin operates on the whole buffer; very large files may be slow to
   convert.
 - Cursor mapping from the dump to the normal view is byte-exact for any
