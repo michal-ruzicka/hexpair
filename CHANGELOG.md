@@ -7,6 +7,8 @@ and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html); the
 `Version:` header in `plugin/hexpair.vim` is the single source of truth.
 
+## [v2.0.0-devel] – 2026-07-19
+
 ## [v1.1.0] – 2026-07-19
 
 ### Added
@@ -95,5 +97,6 @@ in one place:
   full redraw.
 
 
+[v2.0.0-devel]: https://github.com/michal-ruzicka/hexpair/compare/v1.1.0...devel
 [v1.1.0]: https://github.com/michal-ruzicka/hexpair/compare/v1.0.0...v1.1.0
 [v1.0.0]: https://github.com/michal-ruzicka/hexpair/releases/tag/v1.0.0
