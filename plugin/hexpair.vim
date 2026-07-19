@@ -1,7 +1,7 @@
 " hexpair.vim - Hex viewing with hex<->ASCII pair highlighting
 " Maintainer:  Michal Růžička <ruzicka.mich@gmail.com>
 " URL:         https://github.com/michal-ruzicka/hexpair
-" Version:     1.1.0-devel
+" Version:     1.1.0
 " Date:        2026-07-19
 " License:     Vim License - same terms as Vim itself (see LICENSE.md
 "              or :help license); SPDX-License-Identifier: Vim
