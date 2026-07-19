@@ -26,6 +26,18 @@ and this project adheres to
   hex; all other buffers keep the user's own `'paste'` state. The
   buffer's `'expandtab'` is preserved across the switch.
 
+- Dump validation: a character in the hex area that is not a hex
+  digit, or an odd total number of hex digits, now aborts `:w` and
+  hex-mode toggle-off with an error and the cursor parked on the
+  offender, instead of silently dropping data — the file on disk and
+  the dump keep their previous content. This also limits the damage
+  after an `u` that undid the conversion itself: the non-dump content
+  is refused rather than converted.
+- `:e` / `:e!` while hex mode is active now regenerates the dump from
+  the freshly read file and keeps hex mode and the cursor byte offset,
+  instead of leaving raw binary content in a buffer that still
+  believed it was a dump.
+
 ### Changed
 - Documented mapping examples now use the conventional `<Leader>`
   prefix instead of `§`, which only exists on some keyboard layouts

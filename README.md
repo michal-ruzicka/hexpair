@@ -67,6 +67,12 @@ code, releases and issue tracker.
   automatic `:edit ++bin` reload, so the dump always shows the exact
   on-disk bytes (and a plain `:w` cannot silently re-encode a binary
   file).
+- **Errors are refused, not guessed.** A non-hex character in the hex
+  area, or an odd total number of hex digits, aborts `:w` and hex-mode
+  toggle-off with an error and the cursor parked on the offender — the
+  file and the dump keep their previous content. Reloading with `:e`
+  while in hex mode regenerates the dump from the fresh file content
+  and stays in hex mode instead of breaking the view.
 
 ## Installation
 

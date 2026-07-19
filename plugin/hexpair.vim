@@ -104,6 +104,12 @@ function! s:Highlight() abort
     return
   endif
 
+  " Track the cursor for s:PostReload(): when BufReadPre fires the old
+  " buffer content is already gone, so the position must be remembered
+  " while the dump is still in the buffer.  This runs on every
+  " CursorMoved, which keeps it current for any interactive movement.
+  let b:hexpair_last_pos = [line('.'), col('.')]
+
   let [n, hexstart, hexend, asciistart] = s:Layout()
   let lnum    = line('.')
   let col     = col('.')
@@ -178,6 +184,46 @@ function! s:StripDumpLine(line) abort
   let l = substitute(l, '^[^:]*:', '', '')
   let l = substitute(l, '  .*$', '', '')
   return substitute(l, '[^0-9a-fA-F ]', '', 'g')
+endfunction
+
+" Scan the dump for input that the reverse conversion would otherwise
+" mangle silently.  Returns {} when the dump is clean, or a dictionary
+" with 'msg' and - for a locatable offender - 'lnum'/'col' (1-based,
+" column in the original line).  Two classes of errors:
+"   - a character in the hex area that is not a hex digit or a space
+"     (it would be dropped by the safety net of s:StripDumpLine()),
+"   - an odd TOTAL number of hex digits (the last nibble would be
+"     dropped by xxd -r -p).
+" The scanned payload region of each line MUST mirror the stripping
+" logic of s:StripDumpLine() exactly: skip leading whitespace and the
+" offset column (up to the first ':'), stop at the first run of two
+" spaces (the ASCII column) - keep the two in sync.
+function! s:ValidateDump() abort
+  let digits = 0
+  for lnum in range(1, line('$'))
+    let line = getline(lnum)
+    let start = matchend(line, '^\s*')
+    let colon = stridx(line, ':')
+    if colon >= 0
+      let start = colon + 1
+    endif
+    let end = match(line, '  ', start)
+    if end < 0
+      let end = strlen(line)
+    endif
+    let bad = match(line, '[^0-9a-fA-F ]', start)
+    if bad >= 0 && bad < end
+      return {'lnum': lnum, 'col': bad + 1,
+            \ 'msg': printf('invalid character %s in the hex area (line %d, column %d)',
+            \               string(matchstr(line, '.', bad)), lnum, bad + 1)}
+    endif
+    let digits += strlen(substitute(strpart(line, start, end - start),
+          \                         '[^0-9a-fA-F]', '', 'g'))
+  endfor
+  if digits % 2
+    return {'msg': 'odd number of hex digits - the last nibble would be dropped'}
+  endif
+  return {}
 endfunction
 
 " Convert the dump back to binary while ignoring the offset and ASCII
@@ -296,10 +342,21 @@ endfunction
 " ---------------------------------------------------------------------------
 
 " Before a write: convert the dump back to binary so the file on disk gets
-" the real content, not the textual dump.
+" the real content, not the textual dump.  An invalid dump aborts the
+" write instead: the exception propagates out of the BufWritePre
+" autocommand, Vim cancels the write, and both the file on disk and the
+" dump in the buffer keep their previous content.
 function! s:PreWrite() abort
   if !get(b:, 'hexpair_active', 0)
     return
+  endif
+  let err = s:ValidateDump()
+  if !empty(err)
+    if has_key(err, 'lnum')
+      call cursor(err.lnum, err.col)
+      call s:Highlight()
+    endif
+    throw 'hexpair: ' . err.msg . '; nothing was written'
   endif
   let b:hexpair_off = s:DumpOffset()
   call s:ReverseDump()
@@ -357,6 +414,52 @@ function! s:PasteOff() abort
     let &paste = b:hexpair_paste_save
     unlet b:hexpair_paste_save
   endif
+endfunction
+
+" ---------------------------------------------------------------------------
+" Surviving a file reload (:e, :e!)
+" ---------------------------------------------------------------------------
+
+" Without this hook a reload would leave the raw binary content in a
+" buffer that still believes it is a dump - the highlight arithmetic
+" would point nowhere and the next :w would feed the binary content to
+" the reverse conversion.  Instead, the freshly read content is dumped
+" again: hex mode survives the reload and the cursor stays on the same
+" byte offset.
+function! s:PostReload() abort
+  if !get(b:, 'hexpair_active', 0)
+    return
+  endif
+  " Refresh the parts of the toggle-off snapshot that the reload
+  " re-detected from disk; the reloaded buffer is unmodified by
+  " definition.
+  let b:hexpair_saved.binary   = &l:binary
+  let b:hexpair_saved.eol      = &l:eol
+  let b:hexpair_saved.modified = 0
+  silent execute '%!' . s:xxd . ' -g 1 -c ' . b:hexpair_n
+  setlocal filetype=xxd
+  setlocal nomodified
+  " Map the last tracked cursor position back to a byte offset by
+  " canonical layout: exact for an unedited dump (:e), best-effort for
+  " a discarded edited one (:e!), where the old content that an exact
+  " mapping would need no longer exists.
+  if exists('b:hexpair_last_pos')
+    let [n, hexstart, hexend, asciistart] = s:Layout()
+    let [lnum, col] = b:hexpair_last_pos
+    if col >= asciistart
+      let idx = col - asciistart
+    elseif col >= hexstart
+      let idx = (col - hexstart) / 3
+    else
+      let idx = 0
+    endif
+    if idx >= n
+      let idx = n - 1
+    endif
+    call cursor(s:DumpPos((lnum - 1) * n + idx))
+  endif
+  call s:Highlight()
+  redraw!
 endfunction
 
 " ---------------------------------------------------------------------------
@@ -446,7 +549,7 @@ function! s:ToHex() abort
   endif
 
   " Buffer-local autocommands: pair highlighting + write safety + 'paste'
-  " tracking.
+  " tracking + reload survival.
   augroup HexPairBuffer
     autocmd! * <buffer>
     autocmd CursorMoved,CursorMovedI <buffer> call s:Highlight()
@@ -455,6 +558,7 @@ function! s:ToHex() abort
     autocmd BufWritePost             <buffer> call s:PostWrite()
     autocmd BufEnter                 <buffer> call s:PasteOn()
     autocmd BufLeave                 <buffer> call s:PasteOff()
+    autocmd BufReadPost              <buffer> call s:PostReload()
   augroup END
 
   call s:PasteOn()
@@ -463,6 +567,23 @@ function! s:ToHex() abort
 endfunction
 
 function! s:FromHex() abort
+  " Refuse to convert a dump that the reverse conversion would mangle;
+  " the cursor is parked on the offender instead.  This also catches
+  " the case where an |u| in hex mode undid the conversion itself: the
+  " buffer then holds non-dump content, which almost always contains a
+  " non-hex character - :redo brings the dump back.
+  let err = s:ValidateDump()
+  if !empty(err)
+    if has_key(err, 'lnum')
+      call cursor(err.lnum, err.col)
+      call s:Highlight()
+    endif
+    echohl ErrorMsg
+    echomsg 'hexpair: ' . err.msg . '; still in hex mode'
+    echohl None
+    return
+  endif
+
   " Remove the buffer-local autocommands first, then restore 'paste'
   " while its saved value is still around.  This must happen BEFORE the
   " filetype is restored below: switching 'paste' off restores the
@@ -498,6 +619,7 @@ function! s:FromHex() abort
   if exists('b:hexpair_n')
     unlet b:hexpair_n
   endif
+  unlet! b:hexpair_last_pos
 
   " Restore the settings saved by s:ToHex().
   if exists('b:hexpair_saved')

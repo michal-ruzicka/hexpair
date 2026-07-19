@@ -41,6 +41,8 @@ with open(os.path.join(w, 'pos.bin'), 'wb') as f:
 open(os.path.join(w, 'eol.bin'), 'wb').write(b'AB\n')
 # insertion-write fixture
 open(os.path.join(w, 'ins.bin'), 'wb').write(b'ABCDEFGH')
+# validation / reload fixture (must stay unmodified by the tests)
+open(os.path.join(w, 'val.bin'), 'wb').write(b'ABCDEFGH')
 EOF
 
 # --- Test 1: round trip preserves content and cursor byte offset -----------
@@ -163,6 +165,78 @@ qa!
 EOF
 vim -es -b -u NONE "$WORK/ins.bin" -S "$WORK/t7.vim"
 check "paste opt-out and restore on buffer switch" "[0, 1, 0, 1]" "$(cat "$WORK/t7.out")"
+
+# --- Test 8: a non-hex character aborts :w; file and dump stay intact ------
+cat > "$WORK/t8.vim" <<EOF
+source $PLUGIN
+HexPairToggle
+call setline(1, substitute(getline(1), '41', '4x', ''))
+let caught = ''
+try
+  write
+catch /^hexpair:/
+  let caught = 'caught'
+endtry
+let state = string([get(b:, 'hexpair_active', 0), line('.'), col('.')])
+call writefile([caught, state, getline(1)], '$WORK/t8.out')
+qa!
+EOF
+vim -es -b -u NONE "$WORK/val.bin" -S "$WORK/t8.vim"
+check "invalid char aborts the write"  "caught"     "$(sed -n 1p "$WORK/t8.out")"
+check "cursor parked on the offender"  "[1, 1, 12]" "$(sed -n 2p "$WORK/t8.out")"
+check "dump kept after aborted write" \
+    "00000000: 4x 42 43 44 45 46 47 48                          ABCDEFGH" \
+    "$(sed -n 3p "$WORK/t8.out")"
+check "file kept after aborted write" \
+    "00000000: 41 42 43 44 45 46 47 48                          ABCDEFGH" \
+    "$(xxd -g 1 "$WORK/val.bin")"
+
+# --- Test 9: a non-hex character refuses hex-mode toggle-off ---------------
+cat > "$WORK/t9.vim" <<EOF
+source $PLUGIN
+HexPairToggle
+call append(1, '01 0g 03')
+HexPairToggle
+call writefile([string([get(b:, 'hexpair_active', 0), line('.'), col('.')])], '$WORK/t9.out')
+qa!
+EOF
+vim -es -b -u NONE "$WORK/val.bin" -S "$WORK/t9.vim"
+check "invalid char refuses toggle-off" "[1, 2, 5]" "$(cat "$WORK/t9.out")"
+
+# --- Test 10: an odd total number of hex digits aborts :w ------------------
+cat > "$WORK/t10.vim" <<EOF
+source $PLUGIN
+HexPairToggle
+call append(1, '01 2')
+let caught = ''
+try
+  write
+catch /^hexpair:/
+  let caught = v:exception =~# 'odd' ? 'odd' : 'other'
+endtry
+call writefile([caught], '$WORK/t10.out')
+qa!
+EOF
+vim -es -b -u NONE "$WORK/val.bin" -S "$WORK/t10.vim"
+check "odd digit count aborts the write" "odd" "$(cat "$WORK/t10.out")"
+
+# --- Test 11: :e while in hex mode regenerates the dump --------------------
+cat > "$WORK/t11.vim" <<EOF
+source $PLUGIN
+HexPairToggle
+call cursor(1, 20)
+HexPairGoHex
+silent edit
+let state = string([get(b:, 'hexpair_active', 0), line('.'), col('.'), &l:modified])
+call writefile([getline(1), state], '$WORK/t11.out')
+qa!
+EOF
+vim -es -b -u NONE "$WORK/val.bin" -S "$WORK/t11.vim"
+check "reload regenerates the dump" \
+    "00000000: 41 42 43 44 45 46 47 48                          ABCDEFGH" \
+    "$(sed -n 1p "$WORK/t11.out")"
+check "reload keeps hex mode and cursor byte" "[1, 1, 20, 0]" \
+    "$(sed -n 2p "$WORK/t11.out")"
 
 # ---------------------------------------------------------------------------
 if [ "$FAIL" -eq 0 ]; then

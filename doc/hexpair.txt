@@ -59,6 +59,17 @@ Editing rules:
 - always write full byte pairs (an odd number of hex digits shifts all
   following bytes by a nibble).
 
+Violations are refused, not guessed: a character in the hex area that is
+not a hex digit makes both |:w| and toggling hex mode off fail with an
+error, with the cursor parked on the offender - the dump and the file on
+disk keep their previous content.  An odd TOTAL number of hex digits
+(the last nibble would be dropped silently) is refused the same way.
+
+Reloading the file with |:e| (or discarding dump edits with :e!) while
+hex mode is active is safe: the freshly read content is converted to a
+new dump, hex mode stays active and the cursor stays on the same byte
+offset (best-effort after :e! discarded an edited dump).
+
 The cursor position is preserved across toggling as a BYTE OFFSET: the
 byte the cursor was on in the normal view is the byte it lands on in the
 HEX column of the dump, and vice versa.  For a multibyte character this is
@@ -226,6 +237,10 @@ transparently converted back to binary (xxd -r) before the write and
 re-converted to the dump afterwards, so the file on disk always contains the
 real binary content, never the textual dump.
 
+Before the conversion the dump is validated (see the editing rules in
+|hexpair-usage|): an invalid dump aborts the write with an error and both
+the file on disk and the dump in the buffer keep their previous content.
+
 ==============================================================================
 7. Limitations                                           *hexpair-limitations*
 
@@ -233,7 +248,10 @@ real binary content, never the textual dump.
   `xxd -g 1 -c N` (one-byte groups).  Do not re-filter the buffer with a
   different xxd invocation while hex mode is active.
 - Undo history crosses the conversion boundary: an |u| in hex mode can undo
-  the conversion itself.  Toggle back with |:HexPairToggle| instead.
+  the conversion itself.  Toggle back with |:HexPairToggle| instead; if it
+  happens, use |:redo| to return to the dump.  The dump validation limits
+  the damage: content that no longer looks like valid hex is refused by
+  both |:w| and toggle-off instead of being converted.
 - The plugin operates on the whole buffer; very large files may be slow to
   convert.
 - Cursor mapping from the dump to the normal view is byte-exact for any
