@@ -90,11 +90,18 @@ The plugin defines **no key mappings by default**. Add your own to
 `~/.vimrc`:
 
 ```vim
-nmap §h <Plug>(HexPairToggle)     " toggle hex view
-nmap §< <Plug>(HexPairGoHex)      " jump to the HEX column (same byte)
-nmap §> <Plug>(HexPairGoAscii)    " jump to the ASCII column (same byte)
-nmap §- <Plug>(HexPairSwap)       " jump to the opposite column
+nmap <Leader>h <Plug>(HexPairToggle)     " toggle hex view
+nmap <Leader>< <Plug>(HexPairGoHex)      " jump to the HEX column (same byte)
+nmap <Leader>> <Plug>(HexPairGoAscii)    " jump to the ASCII column (same byte)
+nmap <Leader>- <Plug>(HexPairSwap)       " jump to the opposite column
 ```
+
+`<Leader>` expands to the `mapleader` variable at the time a mapping is
+defined — backslash by default; put e.g. `let mapleader = ','` *before*
+the mappings to use a different prefix. The `<Plug>(HexPair…)` targets
+are named virtual keys exposed by the plugin — map onto them with
+`nmap`, not `nnoremap` (the latter forbids the remapping through which
+a `<Plug>` target expands). Details: `:help hexpair-mappings`.
 
 ### Verifying Releases
 

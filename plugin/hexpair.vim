@@ -597,10 +597,10 @@ command! -bar HexPairSwap    call s:JumpTo('swap')
 
 " No default key mappings are defined; map the <Plug> mappings (or the
 " commands directly) in your vimrc, e.g.:
-"   nmap §h <Plug>(HexPairToggle)
-"   nmap §< <Plug>(HexPairGoHex)
-"   nmap §> <Plug>(HexPairGoAscii)
-"   nmap §- <Plug>(HexPairSwap)
+"   nmap <Leader>h <Plug>(HexPairToggle)
+"   nmap <Leader>< <Plug>(HexPairGoHex)
+"   nmap <Leader>> <Plug>(HexPairGoAscii)
+"   nmap <Leader>- <Plug>(HexPairSwap)
 nnoremap <silent> <Plug>(HexPairToggle)  :<C-U>HexPairToggle<CR>
 nnoremap <silent> <Plug>(HexPairGoHex)   :<C-U>HexPairGoHex<CR>
 nnoremap <silent> <Plug>(HexPairGoAscii) :<C-U>HexPairGoAscii<CR>

@@ -26,6 +26,13 @@ and this project adheres to
   hex; all other buffers keep the user's own `'paste'` state. The
   buffer's `'expandtab'` is preserved across the switch.
 
+### Changed
+- Documented mapping examples now use the conventional `<Leader>`
+  prefix instead of `§`, which only exists on some keyboard layouts
+  (e.g. Czech); the plugin still defines no mappings of its own. The
+  help and README now also explain the `<Leader>`/`mapleader` and
+  `<Plug>` mechanisms for readers new to them.
+
 ## [v1.0.0] – 2026-07-19
 
 Initial public release, consolidating fourteen internal iterations that

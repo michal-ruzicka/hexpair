@@ -108,15 +108,46 @@ The plugin defines NO key mappings by default; it only provides the
 commands above and <Plug> mappings.  Choose your own keys in your vimrc,
 e.g.: >
 
-    nmap §h <Plug>(HexPairToggle)
-    nmap §< <Plug>(HexPairGoHex)
-    nmap §> <Plug>(HexPairGoAscii)
-    nmap §- <Plug>(HexPairSwap)
+    nmap <Leader>h <Plug>(HexPairToggle)
+    nmap <Leader>< <Plug>(HexPairGoHex)
+    nmap <Leader>> <Plug>(HexPairGoAscii)
+    nmap <Leader>- <Plug>(HexPairSwap)
 <
 or map the commands directly: >
 
-    nnoremap <silent> §h :HexPairToggle<CR>
+    nnoremap <silent> <Leader>h :HexPairToggle<CR>
 <
+About the two pieces used above:
+
+|<Leader>| is a placeholder that expands to the value of the
+"mapleader" variable at the moment a mapping is DEFINED - backslash by
+default, so `nmap <Leader>h ...` means `\h` out of the box.  To use a
+different prefix, set the variable in your vimrc BEFORE the mappings
+that use it: >
+
+    let mapleader = ','       " comma as the prefix: ,h ,< ,> ,-
+    nmap <Leader>h <Plug>(HexPairToggle)
+<
+Popular choices are comma and space (`let mapleader = ' '`); any other
+non-conflicting prefix key works just as well.  See |mapleader|.
+
+To inspect the effective value, use: >
+
+    :echo string(get(g:, 'mapleader', '\'))
+<
+A plain `:echo mapleader` fails with E121 in the default setup: the
+variable does not exist until you set it, Vim only falls back to
+backslash internally.  The string() wrapper makes an invisible value
+such as space visible.  Also note that because <Leader> is substituted
+when a mapping is DEFINED, |:nmap| lists already-defined mappings under
+their real keys (e.g. \h), not under <Leader>h.
+
+|<Plug>| is a special key that can never be typed.  The plugin hangs
+its functionality on <Plug>(HexPair...) targets and leaves the choice
+of real keys entirely to you - that is why it defines no key mappings
+of its own.  Mappings onto a <Plug> target must be created with |nmap|,
+NOT |nnoremap|: the "nore" variants forbid the remapping through which
+the <Plug> target expands, so the mapping would do nothing.
 ==============================================================================
 4. Configuration                                       *hexpair-configuration*
 
