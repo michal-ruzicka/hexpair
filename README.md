@@ -139,6 +139,10 @@ start of the (ignored) ASCII column — and always write full byte pairs.
 " bytes per dump line (default 16)
 let g:hexpair_bytes_per_line = 16
 
+" keep the global 'paste' option on while the cursor is in a hex buffer,
+" restored when the cursor leaves it (set to 0 to leave 'paste' alone)
+let g:hexpair_paste = 1
+
 " highlight overrides
 highlight HexPairActive cterm=bold,underline gui=bold,underline
 highlight HexPairMirror ctermbg=52 guibg=#5f0000
@@ -146,6 +150,14 @@ highlight HexPairMirror ctermbg=52 guibg=#5f0000
 " position-mapping trace for debugging (inspect with :messages)
 let g:hexpair_debug = 1
 ```
+
+The plugin also bundles a filetype plugin (`ftplugin/xxd.vim`) with
+editing defaults for the dump: `tabstop=10`, `expandtab`,
+`shiftwidth=3` (one hex byte) and no automatic formatting, all reverted
+when hex mode is toggled off. To suppress it, put
+`let b:did_ftplugin = 1` into your own `~/.vim/ftplugin/xxd.vim`; to
+tweak individual settings, use `~/.vim/after/ftplugin/xxd.vim` (see
+`:help hexpair-ftplugin`).
 
 Full documentation: `:help hexpair` after installation, or
 [doc/hexpair.txt](doc/hexpair.txt).

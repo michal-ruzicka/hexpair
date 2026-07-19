@@ -11,8 +11,9 @@ CONTENTS                                                    *hexpair-contents*
     2. Usage ....................... |hexpair-usage|
     3. Mappings .................... |hexpair-mappings|
     4. Configuration ............... |hexpair-configuration|
-    5. Writing in hex mode ......... |hexpair-writing|
-    6. Limitations ................. |hexpair-limitations|
+    5. Filetype plugin ............. |hexpair-ftplugin|
+    6. Writing in hex mode ......... |hexpair-writing|
+    7. Limitations ................. |hexpair-limitations|
 
 ==============================================================================
 1. Introduction                                         *hexpair-introduction*
@@ -125,6 +126,24 @@ g:hexpair_bytes_per_line
                         Example for wide terminals: >
                             let g:hexpair_bytes_per_line = 32
 <
+                                                             *g:hexpair_paste*
+g:hexpair_paste         The 'paste' option is global, so it cannot be set
+                        just for the dump buffer.  When this option is 1
+                        (the default), the plugin switches 'paste' on
+                        whenever the cursor enters a hex-mode buffer and
+                        restores its previous value whenever the cursor
+                        leaves it or hex mode is toggled off.  Insert-mode
+                        mappings and abbreviations are then disabled in the
+                        dump (they could mangle typed hex), and no automatic
+                        indenting or formatting interferes; all other
+                        buffers keep the user's own 'paste' state.  The
+                        buffer's 'expandtab' is preserved across the
+                        switch (turning 'paste' on would otherwise reset
+                        it); 'softtabstop' is forced to 0 by 'paste' by
+                        design while it is active (see |'paste'|).  Set
+                        to 0 to leave 'paste' alone: >
+                            let g:hexpair_paste = 0
+<
                                                 *HexPairActive* *HexPairMirror*
 HexPairActive           Highlight for the byte representation in the column
                         the cursor is currently in.  Default: underline.
@@ -135,7 +154,41 @@ HexPairMirror           Highlight for the counterpart in the other column.
                             highlight HexPairMirror ctermbg=52 guibg=#5f0000
 <
 ==============================================================================
-5. Writing in hex mode                                       *hexpair-writing*
+5. Filetype plugin                                          *hexpair-ftplugin*
+
+The plugin bundles a filetype plugin (ftplugin/xxd.vim) with editing
+defaults for xxd dumps.  It is sourced for every buffer with 'filetype'
+set to xxd - which hexpair sets whenever the hex view is active - provided
+filetype plugins are enabled (|:filetype-plugin-on|; any modern vimrc or
+|defaults.vim| does this).  The defaults are buffer-local:
+
+    'tabstop'       10   a <Tab> aligns past the offset column prefix
+    'expandtab'          indent with spaces, never literal tabs
+    'shiftwidth'    3    one shift = one hex byte (two digits + space)
+    'formatoptions' ""   no automatic formatting
+    'textwidth'     0    no automatic wrapping
+    'autoindent'    off  no automatic indenting
+
+Everything is reverted through |b:undo_ftplugin| when the hex view is
+toggled off (also for buffers whose original filetype was empty, where no
+|FileType| event fires and the plugin runs the undo itself).
+
+To overrule the defaults (|ftplugin-overrule|): a personal
+~/.vim/ftplugin/xxd.vim is sourced BEFORE the bundled file, so its
+settings alone would be overwritten.  Either disable the bundled defaults
+entirely by adding >
+    let b:did_ftplugin = 1
+<
+to your ~/.vim/ftplugin/xxd.vim, or put individual overrides into
+~/.vim/after/ftplugin/xxd.vim, which is sourced after the bundled file
+and always has the last word.
+
+The global 'paste' option is not part of the filetype plugin; it is
+managed by the main plugin so it can be restored when the cursor leaves
+the hex buffer - see |g:hexpair_paste|.
+
+==============================================================================
+6. Writing in hex mode                                       *hexpair-writing*
 
 Writing with |:w| while hex mode is active is safe.  The buffer is
 transparently converted back to binary (xxd -r) before the write and
@@ -143,7 +196,7 @@ re-converted to the dump afterwards, so the file on disk always contains the
 real binary content, never the textual dump.
 
 ==============================================================================
-6. Limitations                                           *hexpair-limitations*
+7. Limitations                                           *hexpair-limitations*
 
 - The column arithmetic assumes the dump format produced by
   `xxd -g 1 -c N` (one-byte groups).  Do not re-filter the buffer with a

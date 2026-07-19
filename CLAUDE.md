@@ -30,6 +30,8 @@ pack-release.py       - the packaging implementation (python3, stdlib
                         by construction
 plugin/hexpair.vim    - the plugin; header carries Version: and Date:
                         (single source of truth, parsed by pack-release.py)
+ftplugin/xxd.vim      - dump-editing defaults (guarded by b:did_ftplugin,
+                        reverted via b:undo_ftplugin)
 doc/hexpair.txt       - Vim help (:help hexpair)
 test/run-tests.sh     - headless regression suite (vim -es)
 dist/                 - packaged release tarballs (gitignored)
@@ -83,6 +85,14 @@ Key function map:
 - Write path — buffer-local `BufWritePre`/`BufWritePost`: convert
   back, let Vim write, regenerate the dump, restore the cursor to the
   *same byte* (offsets may have shifted if bytes were inserted).
+- `s:PasteOn()` / `s:PasteOff()` — the global `'paste'` option is
+  switched on while the cursor is in a hex buffer (`BufEnter`/`BufLeave`
+  plus the toggle lifecycle) and restored elsewhere; `g:hexpair_paste`
+  opts out. In `s:FromHex()`, `s:PasteOff()` must run *before* the
+  filetype restore ('paste' off restores the options it overrode, only
+  then may `b:undo_ftplugin` revert them), and when the restored
+  filetype is empty no `FileType` event fires, so the plugin executes
+  `b:undo_ftplugin` and clears `b:did_ftplugin` itself.
 - `g:hexpair_debug` — echomsg trace of every position mapping step
   (`:messages`); keep it working, it has already caught two field bugs.
 

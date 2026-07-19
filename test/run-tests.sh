@@ -12,6 +12,7 @@
 set -u
 
 cd "$(dirname "$0")"
+ROOT=$(cd .. && pwd)
 PLUGIN=../plugin/hexpair.vim
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
@@ -99,6 +100,69 @@ EOF
 vim -es -b -u NONE "$WORK/pos.bin" -S "$WORK/t4.vim"
 check "n=23 dump position"  "62,68=69" "$(sed -n 1p "$WORK/t4.out")"
 check "n=23 return offset"  "1422"     "$(sed -n 2p "$WORK/t4.out")"
+
+# --- Test 5: ftplugin defaults + managed 'paste' across the toggle ---------
+# The original filetype of a binary buffer is empty, so this also covers
+# the explicit b:undo_ftplugin execution in s:FromHex() (no FileType
+# event fires when an empty filetype is restored).
+cat > "$WORK/t5.vim" <<EOF
+" Hermetic runtimepath: only the repo and \$VIMRUNTIME, so a developer's
+" personal ~/.vim/ftplugin/xxd.vim cannot leak into the assertions.
+let &runtimepath = '$ROOT,' . \$VIMRUNTIME
+filetype plugin on
+source $PLUGIN
+HexPairToggle
+let on = [&l:tabstop, &l:shiftwidth, &l:expandtab, &paste]
+HexPairToggle
+let off = [&l:tabstop, &l:shiftwidth, &l:expandtab, &paste, exists('b:did_ftplugin')]
+HexPairToggle
+let re = [&l:tabstop, &l:expandtab, &paste]
+call writefile([string(on), string(off), string(re)], '$WORK/t5.out')
+qa!
+EOF
+vim -es -b -u NONE "$WORK/ins.bin" -S "$WORK/t5.vim"
+check "ftplugin + paste active in hex mode"     "[10, 3, 1, 1]"   "$(sed -n 1p "$WORK/t5.out")"
+check "ftplugin + paste reverted on toggle-off" "[8, 8, 0, 0, 0]" "$(sed -n 2p "$WORK/t5.out")"
+check "ftplugin re-applied on re-toggle"        "[10, 1, 1]"      "$(sed -n 3p "$WORK/t5.out")"
+
+# --- Test 6: a user ftplugin with b:did_ftplugin suppresses the bundled one -
+mkdir -p "$WORK/user-rtp/ftplugin"
+cat > "$WORK/user-rtp/ftplugin/xxd.vim" <<'EOF'
+let b:did_ftplugin = 1
+setlocal tabstop=4
+EOF
+cat > "$WORK/t6.vim" <<EOF
+let &runtimepath = '$WORK/user-rtp,$ROOT,' . \$VIMRUNTIME
+filetype plugin on
+source $PLUGIN
+HexPairToggle
+call writefile([string([&l:tabstop, &l:shiftwidth])], '$WORK/t6.out')
+qa!
+EOF
+vim -es -b -u NONE "$WORK/ins.bin" -S "$WORK/t6.vim"
+check "user ftplugin overrules bundled defaults" "[4, 8]" "$(cat "$WORK/t6.out")"
+
+# --- Test 7: g:hexpair_paste opt-out; restore on leaving the hex buffer ----
+cat > "$WORK/t7.vim" <<EOF
+let &runtimepath = '$ROOT,' . \$VIMRUNTIME
+filetype plugin on
+source $PLUGIN
+let g:hexpair_paste = 0
+HexPairToggle
+let optout = &paste
+HexPairToggle
+let g:hexpair_paste = 1
+HexPairToggle
+let inhex = &paste
+new
+let outside = &paste
+wincmd p
+let back = &paste
+call writefile([string([optout, inhex, outside, back])], '$WORK/t7.out')
+qa!
+EOF
+vim -es -b -u NONE "$WORK/ins.bin" -S "$WORK/t7.vim"
+check "paste opt-out and restore on buffer switch" "[0, 1, 0, 1]" "$(cat "$WORK/t7.out")"
 
 # ---------------------------------------------------------------------------
 if [ "$FAIL" -eq 0 ]; then

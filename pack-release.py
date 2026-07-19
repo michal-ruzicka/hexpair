@@ -44,6 +44,7 @@ FILES = [
     "hexpair/LICENSE.md",
     "hexpair/README.md",
     "hexpair/doc/hexpair.txt",
+    "hexpair/ftplugin/xxd.vim",
     "hexpair/plugin/hexpair.vim",
 ]
 

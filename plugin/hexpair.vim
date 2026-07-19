@@ -1,7 +1,7 @@
 " hexpair.vim - Hex viewing with hex<->ASCII pair highlighting
 " Maintainer:  Michal Růžička <ruzicka.mich@gmail.com>
 " URL:         https://github.com/michal-ruzicka/hexpair
-" Version:     1.0.0
+" Version:     1.1.0-devel
 " Date:        2026-07-19
 " License:     Vim License - same terms as Vim itself (see LICENSE.md
 "              or :help license); SPDX-License-Identifier: Vim
@@ -21,9 +21,16 @@
 "
 " Configuration (set in your vimrc before the plugin loads):
 "   g:hexpair_bytes_per_line   bytes per dump line (default 16)
+"   g:hexpair_paste            set to 0 to stop the plugin from managing
+"                              the global 'paste' option while the cursor
+"                              is in a hex buffer (default 1)
 "   g:hexpair_debug            set to 1 to echo position-mapping traces
 "                              (inspect with :messages)
 "   HexPairActive, HexPairMirror  highlight groups (cursor side / counterpart)
+"
+" Editing defaults for the dump (tabstop, shiftwidth, no automatic
+" formatting) live in the bundled ftplugin/xxd.vim; see
+" :help hexpair-ftplugin for how to overrule them.
 
 if exists('g:loaded_hexpair')
   finish
@@ -39,6 +46,10 @@ set cpo&vim
 
 if !exists('g:hexpair_bytes_per_line')
   let g:hexpair_bytes_per_line = 16
+endif
+
+if !exists('g:hexpair_paste')
+  let g:hexpair_paste = 1
 endif
 
 " Highlight groups for the byte-pair highlight:
@@ -313,6 +324,42 @@ function! s:PostWrite() abort
 endfunction
 
 " ---------------------------------------------------------------------------
+" Global 'paste' management
+" ---------------------------------------------------------------------------
+
+" 'paste' is a GLOBAL option - there is no buffer-local variant - so it
+" cannot simply be set for the dump buffer.  Instead it is switched on
+" whenever the cursor enters a hex-mode buffer and restored to its
+" previous value whenever the cursor leaves it (and when hex mode is
+" toggled off): insert-mode mappings and abbreviations then cannot
+" mangle typed hex and no automatic formatting interferes, while every
+" other buffer keeps the user's own 'paste' state.  Disable with
+" g:hexpair_paste = 0.
+function! s:PasteOn() abort
+  if !g:hexpair_paste || !get(b:, 'hexpair_active', 0)
+    return
+  endif
+  if !exists('b:hexpair_paste_save')
+    let b:hexpair_paste_save = &paste
+  endif
+  " Switching 'paste' on resets 'expandtab' as a side effect; preserve
+  " the buffer's value (set by the bundled xxd ftplugin, or by the
+  " user's override) so a <Tab> typed into the dump still expands to
+  " spaces.  Switching 'paste' off later restores the same value, so
+  " the two stay consistent.
+  let expandtab = &l:expandtab
+  set paste
+  let &l:expandtab = expandtab
+endfunction
+
+function! s:PasteOff() abort
+  if exists('b:hexpair_paste_save')
+    let &paste = b:hexpair_paste_save
+    unlet b:hexpair_paste_save
+  endif
+endfunction
+
+" ---------------------------------------------------------------------------
 " Mode switching
 " ---------------------------------------------------------------------------
 
@@ -398,24 +445,33 @@ function! s:ToHex() abort
     setlocal nomodified
   endif
 
-  " Buffer-local autocommands: pair highlighting + write safety.
+  " Buffer-local autocommands: pair highlighting + write safety + 'paste'
+  " tracking.
   augroup HexPairBuffer
     autocmd! * <buffer>
     autocmd CursorMoved,CursorMovedI <buffer> call s:Highlight()
     autocmd BufWinLeave              <buffer> call s:ClearHighlight()
     autocmd BufWritePre              <buffer> call s:PreWrite()
     autocmd BufWritePost             <buffer> call s:PostWrite()
+    autocmd BufEnter                 <buffer> call s:PasteOn()
+    autocmd BufLeave                 <buffer> call s:PasteOff()
   augroup END
 
+  call s:PasteOn()
   call s:Highlight()
   redraw!
 endfunction
 
 function! s:FromHex() abort
-  " Remove the buffer-local autocommands first.
+  " Remove the buffer-local autocommands first, then restore 'paste'
+  " while its saved value is still around.  This must happen BEFORE the
+  " filetype is restored below: switching 'paste' off restores the
+  " option values it overrode (e.g. 'expandtab'), and only then may
+  " b:undo_ftplugin revert them to the buffer's pre-hex state.
   augroup HexPairBuffer
     autocmd! * <buffer>
   augroup END
+  call s:PasteOff()
   call s:ClearHighlight()
 
   " Convert back, then place the cursor on the SAME BYTE it was on in the
@@ -454,6 +510,19 @@ function! s:FromHex() abort
     unlet b:hexpair_saved
   else
     setlocal filetype=
+  endif
+
+  " Restoring a NON-empty filetype fires the FileType autocmd, whose
+  " runtime loader runs b:undo_ftplugin and clears the b:did_ftplugin
+  " guard before sourcing the new filetype's plugins.  Restoring an
+  " empty filetype (typical for binary files) fires nothing, so the xxd
+  " ftplugin would linger: run its undo and drop the guard explicitly.
+  if &l:filetype ==# ''
+    if exists('b:undo_ftplugin')
+      execute b:undo_ftplugin
+      unlet b:undo_ftplugin
+    endif
+    unlet! b:did_ftplugin
   endif
 endfunction
 
