@@ -13,7 +13,8 @@ CONTENTS                                                    *hexpair-contents*
     4. Configuration ............... |hexpair-configuration|
     5. Filetype plugin ............. |hexpair-ftplugin|
     6. Writing in hex mode ......... |hexpair-writing|
-    7. Limitations ................. |hexpair-limitations|
+    7. Refreshing the dump ......... |hexpair-refresh|
+    8. Limitations ................. |hexpair-limitations|
 
 ==============================================================================
 1. Introduction                                         *hexpair-introduction*
@@ -110,11 +111,17 @@ The jump commands clamp to a sensible target: from the offset column they
 land on the first byte of the line, from beyond the ASCII column on the
 last byte, and on a short last line on its last existing byte.
 
+                                                            *:HexPairRefresh*
+:HexPairRefresh         Regenerate the offset and ASCII columns from the
+                        current hex payload, without writing to disk; see
+                        |hexpair-refresh|.
+
 ==============================================================================
 3. Mappings                                                 *hexpair-mappings*
 
                                                         *<Plug>(HexPairToggle)*
-           *<Plug>(HexPairGoHex)* *<Plug>(HexPairGoAscii)* *<Plug>(HexPairSwap)*
+ *<Plug>(HexPairGoHex)* *<Plug>(HexPairGoAscii)* *<Plug>(HexPairSwap)*
+                                                       *<Plug>(HexPairRefresh)*
 The plugin defines NO key mappings by default; it only provides the
 commands above and <Plug> mappings.  Choose your own keys in your vimrc,
 e.g.: >
@@ -123,6 +130,7 @@ e.g.: >
     nmap <Leader>< <Plug>(HexPairGoHex)
     nmap <Leader>> <Plug>(HexPairGoAscii)
     nmap <Leader>- <Plug>(HexPairSwap)
+    nmap <Leader>r <Plug>(HexPairRefresh)
 <
 or map the commands directly: >
 
@@ -249,7 +257,32 @@ it modified when you toggle back - so |:q| without |:w| still warns, and
 plain |:q| still refuses, exactly as it would in the normal view.
 
 ==============================================================================
-7. Limitations                                           *hexpair-limitations*
+7. Refreshing the dump                                        *hexpair-refresh*
+
+Because the 'modified' flag correctly survives editing the dump without
+writing (|hexpair-writing|), edits can accumulate across several
+|:HexPairToggle| round trips without ever touching disk - and until the
+next |:w|, the offset and ASCII columns of a bare or edited line stay
+exactly as typed, not regenerated.
+
+                                                            *:HexPairRefresh*
+:HexPairRefresh         Regenerate the offset and ASCII columns from the
+                        current hex payload, without writing to disk: the
+                        same round trip a |:HexPairToggle| off followed by
+                        on would perform, but staying in hex mode and
+                        without the intervening write.  The cursor stays on
+                        the same byte.
+
+The dump is validated first, exactly as for |:w| (|hexpair-writing|): an
+invalid dump refuses the refresh with an error, cursor parked on the
+offender, and the dump keeps its previous (unrefreshed) content.
+
+The 'modified' flag is unaffected by a refresh: a buffer that already
+differed from disk still does afterwards, and one that did not still does
+not - only the rendering changes, never a byte of the underlying content.
+
+==============================================================================
+8. Limitations                                           *hexpair-limitations*
 
 - The column arithmetic assumes the dump format produced by
   `xxd -g 1 -c N` (one-byte groups).  Do not re-filter the buffer with a

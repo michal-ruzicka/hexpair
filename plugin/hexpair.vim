@@ -684,6 +684,61 @@ function! s:Toggle() abort
 endfunction
 
 " ---------------------------------------------------------------------------
+" Refreshing the dump
+" ---------------------------------------------------------------------------
+
+" Regenerate the offset and ASCII columns from the current hex payload,
+" without touching the file on disk: the same round trip a toggle off
+" followed by a toggle on would perform, but staying in hex mode and
+" without the intervening write.  Useful after editing bytes, since
+" both columns are otherwise only refreshed on the next |:w| or
+" |:HexPairToggle|.
+function! s:Refresh() abort
+  if !get(b:, 'hexpair_active', 0)
+    echohl WarningMsg | echomsg 'hexpair: hex mode is not active' | echohl None
+    return
+  endif
+  let err = s:ValidateDump()
+  if !empty(err)
+    if has_key(err, 'lnum')
+      call cursor(err.lnum, err.col)
+      call s:Highlight()
+    endif
+    echohl ErrorMsg
+    echomsg 'hexpair: ' . err.msg . '; nothing refreshed'
+    echohl None
+    return
+  endif
+
+  " 'modified' must be preserved exactly as it stood before this call:
+  " no bytes actually change, only their rendering, so a buffer that
+  " already differed from disk still does, and one that did not still
+  " does not.  Captured BEFORE the filters below, which mark the
+  " buffer modified as a side effect regardless of prior state.
+  let was_modified = &l:modified
+  let off = s:DumpOffset()
+  call s:ReverseDump()
+  silent execute '%!' . s:xxd . ' -g 1 -c ' . b:hexpair_n
+  call cursor(s:DumpPos(off))
+  if !was_modified
+    setlocal nomodified
+  endif
+
+  " This refresh is a new baseline for both halves of the toggle-off
+  " modified check in s:FromHex(): the dump it just produced is what a
+  " FUTURE edit is compared against (b:hexpair_dump_tick, as after
+  " s:ToHex()/s:PostWrite()/s:PostReload()), and since no save
+  " happened, the buffer's standing relative to disk carries forward
+  " unchanged rather than being reset to clean (b:hexpair_saved.modified,
+  " unlike s:PostWrite() which just made them match).
+  let b:hexpair_saved.modified = was_modified
+  let b:hexpair_dump_tick = b:changedtick
+
+  call s:Highlight()
+  redraw!
+endfunction
+
+" ---------------------------------------------------------------------------
 " Column navigation
 " ---------------------------------------------------------------------------
 
@@ -739,10 +794,11 @@ endfunction
 " Command and mappings
 " ---------------------------------------------------------------------------
 
-command! -bar HexPairToggle call s:Toggle()
+command! -bar HexPairToggle  call s:Toggle()
 command! -bar HexPairGoHex   call s:JumpTo('hex')
 command! -bar HexPairGoAscii call s:JumpTo('ascii')
 command! -bar HexPairSwap    call s:JumpTo('swap')
+command! -bar HexPairRefresh call s:Refresh()
 
 " No default key mappings are defined; map the <Plug> mappings (or the
 " commands directly) in your vimrc, e.g.:
@@ -750,10 +806,12 @@ command! -bar HexPairSwap    call s:JumpTo('swap')
 "   nmap <Leader>< <Plug>(HexPairGoHex)
 "   nmap <Leader>> <Plug>(HexPairGoAscii)
 "   nmap <Leader>- <Plug>(HexPairSwap)
+"   nmap <Leader>r <Plug>(HexPairRefresh)
 nnoremap <silent> <Plug>(HexPairToggle)  :<C-U>HexPairToggle<CR>
 nnoremap <silent> <Plug>(HexPairGoHex)   :<C-U>HexPairGoHex<CR>
 nnoremap <silent> <Plug>(HexPairGoAscii) :<C-U>HexPairGoAscii<CR>
 nnoremap <silent> <Plug>(HexPairSwap)    :<C-U>HexPairSwap<CR>
+nnoremap <silent> <Plug>(HexPairRefresh) :<C-U>HexPairRefresh<CR>
 
 let &cpo = s:cpo_save
 unlet s:cpo_save

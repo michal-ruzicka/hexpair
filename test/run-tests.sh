@@ -47,6 +47,9 @@ open(os.path.join(w, 'val.bin'), 'wb').write(b'ABCDEFGH')
 # affect another test's expectations
 for name in ('mod12.bin', 'mod13.bin', 'mod14.bin', 'mod15.bin'):
     open(os.path.join(w, name), 'wb').write(b'ABCDEFGH')
+# :HexPairRefresh fixtures
+for name in ('ref1.bin', 'ref2.bin', 'ref3.bin', 'ref4.bin', 'ref5.bin'):
+    open(os.path.join(w, name), 'wb').write(b'ABCDEFGH')
 EOF
 
 # --- Test 1: round trip preserves content and cursor byte offset -----------
@@ -295,6 +298,80 @@ check "write in hex mode resets the modified baseline" "[0, 'ZBCDEFGH']" "$(cat 
 check "write in hex mode persists the edit to disk" \
     "00000000: 5a 42 43 44 45 46 47 48                          ZBCDEFGH" \
     "$(xxd -g 1 "$WORK/mod15.bin")"
+
+# --- Test 16: :HexPairRefresh self-heals offsets/ASCII without writing -----
+cat > "$WORK/t16.vim" <<EOF
+source $PLUGIN
+HexPairToggle
+call append(1, '01 02 03 04 05')
+call cursor(2, 7)
+HexPairRefresh
+let state = string([line('.'), col('.'), strpart(getline('.'), col('.') - 1, 2), line('\$')])
+call writefile([state, getline(1)], '$WORK/t16.out')
+qa!
+EOF
+vim -es -b -u NONE "$WORK/ref1.bin" -S "$WORK/t16.vim"
+check "refresh: cursor stays on same byte, dump merges to one line" \
+    "[1, 41, '03', 1]" "$(sed -n 1p "$WORK/t16.out")"
+check "refresh: offsets and ASCII column regenerated" \
+    "00000000: 41 42 43 44 45 46 47 48 01 02 03 04 05           ABCDEFGH....." \
+    "$(sed -n 2p "$WORK/t16.out")"
+check "refresh never writes to disk" \
+    "00000000: 41 42 43 44 45 46 47 48                          ABCDEFGH" \
+    "$(xxd -g 1 "$WORK/ref1.bin")"
+
+# --- Test 17: refresh after a real edit keeps 'modified' through toggle-off
+cat > "$WORK/t17.vim" <<EOF
+source $PLUGIN
+HexPairToggle
+call setline(1, substitute(getline(1), '41', '5a', ''))
+HexPairRefresh
+let afterrefresh = &modified
+HexPairToggle
+call writefile([string([afterrefresh, &modified, getline(1)])], '$WORK/t17.out')
+qa!
+EOF
+vim -es -b -u NONE "$WORK/ref2.bin" -S "$WORK/t17.vim"
+check "edit survives refresh and toggle-off as modified" "[1, 1, 'ZBCDEFGH']" \
+    "$(cat "$WORK/t17.out")"
+
+# --- Test 18: a no-op refresh stays unmodified through toggle-off ----------
+cat > "$WORK/t18.vim" <<EOF
+source $PLUGIN
+HexPairToggle
+HexPairRefresh
+let afterrefresh = &modified
+HexPairToggle
+call writefile([string([afterrefresh, &modified, getline(1)])], '$WORK/t18.out')
+qa!
+EOF
+vim -es -b -u NONE "$WORK/ref3.bin" -S "$WORK/t18.vim"
+check "no-op refresh stays unmodified through toggle-off" "[0, 0, 'ABCDEFGH']" \
+    "$(cat "$WORK/t18.out")"
+
+# --- Test 19: an invalid dump refuses refresh -------------------------------
+cat > "$WORK/t19.vim" <<EOF
+source $PLUGIN
+HexPairToggle
+call setline(1, substitute(getline(1), '41', '4x', ''))
+let before = getline(1)
+HexPairRefresh
+let state = string([get(b:, 'hexpair_active', 0), line('.'), col('.'), getline(1) ==# before])
+call writefile([state], '$WORK/t19.out')
+qa!
+EOF
+vim -es -b -u NONE "$WORK/ref4.bin" -S "$WORK/t19.vim"
+check "invalid char refuses refresh" "[1, 1, 12, 1]" "$(cat "$WORK/t19.out")"
+
+# --- Test 20: refresh outside hex mode is a no-op --------------------------
+cat > "$WORK/t20.vim" <<EOF
+source $PLUGIN
+HexPairRefresh
+call writefile([string([get(b:, 'hexpair_active', 0)])], '$WORK/t20.out')
+qa!
+EOF
+vim -es -b -u NONE "$WORK/ref5.bin" -S "$WORK/t20.vim"
+check "refresh outside hex mode is a no-op" "[0]" "$(cat "$WORK/t20.out")"
 
 # ---------------------------------------------------------------------------
 if [ "$FAIL" -eq 0 ]; then

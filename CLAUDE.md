@@ -41,8 +41,8 @@ dist/                 - packaged release tarballs (gitignored)
 
 One script, script-local functions, three public surfaces: the
 commands (`:HexPairToggle`, `:HexPairGoHex`, `:HexPairGoAscii`,
-`:HexPairSwap`), the `<Plug>` mappings (no default key mappings — the
-user maps them in vimrc), and the highlight groups
+`:HexPairSwap`, `:HexPairRefresh`), the `<Plug>` mappings (no default
+key mappings — the user maps them in vimrc), and the highlight groups
 (`HexPairActive` / `HexPairMirror`).
 
 Key function map:
@@ -106,6 +106,19 @@ Key function map:
   restores the cursor from `b:hexpair_last_pos` (tracked on every
   `CursorMoved` in `s:Highlight()`, because at `BufReadPre` time the
   old buffer content is already gone).
+- `s:Refresh()` (`:HexPairRefresh`) — validated round trip through
+  binary and back, without writing: same shape as `s:PreWrite()` +
+  `s:PostWrite()` but synchronous (no intervening file write, so no
+  autocommand split needed) and it must NOT let the buffer end up
+  looking clean when it isn't. `&l:modified` is captured *before* the
+  two filters (which set it as a side effect regardless of prior
+  state) and restored after; `b:hexpair_saved.modified` is set to that
+  same captured value (carrying the true "differs from disk" state
+  forward across a refresh, unlike `s:PostWrite()` which sets it to 0
+  because a real save just happened) and `b:hexpair_dump_tick` is reset
+  — both are the inputs `s:FromHex()`'s toggle-off modified check
+  reads, so a future toggle-off must still see them correctly whether
+  or not the buffer was refreshed in between.
 - `s:PasteOn()` / `s:PasteOff()` — the global `'paste'` option is
   switched on while the cursor is in a hex buffer (`BufEnter`/`BufLeave`
   plus the toggle lifecycle) and restored elsewhere; `g:hexpair_paste`

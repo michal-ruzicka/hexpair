@@ -9,6 +9,15 @@ and this project adheres to
 
 ## [v2.0.0-devel] – 2026-07-20
 
+### Added
+- `:HexPairRefresh` (`<Plug>(HexPairRefresh)`): regenerate the offset
+  and ASCII columns from the current hex payload without writing to
+  disk — the same round trip a toggle off followed by a toggle on
+  would perform, but staying in hex mode. Validated like `:w`; an
+  invalid dump refuses the refresh instead of being converted. The
+  `'modified'` flag is unaffected — only the rendering changes, never
+  a byte of content.
+
 ### Fixed
 - Data loss: toggling hex mode off used to unconditionally mirror the
   buffer's modified state from BEFORE hex mode was entered, so an edit

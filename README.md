@@ -58,8 +58,10 @@ code, releases and issue tracker.
 - **Forgiving editing.** Only the HEX column matters: the offset and
   ASCII columns are stripped before the reverse conversion, so you can
   freely insert, delete or reorder lines — inserted lines need no
-  offset and no ASCII part, just hex pairs. After `:w` the dump is
-  regenerated and offsets become correct again automatically.
+  offset and no ASCII part, just hex pairs. After `:w`, or on demand
+  with `:HexPairRefresh`, the dump is regenerated and offsets become
+  correct again automatically — `:HexPairRefresh` does this without
+  writing to disk, and without affecting the `'modified'` flag.
 - **Column navigation.** Commands to jump between the HEX and ASCII
   representation of the byte under the cursor, or to swap to the
   opposite column.
@@ -100,6 +102,7 @@ nmap <Leader>h <Plug>(HexPairToggle)     " toggle hex view
 nmap <Leader>< <Plug>(HexPairGoHex)      " jump to the HEX column (same byte)
 nmap <Leader>> <Plug>(HexPairGoAscii)    " jump to the ASCII column (same byte)
 nmap <Leader>- <Plug>(HexPairSwap)       " jump to the opposite column
+nmap <Leader>r <Plug>(HexPairRefresh)    " regenerate offsets/ASCII, no write
 ```
 
 `<Leader>` expands to the `mapleader` variable at the time a mapping is
@@ -141,6 +144,7 @@ vim -b -c 'HexPairToggle' file.bin
 | `:HexPairGoHex` | Move the cursor to the HEX column, staying on the same byte |
 | `:HexPairGoAscii` | Move the cursor to the ASCII column, staying on the same byte |
 | `:HexPairSwap` | Move the cursor to the opposite column, staying on the same byte |
+| `:HexPairRefresh` | Regenerate the offset and ASCII columns from the current hex payload, without writing to disk |
 
 Editing rules (see `:help hexpair` for details): keep bytes in the hex
 area separated by at most one space — a run of two spaces marks the
