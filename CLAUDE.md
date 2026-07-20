@@ -199,73 +199,175 @@ SSH-signed, release tarballs GPG-signed locally — CI never publishes.
 
 ---
 
-## Paged large-file mode (plugin/hexpair_paged.vim)
+## Paged large-file mode
 
-Edit files of arbitrary size (multi-GB) without loading them into a
-Vim buffer: show one *page* (configurable, default 1 MiB) as a hex
-dump with **absolute** file offsets, navigate between pages, and (once
-Stage 2/3 land) write changes back so that unchanged parts of the file
-on disk are never rewritten (for same-length edits).
+### Goal: ONE hex mode, always paged
 
-Built in three stages, each with its own review checkpoint with the
-maintainer before the next starts, given the risk of corrupting a
-large real file if a write-path bug slipped through:
+Redesigned after Stage 1 shipped (agreed with the maintainer): there
+is to be no separate "base" (whole-buffer) and "paged" (large-file)
+hex mode. `:HexPairToggle` (`<Plug>(HexPairToggle)`) is the only
+toggle, always shows a page, and always carries the page banner — a
+small file just happens to have exactly one page, which behaves
+exactly like today's pre-paging plugin plus a `"page 1/1"` banner (the
+maintainer explicitly wants this uniformity, not a special case that
+hides the banner for a single page). `:HexPairOpen`/`HexPairOpenFile`
+remain the *fast entry point* that skips loading the whole file first
+— for a file already open normally, `:HexPairToggle` gets you to the
+same place, just after Vim already spent the memory to load it.
 
-- **Stage 1 — read-only paging and navigation: IMPLEMENTED.**
-- **Stage 2 — same-length in-place patch write: PLANNED**, not yet
-  designed in detail beyond what this file already describes; start
-  with its own plan.
-- **Stage 3 — length-changing splice write: PLANNED**, likewise.
+Consequence: `plugin/hexpair_paged.vim` is absorbed back into
+`plugin/hexpair.vim` (single file, single script scope) as part of
+Stage 2 below — once hex mode is unconditionally page-aware, keeping
+two files would mean duplicating almost everything (`Layout`, strip,
+validate, highlight, cursor mapping), not just the one small
+`s:ResolveXxd()` helper Stage 1's split cost. `plugin/hexpair_paged.vim`
+is deleted; `pack-release.py`'s `FILES` and `CONTRIBUTING.md`'s repo
+layout table lose that entry. **This is a decision for Stage 2's own
+plan, not yet executed — noted here so Stage 2 doesn't rediscover it.**
 
-A `:w` on a Stage 1 paged buffer throws `'hexpair: writing a paged
-buffer is not implemented yet'` from a `BufWriteCmd` autocommand
-(`buftype=acwrite`) — deliberately a `throw`, not just an `echomsg`:
-confirmed Vim does not clear `'modified'` just because a `BufWriteCmd`
-ran, but a thrown error is a real, hard-to-miss `:write` failure
-rather than a message that can scroll past unnoticed, and matches how
-a genuine write failure (e.g. disk full) would surface.
+### Stages (renumbered; Stage 1 unchanged, Stages 2-3 replaced, Stage 4 new)
 
-### Why a separate file, not part of plugin/hexpair.vim
+Each stage keeps its own review checkpoint with the maintainer before
+the next starts — unchanged rationale: a write-path bug could corrupt
+a large real file.
 
-Each `:source`d Vim script has its own `s:`-scoped functions, so this
-is the natural way to gate the feature independently of the base
-plugin (see "Vim version gate" below) — Vim 8.0 users keep the
-whole-file toggle working, and only this file refuses to load on old
-Vim. The only genuinely shared low-level helper is xxd-path resolution
-(`s:ResolveXxd()`, ~10 lines) — **duplicated** here rather than shared
-via an `autoload/` layer, since everything else (layout, offset
-validation, stripping, highlighting) has different semantics in paged
-mode (banner lines, absolute offsets, page base arithmetic) and isn't
-meaningfully shared; introducing `autoload/` solely to share one small
-helper would be a premature abstraction. A consequence: pair
-highlighting (`s:PagedHighlight()`/`s:PagedClearHighlight()`) is a
-~40-line duplicate of the base plugin's `s:Highlight()`/
-`s:ClearHighlight()`, adapted for `s:PagedLayout()` and banner-line
-skipping, not a refactor of the original.
+- **Stage 1 — read-only paging and navigation: IMPLEMENTED**, as a
+  separate `plugin/hexpair_paged.vim` / `:HexPairOpen` entry point.
+  Superseded by, not deleted before, Stage 2: its page-read/boundary/
+  banner/highlight machinery is the foundation Stage 2 folds into the
+  unified mode, largely unchanged in substance, moved and rewired.
+- **Stage 2 — unify into a single always-paged mode: PLANNED**, design
+  below. No *new* writing capability — `:w` still throws "not
+  implemented yet" the same way Stage 1's paged buffers already do,
+  now from every hex-mode buffer regardless of entry point, plus the
+  new windowed text-mode (below). Deliberately kept separate from
+  introducing real disk writes, so this large structural refactor
+  (merging two files, three buffer states, two population paths) can
+  be reviewed on its own.
+- **Stage 3 — same-length in-place patch write: PLANNED** (was "Stage
+  2" before this redesign; mechanism unchanged, see "Writing a page"
+  below — now applies uniformly to a write from hex-page-view *or*
+  windowed-text-view, since both reduce to "these N bytes replace the
+  file's `[base, base+len)` range").
+- **Stage 4 — length-changing splice write: PLANNED** (was "Stage 3").
 
-### Vim version gate
+### The three buffer states and how a buffer moves between them
 
-Stage 2/3's splice write path will require
-`readblob({fname}, {offset}, {size})` — available since **patch
-8.2.4906**; large absolute offsets also need a 64-bit Number
-(`+num64`, standard on modern builds). The whole paged feature is
-gated on both at load time (checked once, avoids partial functionality
-that would depend on the Vim version in confusing ways), with a clear
-`echomsg` instead of failing silently or obscurely later on old Vim.
-The base (whole-file) mode keeps its current Vim 8.0 requirement,
-unaffected — this file's gate runs independently, before it defines
-anything else.
+1. **Plain** — an ordinary Vim buffer, hex mode never engaged.
+   Completely untouched by hexpair; `:w` is 100% vanilla Vim. This is
+   the *only* way to see/edit the true whole-file content once a file
+   is large enough to need more than one page — there is deliberately
+   **no escape hatch back to Plain** once a buffer has left it (see
+   below); the maintainer's own call: close and reopen Vim instead.
+2. **Hex-page-view** — today's Stage 1 paged view (banner + `xxd -g 1`
+   dump of the current page), reached by `:HexPairToggle` from Plain,
+   or directly via `:HexPairOpen`/`HexPairOpenFile`.
+3. **Windowed-text-view** — *new in Stage 2*: `:HexPairToggle` from
+   Hex-page-view goes here instead of back to Plain. Shows the current
+   page's raw bytes as text (opened effectively `++bin`, i.e.
+   byte-oriented, no fileencoding decoding), bracketed by the *same*
+   banner as Hex-page-view (page X/Y, byte range) so the buffer never
+   silently pretends to be the whole file. `:HexPairToggle` from here
+   goes back to Hex-page-view of the *same* page (byte-offset-exact,
+   same mechanism the base plugin already uses for its toggle). A
+   plain `:w` here (without going back through hex mode) must **still**
+   go through the page-range write path — the buffer's content is only
+   one page's worth of bytes, so a literal Vim `:w` would truncate the
+   real file down to just that page. This is why Windowed-text-view is
+   not "back to Plain": it needs the *same* `BufWritePre`/`BufWriteCmd`
+   interception hex-page-view has, just rendering bytes as text instead
+   of hex pairs.
+   Confirmed with the maintainer: this applies even when there is only
+   one page (`N=1`) — banner and page-range write path always active
+   once hex mode has been engaged at all, no special-case skip for the
+   single-page case. For `N=1` this is functionally identical to a
+   normal full-file write (the one page *is* the whole file), so there
+   is no behavioural difference from today's plugin beyond the banner.
+   Known accepted limitation: a page boundary can fall in the middle of
+   a multi-byte UTF-8 sequence, showing two "broken" halves on adjacent
+   pages — acceptable because this view is byte-oriented (`++bin`) by
+   design, matching the existing "utf-16 remains approximate" class of
+   disclaimed limitation elsewhere in this file.
 
-The check is factored into `HexPairPagedGateMessage(supported)`, a
-**global** (not `s:`) pure function of an explicit boolean rather than
-calling `has()` internally, specifically so its failure branch — which
-the actual local dev/test Vims (9.2, patch 8.2.4906 satisfied) cannot
-produce — is directly testable by passing `0`. The same pattern
-(global, pure, parameterized for testability) is used for
-`HexPairPagedSizeError(size, bytesperline)` and the page-boundary
-functions below.
+### Entering hex mode: two population paths, chosen by entry point, not by size
 
-### Reading a page
+`:HexPairToggle` and `:HexPairOpen`/`HexPairOpenFile` both land in
+Hex-page-view, but must source the page's bytes differently:
+
+- **Via `:HexPairOpen`/`HexPairOpenFile` (file not loaded at all)** —
+  exactly Stage 1's existing path: `xxd -s <base> -l <len> <file>`
+  reads only the requested page directly off disk. This is the *only*
+  path that actually saves memory for a huge file — the whole point of
+  a fast entry that skips loading it first.
+- **Via `:HexPairToggle` on an already-existing buffer** — the buffer
+  content (whether from a normal `vim file.dat`, from a pipe/`vim -`,
+  or already modified with unsaved edits) is **already fully in
+  memory**; re-reading the page from disk via `xxd -s` would (a) not
+  save any memory at this point — Vim already paid that cost — and (b)
+  show *stale* content if the buffer has unsaved edits, silently
+  discarding them. So this path must **slice the in-memory buffer**
+  for the target page's byte range instead (byte-offset arithmetic via
+  `line2byte()`, the same primitive `s:BufOffset()` already uses),
+  convert just that slice through `xxd -p` / `xxd -o <base> -g 1 -c N`
+  for display. This mirrors the base plugin's existing fork in
+  `s:ToHex()` (unmodified + file-backed → `:edit ++bin` reload; else →
+  warn and dump in-memory content) — same fork, now also deciding
+  *how a page is populated*, not just whether a `++bin` reload happens
+  first.
+  **Starting page**: the page containing the cursor's current byte
+  offset (`s:BufOffset()` divided by the page size), not always page
+  1 — consistent with the existing invariant that every mode
+  transition in this plugin preserves the cursor's byte position.
+
+This resolves two questions raised while planning this stage:
+
+- **`cat data | vim -` (or any unnamed/pipe-sourced buffer)**: no
+  special-casing needed. Vim has no choice but to read all of stdin
+  into the buffer before there is anything to display, so by the time
+  `:HexPairToggle` could even be pressed, the content is already fully
+  in memory — this is exactly the "buffer-slicing" path above, applied
+  to a buffer that additionally has no backing file. `:w` on such a
+  buffer already fails with Vim's own `E32: No file name` today,
+  unrelated to hex mode; paging changes nothing about that. **Paging's
+  memory benefit only exists via the `:HexPairOpen` entry point** —
+  for an already-loaded buffer (piped or not), paging is a display/
+  write-scoping convenience, not a memory optimization, and there is
+  no new size limit to invent here.
+- **A file opened normally and already fully loaded**: same reasoning
+  — the memory is already spent, so page-slicing here is purely about
+  giving the same banner/write-scoping/mental-model as a fresh
+  `:HexPairOpen`, not about avoiding a big read. If the buffer *is*
+  file-backed, the write path can still usefully patch only the
+  visible page's range on disk (Stage 3/4), which has a real
+  advantage independent of memory: it cannot clobber other regions of
+  the file that were never even looked at in this session.
+
+### Vim version gate — narrowed
+
+Re-examined during this redesign: `readblob()` (patch 8.2.4906) is
+only actually needed by the Stage 4 **splice** write (growing/
+shrinking a page). Reading pages (either population path), Stage 3's
+same-length write, and Windowed-text-view all work on the same Vim 8.0
+baseline the rest of the plugin already requires. So the blanket
+load-time version gate Stage 1 introduced (refusing to load the whole
+paged feature below patch 8.2.4906) becomes unnecessarily strict once
+paging is the *only* hex mode — it would raise the plugin's minimum
+Vim version for basic hex viewing, which used to work on Vim 8.0.
+**Stage 4 changes the gate to a runtime check performed only at the
+moment a length-changing write is attempted** (clear error, refuse
+just that write, everything else keeps working), instead of a
+load-time refusal of the entire feature. `HexPairPagedGateMessage()`'s
+existing shape (global, pure, parameterized by an explicit boolean for
+testability) carries over unchanged to wherever this check ends up
+living.
+
+### Reading a page: the `:HexPairOpen` population path
+
+Stage 1's existing mechanism, unchanged by this redesign — one of the
+two population paths from "two population paths" above; the other
+(buffer-slicing, for `:HexPairToggle` on an already-existing buffer)
+is new territory for Stage 2 and not yet designed in this level of
+detail.
 
 - `xxd -s <offset> -l <len> -g 1 -c <n> <file>` into a **scratch
   buffer** (`buftype=acwrite`, `bufhidden=hide`, `noswapfile`,
@@ -273,13 +375,24 @@ functions below.
   defaults and the base syntax highlighting for free). `-s` makes xxd
   print absolute offsets, so the offset column shows true file
   positions natively (verified: plain `-s`, without `-o`, already does
-  this — `-o` is not needed on the read side).
+  this — `-o` is not needed on the read side). **`enew` creates a
+  fresh, unrelated buffer** — appropriate here since no buffer existed
+  yet. `:HexPairToggle` on an *existing* buffer must instead transform
+  that same buffer in place (matching how the base plugin's
+  `s:ToHex()` already behaves) — likely NOT `buftype=acwrite` for that
+  path, since it is a real, already-named, non-synthetic buffer;
+  Stage 2 needs to work out whether `BufWritePre`/`BufWritePost` (the
+  base plugin's existing mechanism) or `BufWriteCmd` fits it better,
+  and how the two population paths converge on identical buffer state
+  (same buffer-local variables below, same commands available)
+  afterward, so the rest of the plugin cannot tell which path a given
+  Hex-page-view buffer took to get there.
 - Buffer-local state: `b:hexpair_page_file`, `b:hexpair_page_index`
   (0-based internally, 1-based in the UI), `b:hexpair_page_size`,
   `b:hexpair_page_base`, `b:hexpair_page_len` (shorter on the last
   page), `b:hexpair_page_total`, `b:hexpair_page_totalpages`,
   `b:hexpair_page_ftime` (`getftime()` at read time — staleness
-  detection, not used until Stage 2/3's write path compares it),
+  detection, not used until Stage 3/4's write path compares it),
   `b:hexpair_n`, `b:hexpair_page_hexstart` (see next point).
 - **The offset column is not a fixed width.** Verified empirically:
   `xxd`'s offset column widens past 8 hex digits once an offset
@@ -338,7 +451,7 @@ text (which contains plain decimal digits and letters, e.g. "page",
 `HexPairPagedStripLine()`/`HexPairPagedValidate()` purely for
 testability, since Stage 1 has no write path yet to exercise them
 through — see the `plugin/*.vim` testing note above: shipping this
-logic untested until Stage 2 would violate "every change ships with a
+logic untested until Stage 3 would violate "every change ships with a
 test".
 
 `HexPairPageBanner` (`highlight default link ... Comment`) plus a
@@ -348,7 +461,14 @@ comment group to link to (checked: only `xxdAddress`/`xxdSep`/
 `xxdAscii`, all tied to real dump lines), so this is the plugin's own,
 following the `HexPairActive`/`HexPairMirror` precedent.
 
-### Commands (paged mode)
+### Commands
+
+Unified by Stage 2 (not yet done — Stage 1's commands below currently
+only work on an `:HexPairOpen`-created buffer): once merged,
+`:HexPairPageNext`/`Prev`/`Goto`/`Pages` work on *any* Hex-page-view
+buffer, however it was reached — `:HexPairToggle` or `:HexPairOpen`
+produce indistinguishable buffer state (see "two population paths"
+above).
 
 - `:HexPairOpen <file> [page]` — entry point; does **not** first
   `:edit` the file (that would load the whole multi-GB file into a
@@ -385,7 +505,7 @@ following the `HexPairActive`/`HexPairMirror` precedent.
   [!]` — `!` (`-bang`) discards unsaved changes; without it, refuses
   when `'modified'` (Stage 1 can edit the scratch buffer even though
   saving isn't implemented yet, so this guard is meaningful and tested
-  now, unchanged for Stage 2/3).
+  now, unchanged for Stage 3/4).
 - `HexPairPagedParsePageInput(text)` / `s:PageGotoPrompt()` —
   `<Plug>(HexPairPageGoto)`'s `input()`-driven prompt (a typed `{N}`
   can't come from a bare `<Plug>` mapping). Split into a global, pure
@@ -418,19 +538,24 @@ following the `HexPairActive`/`HexPairMirror` precedent.
   `b:hexpair_n`'s snapshot of `g:hexpair_bytes_per_line` in the base
   plugin) so a later global change cannot desync an open page buffer.
 
-### Known Stage 1 gaps (not regressions — never existed yet)
+### Stage 1 gaps that Stage 2 should close, not just carry forward
 
-- `:HexPairGoHex`/`:HexPairGoAscii`/`:HexPairSwap` are base-plugin
-  commands keyed on `b:hexpair_active`, which paged buffers never set
-  (they use `b:hexpair_page_active`) — not wired up for paged buffers
-  in Stage 1.
-- `g:hexpair_paste` management (the base plugin's `s:PasteOn()`/
-  `s:PasteOff()`) is not applied to paged buffers.
+These were out of scope for Stage 1's approved plan, filed as known
+gaps rather than regressions — but under the "one mode" redesign they
+stop being optional follow-ups, since Hex-page-view is no longer a
+separate second-class mode:
 
-Both are reasonable follow-ups if the maintainer wants them, but were
-out of scope for the approved Stage 1 plan.
+- `:HexPairGoHex`/`:HexPairGoAscii`/`:HexPairSwap`, currently keyed on
+  `b:hexpair_active` (never set by a paged buffer, which uses
+  `b:hexpair_page_active`) — once there is one mode, one active flag,
+  these should just work on any Hex-page-view buffer.
+- `g:hexpair_paste` management (`s:PasteOn()`/`s:PasteOff()`) —
+  likewise should apply uniformly; presumably to Windowed-text-view
+  too, on the same reasoning as the ftplugin/banner/write-path
+  uniformity decided above (confirm with the maintainer if it's not
+  obvious once Stage 2 gets there).
 
-### Writing a page — two mechanisms, chosen by length (Stage 2/3, not yet implemented)
+### Writing a page — two mechanisms, chosen by length (Stage 3/4, not yet implemented)
 
 **Same length (the common case — value overwrites):** in-place patch
 via xxd's documented reverse-with-seek behaviour. Pipeline: strip the
@@ -451,9 +576,12 @@ platforms, including with dump lines *reordered* by the user before
 the strip → regenerate → patch pipeline (the reorder case is why the
 pipeline regenerates a fresh canonical dump instead of patching
 directly against the user's possibly-stale embedded offsets) — this
-de-risked committing to the architecture, but Stage 2 still needs this
+de-risked committing to the architecture, but Stage 3 still needs this
 **automated** as tests before the write path is trusted, per the
-mandate above.
+mandate above. Must be exercised from *both* Hex-page-view and
+Windowed-text-view once Stage 2 adds the latter — same underlying
+mechanism, but two different sources for "these are the page's new
+raw bytes" (strip a hex dump, vs. take the text buffer's bytes as-is).
 
 **Changed length (insert/delete):** splice in pure VimScript —
 `readblob(file, off, len)` block-copy loop (block size ~8 MiB, bounded
@@ -479,7 +607,7 @@ ACLs on Windows) — never predictable names in shared locations.
 Delete in `try/finally`. Document in the help file that a
 file-size-sized temp is needed for length-changing writes.
 
-### Testing the paged mode
+### Testing
 
 Stage 1, in `test/run-tests.sh`: a fixture with recognizable
 per-page content (5000 bytes, byte `i` valued `i % 256`) asserting the
@@ -492,16 +620,39 @@ is pure), and banner-aware stripping/validation (including that banner
 text containing letters and slashes is never mistaken for an invalid
 hex character).
 
-Still needed for Stage 2/3: same-length patch touches only the edited
-range (compare full-file hashes outside the range), splice correctness
-for grow and shrink, staleness refusal (`getfsize()`/`getftime()`
-mismatch), and the `try/finally` temp-file cleanup on both success and
-a simulated failure.
+Needed for Stage 2 (unification, no new writing): `:HexPairToggle` on
+a small already-loaded file lands on Hex-page-view with exactly one
+page and today's pre-paging byte-for-byte behaviour, plus a `1/1`
+banner; on a multi-page file it starts on the page containing the
+cursor's byte offset, not always page 1; toggling Hex-page-view →
+Windowed-text-view → Hex-page-view round-trips the cursor byte exactly
+(same invariant as the existing base-plugin toggle) and shows the
+banner in both directions; a `:w` attempt from either view still
+throws the same "not implemented yet" it does today; an unnamed/piped
+buffer (`vim -` equivalent in the test harness — feed content via
+stdin or construct with `enew` + `setline()`) reaches Hex-page-view
+via the buffer-slicing path with no crash and no attempt to read a
+nonexistent file.
+
+Needed for Stage 3/4 (real writes): same-length patch touches only the
+edited range (compare full-file hashes outside the range) — from both
+Hex-page-view and Windowed-text-view; splice correctness for grow and
+shrink; staleness refusal (`getfsize()`/`getftime()` mismatch); the
+`try/finally` temp-file cleanup on both success and a simulated
+failure; the splice version gate's *runtime* (not load-time) failure
+message, still tested via the same parameterized-function pattern.
 
 ### Explicit non-goals (for now)
 
 - No attempt at insert/delete without a full-file rewrite (filesystems
   cannot splice in place).
 - No memory-mapped or streaming views; one page = one buffer.
-- utf-16 position mapping stays approximate in the base mode; paged
-  mode is byte-oriented and unaffected.
+- utf-16 position mapping stays approximate for the whole-buffer byte
+  offset math the base plugin already does; a page boundary splitting
+  a multi-byte UTF-8 sequence in Windowed-text-view is the paged
+  equivalent, and is likewise not fixed — both are accepted, disclosed
+  limitations of being fundamentally byte-oriented.
+- No way back to the Plain (pre-hex-mode, whole-file, unpaged) buffer
+  state once a buffer has engaged hex mode at all — close and reopen
+  Vim for that (the maintainer's explicit call, to avoid maintaining a
+  second, rarely-exercised code path just for reverting).
