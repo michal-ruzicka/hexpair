@@ -46,6 +46,7 @@ FILES = [
     "hexpair/doc/hexpair.txt",
     "hexpair/ftplugin/xxd.vim",
     "hexpair/plugin/hexpair.vim",
+    "hexpair/plugin/hexpair_paged.vim",
 ]
 
 

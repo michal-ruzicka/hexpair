@@ -22,7 +22,9 @@ reports and patches are welcome via the project's
 |---|---|
 | `.github/` | GitHub Actions CI workflow (`workflows/build.yml`) |
 | `dist/` | Packaged release tarballs (gitignored) |
-| `plugin/hexpair.vim` | The plugin itself; its header carries `Version:` and `Date:` — the single source of truth parsed by the packaging scripts |
+| `plugin/hexpair.vim` | The base plugin (whole-buffer toggle); its header carries `Version:` and `Date:` — the single source of truth parsed by the packaging scripts |
+| `plugin/hexpair_paged.vim` | Paged large-file mode (read-only so far — see CLAUDE.md); a separate script scope from `plugin/hexpair.vim` on purpose |
+| `ftplugin/xxd.vim` | Dump-editing defaults for `filetype=xxd`, bundled with the plugin |
 | `doc/hexpair.txt` | Vim help documentation (`:help hexpair`) |
 | `test/` | Headless regression tests (`run-tests.sh`, see *Testing*) |
 | `.gitattributes` | Line-ending normalization rules |

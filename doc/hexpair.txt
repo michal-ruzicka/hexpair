@@ -14,7 +14,8 @@ CONTENTS                                                    *hexpair-contents*
     5. Filetype plugin ............. |hexpair-ftplugin|
     6. Writing in hex mode ......... |hexpair-writing|
     7. Refreshing the dump ......... |hexpair-refresh|
-    8. Limitations ................. |hexpair-limitations|
+    8. Paged large-file mode ....... |hexpair-paged|
+    9. Limitations ................. |hexpair-limitations|
 
 ==============================================================================
 1. Introduction                                         *hexpair-introduction*
@@ -282,7 +283,158 @@ differed from disk still does afterwards, and one that did not still does
 not - only the rendering changes, never a byte of the underlying content.
 
 ==============================================================================
-8. Limitations                                           *hexpair-limitations*
+8. Paged large-file mode                                       *hexpair-paged*
+
+For files too large to load into a Vim buffer, hexpair can show one
+configurable-size PAGE of the file at a time, as a hex dump with ABSOLUTE
+file offsets, without ever reading the rest of the file.  This is a
+separate mode from |hexpair-usage| above, in a separate plugin file
+(plugin/hexpair_paged.vim) with its own Vim version requirement.
+
+This is currently READ-ONLY: paging and navigation are implemented;
+writing a paged buffer is planned but not yet available - |:w| on a
+paged buffer fails with an error and changes nothing, on disk or in the
+buffer.
+
+Requires Vim compiled with a 64-bit Number type (+num64, standard on
+modern builds) and patch 8.2.4906 or later; if not, the whole feature is
+unavailable and says so with a clear message when plugin/hexpair_paged.vim
+loads (the base |hexpair-usage| mode is unaffected and keeps its Vim 8.0
+requirement).
+
+Open a file directly in paged mode, without loading it as a normal
+buffer first - straight from the command line: >
+
+    vim -c 'HexPairOpen bigfile.bin'
+<
+or from within Vim:
+
+                                                               *:HexPairOpen*
+:HexPairOpen {file} [page]
+                        Open {file} in paged mode, showing [page] (1-based,
+                        default 1).  Does not read the rest of the file.  An
+                        out-of-range or non-numeric [page] reports an error
+                        and leaves the current buffer completely untouched -
+                        nothing is created.
+
+                                                          *HexPairOpenFile()*
+HexPairOpenFile({file} [, {page}])
+                        Function form of |:HexPairOpen|, for scripts,
+                        mappings or shell wrappers that build the filename
+                        programmatically (e.g. from an environment variable)
+                        instead of typing it on the Ex command line.
+                        Prefer this over constructing a |:HexPairOpen|
+                        command-line string yourself when the name may
+                        contain spaces or a literal "$" - :HexPairOpen's
+                        `-nargs=+` argument parsing does not fully
+                        round-trip fnameescape()'s escaping of such
+                        characters, but a direct function call needs no
+                        escaping at all: >
+                            call HexPairOpenFile($MY_FILE)
+<
+          *:HexPairPageNext* *:HexPairPagePrev*
+     *<Plug>(HexPairPageNext)* *<Plug>(HexPairPagePrev)*
+:HexPairPageNext[!]     Show the next page.
+:HexPairPagePrev[!]     Show the previous page.
+                        Refuse to discard unsaved changes to the current
+                        page without !.
+
+                          *:HexPairPageGoto* *<Plug>(HexPairPageGoto)*
+                                              *<Plug>(HexPairPageGotoForce)*
+:HexPairPageGoto[!] {N} Jump directly to page {N} (1-based).  Refuses to
+                        discard unsaved changes without !, same as above.
+                        <Plug>(HexPairPageGoto) is the mapping equivalent:
+                        it prompts for the number with |input()| instead of
+                        needing a typed {N}.  <Plug>(HexPairPageGotoForce)
+                        is the same prompt but discards unsaved changes
+                        without asking, like the {N} variant with !.
+
+                                                              *:HexPairPages*
+:HexPairPages           Report the current page number, the total page
+                        count, and the absolute byte range shown, e.g.
+                        "page 3 of 21, offsets 2097153-3145728 of total
+                        45678901 bytes (bigfile.bin)" - the same
+                        information the page banner shows (below), useful
+                        once the banner has scrolled out of view.
+
+As with |hexpair-usage|, no key mappings are defined by default; e.g.: >
+
+    nmap <Leader>j <Plug>(HexPairPageNext)
+    nmap <Leader>k <Plug>(HexPairPagePrev)
+    nmap <Leader>g <Plug>(HexPairPageGoto)
+<
+Uppercase variants that discard unsaved changes without asking (like the
+! commands) - Next/Prev need no <Plug> target for this, map the bang
+command directly: >
+
+    nnoremap <silent> <Leader>J :HexPairPageNext!<CR>
+    nnoremap <silent> <Leader>K :HexPairPagePrev!<CR>
+    nmap <Leader>G <Plug>(HexPairPageGotoForce)
+<
+Each page is bracketed by a leading and trailing banner line, e.g.: >
+
+    " hexpair: page 3/21  bytes 2097153-3145728 of 45678901  bigfile.bin
+    00200000: 41 42 43 44 45 46 47 48 ...                    ABCDEFGH...
+    ...
+    003fffff: ...
+    " hexpair: end of page 3/21
+<
+The banner's and |:HexPairPages|' byte range is 1-based and inclusive
+(byte 1 is the file's first byte, so the LAST page's range always ends
+exactly at the total) - unlike the hex dump's own offset column (e.g.
+"00200000:" above), which is `xxd`'s native 0-based hex address and is
+left alone.
+
+A banner line - recognized as any line whose FIRST character is a double
+quote - is purely decorative, exactly like the offset and ASCII columns
+in the base mode (|hexpair-usage|): it is skipped entirely by cursor and
+highlighting logic and contributes no bytes, so it can never be confused
+with hex payload even though it contains ordinary decimal digits and
+letters.  It is given a comment-like appearance via the |HexPairPageBanner|
+highlight group (linked to |hl-Comment| by default - `xxd`'s bundled
+syntax file defines no comment group of its own to reuse).
+
+                                                    *HexPairPageBanner*
+HexPairPageBanner       Highlight for the page banner lines.  Links to
+                        Comment by default.
+
+                                                     *g:hexpair_page_size*
+g:hexpair_page_size     Bytes per page.  Default: 1 MiB (1024 * 1024).
+                        Must be a positive multiple of
+                        |g:hexpair_bytes_per_line|; set it small (e.g. 512)
+                        to work with small test files.  Changing it takes
+                        effect on the next |:HexPairOpen| - an already-open
+                        page keeps the size it was opened with. >
+                            let g:hexpair_page_size = 4 * 1024 * 1024
+<
+A shell wrapper for opening a file straight into paged mode, e.g. in
+~/.bashrc - HexPairOpenFile(), not `-c 'HexPairOpen ...'`, for the reason
+given at |HexPairOpenFile()| above: >
+
+    vimhex() {
+        if [ $# -lt 1 ] || [ $# -gt 2 ]; then
+            echo "usage: vimhex FILE [PAGE]" >&2
+            return 1
+        fi
+        HEXPAIR_OPEN_FILE="$1" HEXPAIR_OPEN_PAGE="${2:-1}" \
+            vim -c 'call HexPairOpenFile($HEXPAIR_OPEN_FILE, $HEXPAIR_OPEN_PAGE)'
+    }
+<
+    vimhex bigfile.bin        " page 1
+    vimhex bigfile.bin 3      " page 3
+<
+The offset column is not a fixed width: `xxd` widens it past 8 hex
+digits once an offset reaches 4 GiB, which a page could only straddle
+right at that boundary (and again at 64 GiB, and so on) - hexpair clamps
+page boundaries so this can never happen WITHIN a single page, shortening
+the one page that would otherwise straddle it.
+
+Not yet available on a paged buffer: |:HexPairGoHex|, |:HexPairGoAscii|,
+|:HexPairSwap| and |g:hexpair_paste| management, all specific to
+|hexpair-usage|'s whole-buffer mode.
+
+==============================================================================
+9. Limitations                                           *hexpair-limitations*
 
 - The column arithmetic assumes the dump format produced by
   `xxd -g 1 -c N` (one-byte groups).  Do not re-filter the buffer with a

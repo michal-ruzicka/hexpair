@@ -50,7 +50,19 @@ for name in ('mod12.bin', 'mod13.bin', 'mod14.bin', 'mod15.bin'):
 # :HexPairRefresh fixtures
 for name in ('ref1.bin', 'ref2.bin', 'ref3.bin', 'ref4.bin', 'ref5.bin'):
     open(os.path.join(w, name), 'wb').write(b'ABCDEFGH')
+# paged-mode fixture: 5000 bytes, byte i has value i % 256 - at 512
+# bytes/page that is 10 pages, the last one short (392 bytes)
+for name in ('paged21.bin', 'paged22.bin', 'paged23.bin', 'paged31.bin', 'paged32.bin'):
+    with open(os.path.join(w, name), 'wb') as f:
+        f.write(bytes(i % 256 for i in range(5000)))
+# fixture with a name that is awkward for Ex command-line argument
+# parsing: a space and a literal '$NAME' substring
+special_dir = os.path.join(w, 'space dir')
+os.mkdir(special_dir)
+with open(os.path.join(special_dir, 'dollar $HOSTNAME name.bin'), 'wb') as f:
+    f.write(b'ABCDEFGH')
 EOF
+PAGEDPLUGIN=../plugin/hexpair_paged.vim
 
 # --- Test 1: round trip preserves content and cursor byte offset -----------
 cat > "$WORK/t1.vim" <<EOF
@@ -372,6 +384,262 @@ qa!
 EOF
 vim -es -b -u NONE "$WORK/ref5.bin" -S "$WORK/t20.vim"
 check "refresh outside hex mode is a no-op" "[0]" "$(cat "$WORK/t20.out")"
+
+# --- Test 21: :HexPairOpen shows page 1 with banner and absolute offsets ---
+cat > "$WORK/t21.vim" <<EOF
+source $PLUGIN
+source $PAGEDPLUGIN
+let g:hexpair_page_size = 512
+HexPairOpen $WORK/paged21.bin 1
+let state = string([line('\$'), line('.'), col('.')])
+call writefile([getline(1), getline(2), getline('\$'), state], '$WORK/t21.out')
+qa!
+EOF
+vim -es -u NONE -S "$WORK/t21.vim"
+check "page 1 top banner" \
+    "\" hexpair: page 1/10  bytes 1-512 of 5000  $WORK/paged21.bin" \
+    "$(sed -n 1p "$WORK/t21.out")"
+check "page 1 first data line" \
+    "00000000: 00 01 02 03 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f  ................" \
+    "$(sed -n 2p "$WORK/t21.out")"
+check "page 1 bottom banner" "\" hexpair: end of page 1/10" "$(sed -n 3p "$WORK/t21.out")"
+check "page 1 line count and cursor on first byte" "[34, 2, 10]" "$(sed -n 4p "$WORK/t21.out")"
+
+# --- Test 22: :HexPairPageNext / :HexPairPageGoto move between pages -------
+cat > "$WORK/t22.vim" <<EOF
+source $PLUGIN
+source $PAGEDPLUGIN
+let g:hexpair_page_size = 512
+HexPairOpen $WORK/paged22.bin 1
+HexPairPageNext
+let next = getline(1)
+HexPairPageGoto 10
+let last = [getline(1), getline('\$'), line('\$')]
+try
+  HexPairPageNext
+  let pastend = 'no-error'
+catch
+  let pastend = 'error'
+endtry
+let unchanged = getline(1) ==# last[0]
+call writefile([next, string(last), pastend, string(unchanged)], '$WORK/t22.out')
+qa!
+EOF
+vim -es -u NONE -S "$WORK/t22.vim"
+check "next page shows page 2" \
+    "\" hexpair: page 2/10  bytes 513-1024 of 5000  $WORK/paged22.bin" \
+    "$(sed -n 1p "$WORK/t22.out")"
+check "goto last (short) page banner and size" \
+    "['\" hexpair: page 10/10  bytes 4609-5000 of 5000  $WORK/paged22.bin', '\" hexpair: end of page 10/10', 27]" \
+    "$(sed -n 2p "$WORK/t22.out")"
+check "next past the last page does not throw"  "no-error" "$(sed -n 3p "$WORK/t22.out")"
+check "next past the last page leaves the page unchanged" "1" "$(sed -n 4p "$WORK/t22.out")"
+
+# --- Test 23: navigation guard refuses to discard unsaved edits ------------
+cat > "$WORK/t23.vim" <<EOF
+source $PLUGIN
+source $PAGEDPLUGIN
+let g:hexpair_page_size = 512
+HexPairOpen $WORK/paged23.bin 1
+call setline(2, substitute(getline(2), '00 01', 'ff ee', ''))
+HexPairPageNext
+let refused = [getline(1), &l:modified]
+HexPairPageNext!
+let forced = [getline(1), &l:modified]
+call writefile([string(refused), string(forced)], '$WORK/t23.out')
+qa!
+EOF
+vim -es -u NONE -S "$WORK/t23.vim"
+check "next without ! refuses to discard edits" \
+    "['\" hexpair: page 1/10  bytes 1-512 of 5000  $WORK/paged23.bin', 1]" \
+    "$(sed -n 1p "$WORK/t23.out")"
+check "next! discards edits and advances" \
+    "['\" hexpair: page 2/10  bytes 513-1024 of 5000  $WORK/paged23.bin', 0]" \
+    "$(sed -n 2p "$WORK/t23.out")"
+
+# --- Test 24: :HexPairPages reports the expected text -----------------------
+cat > "$WORK/t24.vim" <<EOF
+source $PLUGIN
+source $PAGEDPLUGIN
+let g:hexpair_page_size = 512
+HexPairOpen $WORK/paged21.bin 3
+redir => msg
+silent HexPairPages
+redir END
+call writefile([trim(msg)], '$WORK/t24.out')
+qa!
+EOF
+vim -es -u NONE -S "$WORK/t24.vim"
+check "HexPairPages reports page/offsets/total" \
+    "hexpair: page 3 of 10, offsets 1025-1536 of total 5000 bytes ($WORK/paged21.bin)" \
+    "$(cat "$WORK/t24.out")"
+
+# --- Test 25: version-gate message function, both branches -----------------
+cat > "$WORK/t25.vim" <<EOF
+source $PLUGIN
+source $PAGEDPLUGIN
+let ok = HexPairPagedGateMessage(1)
+let fail = HexPairPagedGateMessage(0)
+call writefile([string(ok), fail], '$WORK/t25.out')
+qa!
+EOF
+vim -es -u NONE -S "$WORK/t25.vim"
+check "gate message empty when supported"     "''" "$(sed -n 1p "$WORK/t25.out")"
+check "gate message set when unsupported" \
+    "hexpair: paged mode requires Vim patch 8.2.4906 or later with +num64 (readblob(), 64-bit Numbers for large file offsets); this Vim does not qualify, paged commands are unavailable" \
+    "$(sed -n 2p "$WORK/t25.out")"
+
+# --- Test 26: g:hexpair_page_size validation --------------------------------
+cat > "$WORK/t26.vim" <<EOF
+source $PLUGIN
+source $PAGEDPLUGIN
+let ok       = HexPairPagedSizeError(1024, 16)
+let notmult  = HexPairPagedSizeError(1000, 16)
+let negative = HexPairPagedSizeError(-16, 16)
+call writefile([string(ok), notmult, negative], '$WORK/t26.out')
+qa!
+EOF
+vim -es -u NONE -S "$WORK/t26.vim"
+check "page size ok"           "''" "$(sed -n 1p "$WORK/t26.out")"
+check "page size not a multiple of bytes_per_line" \
+    "hexpair: g:hexpair_page_size (1000) must be a positive multiple of g:hexpair_bytes_per_line (16)" \
+    "$(sed -n 2p "$WORK/t26.out")"
+check "page size not positive" \
+    "hexpair: g:hexpair_page_size (-16) must be a positive multiple of g:hexpair_bytes_per_line (16)" \
+    "$(sed -n 3p "$WORK/t26.out")"
+
+# --- Test 27: hex-digit width boundary clamping (fabricated total, no real -
+# multi-GiB fixture needed - the bounds/page-count functions are pure) -----
+cat > "$WORK/t27.vim" <<EOF
+source $PLUGIN
+source $PAGEDPLUGIN
+" total = 4 GiB + 1000 bytes; size = 900 MB, so a naive page would
+" straddle the 4 GiB offset-width boundary
+let total = 4294967296 + 1000
+let size  = 900000000
+let idx = 4294967296 / size
+let straddling = HexPairPagedBounds(idx, size, total)
+let boundaries = HexPairPagedWidthBoundaries(total)
+let n = HexPairPagedTotalPages(size, total)
+let oob = HexPairPagedBounds(999999, 512, 5000)
+call writefile([string(straddling), string(boundaries), string(n), string(oob)], '$WORK/t27.out')
+qa!
+EOF
+vim -es -u NONE -S "$WORK/t27.vim"
+check "page straddling a width boundary is clamped to end at it" \
+    "[3600000000, 694967296]" "$(sed -n 1p "$WORK/t27.out")"
+check "width boundary list contains exactly the 4 GiB transition" \
+    "[4294967296]" "$(sed -n 2p "$WORK/t27.out")"
+check "total pages accounts for the boundary split" "6" "$(sed -n 3p "$WORK/t27.out")"
+check "out-of-range page index" "[-1, -1]" "$(sed -n 4p "$WORK/t27.out")"
+
+# --- Test 28: banner-aware stripping and validation -------------------------
+cat > "$WORK/t28.vim" <<EOF
+source $PLUGIN
+source $PAGEDPLUGIN
+let banner = '" hexpair: page 3/21  bytes 2097152-3145727 of 45678901  big.bin'
+let stripped_banner = HexPairPagedStripLine(banner)
+let stripped_data    = HexPairPagedStripLine('00000000: 41 42 43 44                                      ABCD')
+call setline(1, [banner, '00000000: 41 42 43 44                                      ABCD', '" hexpair: end of page 3/21'])
+let clean = HexPairPagedValidate()
+call setline(2, '00000000: 4x 42 43 44                                      ABCD')
+let dirty = HexPairPagedValidate()
+call writefile([string(stripped_banner), stripped_data, string(clean), string(dirty)], '$WORK/t28.out')
+qa!
+EOF
+vim -es -u NONE -S "$WORK/t28.vim"
+check "banner line strips to zero bytes despite its letters/slashes" "''" "$(sed -n 1p "$WORK/t28.out")"
+check "data line strips to its hex payload"                          " 41 42 43 44" "$(sed -n 2p "$WORK/t28.out")"
+check "validation ignores banner text (no false positive)"           "{}" "$(sed -n 3p "$WORK/t28.out")"
+check "validation still catches a real invalid character"            "{'lnum': 2, 'col': 12, 'msg': 'invalid character ''x'' in the hex area (line 2, column 12)'}" "$(sed -n 4p "$WORK/t28.out")"
+
+# --- Test 29: HexPairOpenFile() opens a name with a space and a literal ----
+# '$NAME' substring exactly, bypassing the Ex command-line escaping that
+# :HexPairOpen's own -nargs=+ parsing cannot fully round-trip (fnameescape()
+# escapes '$', but <f-args>'s unescaping only knows about its own argument
+# separators, e.g. a space, and leaves that backslash behind) - this is
+# the function form documented for scripts/wrappers building the filename
+# programmatically instead of typing it on the Ex command line.
+SPECIAL_FILE="$WORK/space dir/dollar \$HOSTNAME name.bin"
+cat > "$WORK/t29.vim" <<EOF
+source $PLUGIN
+source $PAGEDPLUGIN
+let g:hexpair_page_size = 512
+call HexPairOpenFile(\$HEXPAIR_TEST_FILE)
+let state = string([get(b:, 'hexpair_page_active', 0), b:hexpair_page_file ==# \$HEXPAIR_TEST_FILE])
+call writefile([state, getline(2)], '$WORK/t29.out')
+qa!
+EOF
+HEXPAIR_TEST_FILE="$SPECIAL_FILE" vim -es -u NONE -S "$WORK/t29.vim"
+check "HexPairOpenFile opens a name with a space and a literal \$VAR" \
+    "[1, 1]" "$(sed -n 1p "$WORK/t29.out")"
+check "HexPairOpenFile shows the correct content" \
+    "00000000: 41 42 43 44 45 46 47 48                          ABCDEFGH" \
+    "$(sed -n 2p "$WORK/t29.out")"
+
+# --- Test 30: HexPairPagedParsePageInput() - the goto-prompt parsing -------
+cat > "$WORK/t30.vim" <<EOF
+source $PLUGIN
+source $PAGEDPLUGIN
+let empty_input = HexPairPagedParsePageInput('')
+let valid_input = HexPairPagedParsePageInput('7')
+let bad_input   = HexPairPagedParsePageInput('abc')
+call writefile([string(empty_input), string(valid_input), string(bad_input)], '$WORK/t30.out')
+qa!
+EOF
+vim -es -u NONE -S "$WORK/t30.vim"
+check "empty prompt input is cancellation, not an error" "{}" "$(sed -n 1p "$WORK/t30.out")"
+check "numeric prompt input yields the page number"      "{'page': 7}" "$(sed -n 2p "$WORK/t30.out")"
+check "non-numeric prompt input is a clear error"         "{'msg': 'hexpair: not a page number: abc'}" "$(sed -n 3p "$WORK/t30.out")"
+
+# --- Test 31: :HexPairPageGoto! discards unsaved changes -------------------
+# The mechanism <Plug>(HexPairPageGotoForce) relies on (s:GotoPage()'s
+# force flag flowing through to the same guard s:PageNext()/s:PagePrev()
+# already exercise via HexPairPageNext! in test 23).
+cat > "$WORK/t31.vim" <<EOF
+source $PLUGIN
+source $PAGEDPLUGIN
+let g:hexpair_page_size = 512
+HexPairOpen $WORK/paged31.bin 1
+call setline(2, substitute(getline(2), '00 01', 'ff ee', ''))
+HexPairPageGoto 5
+let refused = [getline(1), &l:modified]
+HexPairPageGoto! 5
+let forced = [getline(1), &l:modified]
+call writefile([string(refused), string(forced)], '$WORK/t31.out')
+qa!
+EOF
+vim -es -u NONE -S "$WORK/t31.vim"
+check "goto without ! refuses to discard edits" \
+    "['\" hexpair: page 1/10  bytes 1-512 of 5000  $WORK/paged31.bin', 1]" \
+    "$(sed -n 1p "$WORK/t31.out")"
+check "goto! discards edits and jumps" \
+    "['\" hexpair: page 5/10  bytes 2049-2560 of 5000  $WORK/paged31.bin', 0]" \
+    "$(sed -n 2p "$WORK/t31.out")"
+
+# --- Test 32: :HexPairOpen with a bad page number creates nothing ----------
+# Regression test: s:Open() used to enew + rename the buffer to
+# "<file> [hexpair page]" BEFORE validating the requested page, leaving
+# an empty, inactive, but real-looking acwrite buffer behind on a bad
+# page number - harmless only by accident today (Stage 1's :w always
+# throws "not implemented"), a landmine once a real write path lands.
+# The current buffer must now be completely untouched by either an
+# out-of-range or a non-numeric page number.
+cat > "$WORK/t32.vim" <<EOF
+source $PLUGIN
+source $PAGEDPLUGIN
+let g:hexpair_page_size = 512
+let before = [bufname('%'), &l:buftype]
+HexPairOpen $WORK/paged32.bin 999
+let toolarge_unchanged = ([bufname('%'), &l:buftype] ==# before) && !get(b:, 'hexpair_page_active', 0)
+HexPairOpen $WORK/paged32.bin abc
+let nonnumeric_unchanged = ([bufname('%'), &l:buftype] ==# before) && !get(b:, 'hexpair_page_active', 0)
+call writefile([string(toolarge_unchanged), string(nonnumeric_unchanged)], '$WORK/t32.out')
+qa!
+EOF
+vim -es -u NONE -S "$WORK/t32.vim"
+check "out-of-range page number leaves the buffer untouched" "1" "$(sed -n 1p "$WORK/t32.out")"
+check "non-numeric page number leaves the buffer untouched"  "1" "$(sed -n 2p "$WORK/t32.out")"
 
 # ---------------------------------------------------------------------------
 if [ "$FAIL" -eq 0 ]; then

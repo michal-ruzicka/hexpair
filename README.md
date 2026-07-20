@@ -75,6 +75,11 @@ code, releases and issue tracker.
   file and the dump keep their previous content. Reloading with `:e`
   while in hex mode regenerates the dump from the fresh file content
   and stays in hex mode instead of breaking the view.
+- **Paged large-file mode.** `:HexPairOpen` shows one configurable-size
+  page (default 1 MiB) of an arbitrarily large file at a time, with
+  absolute file offsets, without ever loading the whole file into a
+  buffer. Currently read-only (paging and navigation); writing is
+  planned. See [below](#paged-large-file-mode-read-only).
 
 ## Installation
 
@@ -103,6 +108,14 @@ nmap <Leader>< <Plug>(HexPairGoHex)      " jump to the HEX column (same byte)
 nmap <Leader>> <Plug>(HexPairGoAscii)    " jump to the ASCII column (same byte)
 nmap <Leader>- <Plug>(HexPairSwap)       " jump to the opposite column
 nmap <Leader>r <Plug>(HexPairRefresh)    " regenerate offsets/ASCII, no write
+nmap <Leader>j <Plug>(HexPairPageNext)   " paged mode: next page
+nmap <Leader>k <Plug>(HexPairPagePrev)   " paged mode: previous page
+nmap <Leader>g <Plug>(HexPairPageGoto)   " paged mode: prompt for a page number
+" Uppercase variants: same, but discard unsaved changes without asking
+" (like the ! commands) - handy for skimming through a file read-only.
+nnoremap <silent> <Leader>J :HexPairPageNext!<CR>
+nnoremap <silent> <Leader>K :HexPairPagePrev!<CR>
+nmap <Leader>G <Plug>(HexPairPageGotoForce)
 ```
 
 `<Leader>` expands to the `mapleader` variable at the time a mapping is
@@ -179,6 +192,71 @@ tweak individual settings, use `~/.vim/after/ftplugin/xxd.vim` (see
 Full documentation: `:help hexpair` after installation, or
 [doc/hexpair.txt](doc/hexpair.txt).
 
+## Paged large-file mode (read-only)
+
+For files too large to load into a Vim buffer, open one page at a time
+directly from the shell, without ever reading the rest of the file:
+
+```sh
+vim -c 'HexPairOpen bigfile.bin'
+```
+
+| Command | Description |
+|---|---|
+| `:HexPairOpen {file} [page]` | Open `{file}` in paged mode, showing `[page]` (1-based, default 1) |
+| `:HexPairPageNext[!]` / `:HexPairPagePrev[!]` | Show the next/previous page; refuses to discard unsaved changes without `!` |
+| `:HexPairPageGoto[!] {N}` | Jump directly to page `{N}` (1-based) |
+| `:HexPairPages` | Report the current page, total pages and the absolute byte range shown |
+
+`<Plug>(HexPairPageGoto)` (mapping example above) prompts for a page
+number with `input()` instead of requiring a typed `:HexPairPageGoto
+{N}` — press the key, type a number, Enter.
+`<Plug>(HexPairPageGotoForce)` is the same prompt but discards unsaved
+changes without asking, like the `{N}` variant with `!`.
+
+Each page is bracketed by a leading/trailing banner line (`" hexpair:
+page 3/21  bytes ...`), purely decorative like the offset and ASCII
+columns elsewhere, given a comment-like appearance via the
+`HexPairPageBanner` highlight group.
+
+```vim
+" bytes per page (default 1 MiB); must be a positive multiple of
+" g:hexpair_bytes_per_line
+let g:hexpair_page_size = 1024 * 1024
+```
+
+A shell wrapper, e.g. in `~/.bashrc`, for opening a file straight into
+paged mode without typing the `vim -c 'HexPairOpen ...'` incantation:
+
+```sh
+vimhex() {
+    if [ $# -lt 1 ] || [ $# -gt 2 ]; then
+        echo "usage: vimhex FILE [PAGE]" >&2
+        return 1
+    fi
+    # HexPairOpenFile(), not `-c 'HexPairOpen ...'`: a name containing a
+    # space or a literal '$' does not fully round-trip through the Ex
+    # command's own argument parsing (see HexPairOpenFile() above), but
+    # passing it through the environment and calling the function form
+    # directly needs no escaping at all.
+    HEXPAIR_OPEN_FILE="$1" HEXPAIR_OPEN_PAGE="${2:-1}" \
+        vim -c 'call HexPairOpenFile($HEXPAIR_OPEN_FILE, $HEXPAIR_OPEN_PAGE)'
+}
+```
+
+```sh
+vimhex bigfile.bin        # page 1
+vimhex bigfile.bin 3      # page 3
+```
+
+This mode is currently **read-only**: writing a paged buffer is
+planned but not yet implemented — `:w` fails with a clear error and
+changes nothing. It also requires a newer Vim than the rest of the
+plugin: 64-bit Numbers (`+num64`) and patch 8.2.4906+, checked at load
+time with a clear message if unmet (the base toggle mode above is
+unaffected and keeps its Vim 8.0 requirement). Details: `:help
+hexpair-paged`.
+
 ## Requirements
 
 - Vim 8+ (native packages; the plugin itself uses lambda expressions,
@@ -193,8 +271,9 @@ Bug reports and patches are welcome — see
 [CONTRIBUTING.md](CONTRIBUTING.md) for the repository layout, the test
 harness, the reproducible release packaging and the signing policy.
 Project notes for AI-assisted development live in
-[CLAUDE.md](CLAUDE.md), including the implementation plan for the
-upcoming **paged large-file mode**.
+[CLAUDE.md](CLAUDE.md), including the architecture and remaining
+implementation plan for the **paged large-file mode** (writing is not
+implemented yet).
 
 ## License
 

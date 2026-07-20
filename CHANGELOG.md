@@ -10,6 +10,31 @@ and this project adheres to
 ## [v2.0.0-devel] – 2026-07-20
 
 ### Added
+- Paged large-file mode, Stage 1 (`plugin/hexpair_paged.vim`,
+  read-only so far — writing is planned but not implemented yet):
+  `:HexPairOpen {file} [page]` shows one configurable-size page
+  (`g:hexpair_page_size`, default 1 MiB) of an arbitrarily large file
+  as a hex dump with absolute file offsets, without ever loading the
+  rest of the file into a buffer — usable straight from the shell,
+  e.g. `vim -c 'HexPairOpen bigfile.bin'`. `:HexPairPageNext[!]` /
+  `:HexPairPagePrev[!]` / `:HexPairPageGoto[!] {N}` navigate between
+  pages, refusing to discard unsaved changes without `!`;
+  `:HexPairPages` reports the current page, total pages and byte
+  range. Each page is bracketed by a decorative banner line (page
+  number, byte range) highlighted via the new `HexPairPageBanner`
+  group. Requires a newer Vim than the base plugin (`+num64` and
+  patch 8.2.4906+, needed by a later write stage), checked at load
+  time with a clear message if unmet; the base toggle mode is
+  unaffected. See CLAUDE.md for the remaining write-path stages.
+  `HexPairOpenFile({file} [, {page}])` opens a page the same way as
+  `:HexPairOpen` but as a direct function call, for scripts, mappings
+  or shell wrappers that build the filename programmatically — safer
+  than constructing an `:HexPairOpen` command-line string for a name
+  containing a space or a literal `$`, which does not fully round-trip
+  through the Ex command's own argument parsing. `<Plug>(HexPairPageGoto)`
+  prompts for a page number instead of needing a typed `:HexPairPageGoto
+  {N}`; `<Plug>(HexPairPageGotoForce)` is the same prompt but discards
+  unsaved changes without asking, like the `{N}` variant with `!`.
 - `:HexPairRefresh` (`<Plug>(HexPairRefresh)`): regenerate the offset
   and ASCII columns from the current hex payload without writing to
   disk — the same round trip a toggle off followed by a toggle on
@@ -19,6 +44,20 @@ and this project adheres to
   a byte of content.
 
 ### Fixed
+- The page banner's and `:HexPairPages`' byte range used to be
+  0-based and inclusive (`base` to `base + len - 1`), so the last
+  page's shown end was always one short of the file's total size,
+  reading as though the page did not reach the end of the file. Now
+  1-based and inclusive (`base + 1` to `base + len`), so the last
+  page's end always equals the total exactly. Only this decorative
+  text changed — the underlying page bytes read and shown were always
+  correct.
+- `:HexPairOpen` with an out-of-range or non-numeric page number used
+  to still create and rename a scratch buffer (to `<file> [hexpair
+  page]`) before checking whether the page existed, leaving an empty,
+  inactive but real-looking buffer behind. It now validates the page
+  first and leaves the current buffer completely untouched on a bad
+  page number — nothing is created.
 - Data loss: toggling hex mode off used to unconditionally mirror the
   buffer's modified state from BEFORE hex mode was entered, so an edit
   made to the dump on an until-then-unmodified buffer silently cleared
