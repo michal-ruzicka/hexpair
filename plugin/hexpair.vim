@@ -2,7 +2,7 @@
 " Maintainer:  Michal Růžička <ruzicka.mich@gmail.com>
 " URL:         https://github.com/michal-ruzicka/hexpair
 " Version:     2.0.0-devel
-" Date:        2026-07-19
+" Date:        2026-07-20
 " License:     Vim License - same terms as Vim itself (see LICENSE.md
 "              or :help license); SPDX-License-Identifier: Vim
 "
@@ -376,6 +376,11 @@ function! s:PostWrite() abort
     unlet b:hexpair_off
   endif
   setlocal nomodified
+  " The file on disk now matches this dump: it is the new baseline for
+  " both the toggle-off modified check and the edited-while-in-hex-mode
+  " detection in s:FromHex().
+  let b:hexpair_saved.modified = 0
+  let b:hexpair_dump_tick = b:changedtick
   call s:Highlight()
   redraw!
 endfunction
@@ -439,6 +444,9 @@ function! s:PostReload() abort
   silent execute '%!' . s:xxd . ' -g 1 -c ' . b:hexpair_n
   setlocal filetype=xxd
   setlocal nomodified
+  " The reloaded file is the new baseline for the edited-while-in-hex-
+  " mode detection in s:FromHex() as well.
+  let b:hexpair_dump_tick = b:changedtick
   " Map the last tracked cursor position back to a byte offset by
   " canonical layout: exact for an unedited dump (:e), best-effort for
   " a discarded edited one (:e!), where the old content that an exact
@@ -548,6 +556,11 @@ function! s:ToHex() abort
     setlocal nomodified
   endif
 
+  " Baseline for detecting real edits made while in hex mode (see
+  " s:FromHex()): b:changedtick right after the dump above was
+  " generated, before the user has touched anything.
+  let b:hexpair_dump_tick = b:changedtick
+
   " Buffer-local autocommands: pair highlighting + write safety + 'paste'
   " tracking + reload survival.
   augroup HexPairBuffer
@@ -595,6 +608,16 @@ function! s:FromHex() abort
   call s:PasteOff()
   call s:ClearHighlight()
 
+  " Did the user make a REAL edit while in hex mode (as opposed to just
+  " toggling back and forth without touching the dump)?  b:changedtick
+  " advances on any buffer-content change but not on cursor movement,
+  " so comparing it against the snapshot taken right after the dump was
+  " (re)generated - in s:ToHex(), s:PostWrite() or s:PostReload() -
+  " detects real edits regardless of whether the buffer was already
+  " modified before entering hex mode.  Must be read BEFORE
+  " s:ReverseDump() below, which advances the tick itself.
+  let edited = b:changedtick != get(b:, 'hexpair_dump_tick', b:changedtick)
+
   " Convert back, then place the cursor on the SAME BYTE it was on in the
   " dump; :goto positions by byte offset and lands on the character that
   " contains the byte, which handles multibyte encodings correctly.
@@ -619,14 +642,18 @@ function! s:FromHex() abort
   if exists('b:hexpair_n')
     unlet b:hexpair_n
   endif
-  unlet! b:hexpair_last_pos
+  unlet! b:hexpair_last_pos b:hexpair_dump_tick
 
-  " Restore the settings saved by s:ToHex().
+  " Restore the settings saved by s:ToHex().  The buffer is left
+  " modified if it already was before entering hex mode OR a real edit
+  " was made while in hex mode (the reverse-conversion filter above
+  " sets 'modified' regardless, which is what a bare 'nomodified' would
+  " otherwise incorrectly clear).
   if exists('b:hexpair_saved')
     let &l:binary   = b:hexpair_saved.binary
     let &l:eol      = b:hexpair_saved.eol
     let &l:filetype = b:hexpair_saved.filetype
-    if !b:hexpair_saved.modified
+    if !b:hexpair_saved.modified && !edited
       setlocal nomodified
     endif
     unlet b:hexpair_saved

@@ -7,7 +7,19 @@ and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html); the
 `Version:` header in `plugin/hexpair.vim` is the single source of truth.
 
-## [v2.0.0-devel] – 2026-07-19
+## [v2.0.0-devel] – 2026-07-20
+
+### Fixed
+- Data loss: toggling hex mode off used to unconditionally mirror the
+  buffer's modified state from BEFORE hex mode was entered, so an edit
+  made to the dump on an until-then-unmodified buffer silently cleared
+  `'modified'` on toggle-off — `:q` would then discard it without a
+  warning. The buffer is now tracked for real content changes made
+  while in hex mode (via `b:changedtick`, unaffected by cursor
+  movement) independently of the pre-hex-mode state, in both
+  directions: a pre-existing unsaved change is still preserved, and an
+  edit made purely in hex mode now correctly marks the buffer modified
+  on toggle-off.
 
 ## [v1.1.0] – 2026-07-19
 

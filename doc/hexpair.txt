@@ -241,6 +241,13 @@ Before the conversion the dump is validated (see the editing rules in
 |hexpair-usage|): an invalid dump aborts the write with an error and both
 the file on disk and the dump in the buffer keep their previous content.
 
+The 'modified' flag reflects whether the buffer actually differs from
+what is on disk, independently in each direction: entering hex mode with
+unsaved changes already pending keeps the buffer marked modified, and
+editing the dump (even if it was clean when hex mode was entered) marks
+it modified when you toggle back - so |:q| without |:w| still warns, and
+plain |:q| still refuses, exactly as it would in the normal view.
+
 ==============================================================================
 7. Limitations                                           *hexpair-limitations*
 

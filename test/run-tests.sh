@@ -43,6 +43,10 @@ open(os.path.join(w, 'eol.bin'), 'wb').write(b'AB\n')
 open(os.path.join(w, 'ins.bin'), 'wb').write(b'ABCDEFGH')
 # validation / reload fixture (must stay unmodified by the tests)
 open(os.path.join(w, 'val.bin'), 'wb').write(b'ABCDEFGH')
+# modified-flag fixtures: separate copies so a write in one test cannot
+# affect another test's expectations
+for name in ('mod12.bin', 'mod13.bin', 'mod14.bin', 'mod15.bin'):
+    open(os.path.join(w, name), 'wb').write(b'ABCDEFGH')
 EOF
 
 # --- Test 1: round trip preserves content and cursor byte offset -----------
@@ -237,6 +241,60 @@ check "reload regenerates the dump" \
     "$(sed -n 1p "$WORK/t11.out")"
 check "reload keeps hex mode and cursor byte" "[1, 1, 20, 0]" \
     "$(sed -n 2p "$WORK/t11.out")"
+
+# --- Test 12: an edit made in hex mode marks the buffer modified -----------
+# This is the regression test for the data-loss bug: toggling back used to
+# unconditionally mirror the PRE-hex-mode modified state, silently clearing
+# 'modified' even though the dump had just been edited.
+cat > "$WORK/t12.vim" <<EOF
+source $PLUGIN
+HexPairToggle
+call setline(1, substitute(getline(1), '41', '5a', ''))
+HexPairToggle
+call writefile([string([&modified, getline(1)])], '$WORK/t12.out')
+qa!
+EOF
+vim -es -b -u NONE "$WORK/mod12.bin" -S "$WORK/t12.vim"
+check "edit in hex mode marks buffer modified" "[1, 'ZBCDEFGH']" "$(cat "$WORK/t12.out")"
+
+# --- Test 13: an edit-free round trip stays unmodified ----------------------
+cat > "$WORK/t13.vim" <<EOF
+source $PLUGIN
+HexPairToggle
+HexPairToggle
+call writefile([string([&modified, getline(1)])], '$WORK/t13.out')
+qa!
+EOF
+vim -es -b -u NONE "$WORK/mod13.bin" -S "$WORK/t13.vim"
+check "edit-free round trip stays unmodified" "[0, 'ABCDEFGH']" "$(cat "$WORK/t13.out")"
+
+# --- Test 14: a pre-existing modification survives an edit-free round trip -
+cat > "$WORK/t14.vim" <<EOF
+source $PLUGIN
+call setline(1, substitute(getline(1), '^A', 'Z', ''))
+HexPairToggle
+HexPairToggle
+call writefile([string([&modified, getline(1)])], '$WORK/t14.out')
+qa!
+EOF
+vim -es -b -u NONE "$WORK/mod14.bin" -S "$WORK/t14.vim"
+check "pre-existing modification survives edit-free hex round trip" "[1, 'ZBCDEFGH']" "$(cat "$WORK/t14.out")"
+
+# --- Test 15: a write in hex mode resets the modified baseline -------------
+cat > "$WORK/t15.vim" <<EOF
+source $PLUGIN
+HexPairToggle
+call setline(1, substitute(getline(1), '41', '5a', ''))
+write
+HexPairToggle
+call writefile([string([&modified, getline(1)])], '$WORK/t15.out')
+qa!
+EOF
+vim -es -b -u NONE "$WORK/mod15.bin" -S "$WORK/t15.vim"
+check "write in hex mode resets the modified baseline" "[0, 'ZBCDEFGH']" "$(cat "$WORK/t15.out")"
+check "write in hex mode persists the edit to disk" \
+    "00000000: 5a 42 43 44 45 46 47 48                          ZBCDEFGH" \
+    "$(xxd -g 1 "$WORK/mod15.bin")"
 
 # ---------------------------------------------------------------------------
 if [ "$FAIL" -eq 0 ]; then

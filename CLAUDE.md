@@ -68,6 +68,16 @@ Key function map:
   stripping, CRLF folding, fileencoding transcoding) cannot be undone
   after the fact. After that reload the buffer intentionally *stays*
   binary even when hex mode is toggled off.
+- `b:hexpair_dump_tick` — `b:changedtick` snapshot taken right after
+  the dump is (re)generated (`ToHex`, `PostWrite`, `PostReload`).
+  `FromHex` compares it against the current tick *before* calling
+  `ReverseDump()` (which itself advances the tick) to tell whether the
+  user made a real edit while in hex mode, independently of
+  `b:hexpair_saved.modified` (the state from *before* hex mode was
+  entered). Toggle-off only clears `'modified'` when *neither* is
+  true — mirroring only the pre-hex-mode state here previously caused
+  a real edit made purely in hex mode to be silently discarded on
+  `:q` (`'modified'` incorrectly cleared on toggle-off).
 - Cursor position mapping — always via **byte offsets**, never
   line/column coordinates:
   - normal→offset: `line2byte(line('.')) + col('.') - 2`;
@@ -136,8 +146,10 @@ binary fixtures with python.
 Every change ships with a test. When a field bug is diagnosed (the
 project history includes several: forced `noeol` hiding the final
 newline, layout desync on `g:hexpair_bytes_per_line` change, stale
-`FileOffsetNonBinary` predictions on mixed CRLF/LF), first reproduce
-it as a failing test, then fix.
+`FileOffsetNonBinary` predictions on mixed CRLF/LF, toggle-off
+mirroring only the pre-hex-mode `'modified'` state and silently
+discarding an edit made purely in hex mode), first reproduce it as a
+failing test, then fix.
 
 ## Versioning and releases
 
