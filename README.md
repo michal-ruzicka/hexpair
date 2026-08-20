@@ -44,7 +44,9 @@ code, releases and issue tracker.
   ASCII character lights up, and vice versa. The cursor side gets a
   subtle underline (`HexPairActive`), the counterpart a prominent
   highlight (`HexPairMirror`) — so you always see at a glance which
-  column you are in.
+  column you are in. A **Visual selection** is mirrored the same way:
+  select a run of hex digits and the text it is lights up, select a run
+  of text and the bytes it is light up.
 - **Byte-exact cursor mapping.** Every transition — into hex mode,
   between the hex and text views, across a write, across a page turn —
   keeps the cursor on the *same byte*, and entering hex mode opens on

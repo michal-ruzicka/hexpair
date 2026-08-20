@@ -32,6 +32,16 @@ columns of the dump: placing the cursor on a hex byte highlights the
 corresponding ASCII character, and placing it on an ASCII character
 highlights the corresponding pair of hex digits.
 
+                                                        *hexpair-visual*
+The same holds for a |Visual| selection: Vim highlights what you selected,
+and hexpair highlights the same BYTES on the other side of the dump, so a
+run of hex digits shows which text it is and a run of text shows which
+bytes it is.  Characterwise, linewise and blockwise selections all work,
+and a selection spanning several lines is mirrored line by line.  Only the
+part on screen is mirrored - what is scrolled away cannot be looked at
+anyway, and it keeps the work per cursor movement the same however much of
+a page is selected.  Banner lines contribute nothing, as everywhere else.
+
 Requires the `xxd` utility, which ships with Vim.  It is looked up on
 $PATH first and then in the Vim runtime directory ($VIMRUNTIME), so on
 Windows the bundled xxd.exe is found even when it is not on PATH.  No

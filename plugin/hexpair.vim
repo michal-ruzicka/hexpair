@@ -607,6 +607,96 @@ function! s:PagedClearHighlight() abort
   let w:hexpair_page_ids = []
 endfunction
 
+" How many dump lines of a Visual selection get their counterpart
+" highlighted. Only what is on screen can be looked at anyway, so the
+" window is the natural bound - and it keeps the work per cursor movement
+" constant however much of a page is selected.
+function! s:MirrorLimit() abort
+  return winheight(0) + 1
+endfunction
+
+" Byte index on a line for a screen column, and which column that is.
+function! s:ByteAt(lnum, col) abort
+  let [n, hexstart, hexend, asciistart] = s:PagedLineLayout(a:lnum)
+  if a:col >= asciistart
+    return a:col - asciistart
+  endif
+  return a:col < hexstart ? 0 : (a:col - hexstart) / 3
+endfunction
+
+function! s:InHexColumn(lnum, col) abort
+  let [n, hexstart, hexend, asciistart] = s:PagedLineLayout(a:lnum)
+  return a:col <= hexend
+endfunction
+
+" Where the counterpart of a Visual selection is: a list of
+" [lnum, col, len] for matchaddpos(), covering the SAME bytes in the other
+" column. Vim already highlights what is selected; this is what it is on
+" the other side of the dump, so a run of hex digits shows which text it
+" is and a run of text shows which bytes it is.
+"
+" a:vpos / a:cpos are getpos() results for the selection ends, a:mode the
+" mode() string. Split from the drawing so it can be tested directly:
+" Visual mode cannot be driven under this project's `vim -es` harness, in
+" the same way input() and confirm() cannot.
+function! HexPairPagedSelectionPositions(vpos, cpos, mode, first, last) abort
+  " Ordered by line AND column: a selection that begins and ends on one
+  " line would otherwise come out backwards whenever it was made
+  " leftwards, and be skipped as empty.
+  let forward = a:vpos[1] < a:cpos[1]
+        \ || (a:vpos[1] == a:cpos[1] && a:vpos[2] <= a:cpos[2])
+  let [head, tail] = forward ? [a:vpos, a:cpos] : [a:cpos, a:vpos]
+  let inhex = s:InHexColumn(a:cpos[1], a:cpos[2])
+  let positions = []
+
+  for lnum in range(a:first, a:last)
+    if s:IsBannerLine(getline(lnum))
+      continue
+    endif
+    let [n, hexstart, hexend, asciistart] = s:PagedLineLayout(lnum)
+    let bytes = strlen(getline(lnum)) - asciistart + 1
+    if bytes <= 0
+      continue
+    endif
+    let bytes = min([bytes, n])
+
+    if a:mode ==# "\<C-V>"
+      " Blockwise: the same column range on every line of it.
+      let lo = s:ByteAt(lnum, min([head[2], tail[2]]))
+      let hi = s:ByteAt(lnum, max([head[2], tail[2]]))
+    elseif a:mode ==# 'V'
+      let [lo, hi] = [0, bytes - 1]
+    else
+      let lo = lnum == head[1] ? s:ByteAt(lnum, head[2]) : 0
+      let hi = lnum == tail[1] ? s:ByteAt(lnum, tail[2]) : bytes - 1
+    endif
+    let lo = max([lo, 0])
+    let hi = min([hi, bytes - 1])
+    if hi < lo
+      continue
+    endif
+
+    call add(positions, inhex
+          \ ? [lnum, asciistart + lo, hi - lo + 1]
+          \ : [lnum, hexstart + lo * 3, (hi - lo + 1) * 3 - 1])
+  endfor
+  return positions
+endfunction
+
+function! s:HighlightSelection() abort
+  let vpos = getpos('v')
+  let cpos = getpos('.')
+  let first = max([min([vpos[1], cpos[1]]), line('w0')])
+  let last = min([max([vpos[1], cpos[1]]), line('w$'), first + s:MirrorLimit()])
+  let positions =
+        \ HexPairPagedSelectionPositions(vpos, cpos, mode(), first, last)
+  " matchaddpos() takes eight positions at a time.
+  for i in range(0, len(positions) - 1, 8)
+    call add(w:hexpair_page_ids,
+          \ matchaddpos('HexPairMirror', positions[i : i + 7]))
+  endfor
+endfunction
+
 function! s:PagedHighlight() abort
   call s:PagedClearHighlight()
   if !get(b:, 'hexpair_page_active', 0) || !s:IsHexView()
@@ -615,6 +705,13 @@ function! s:PagedHighlight() abort
 
   let lnum = line('.')
   if s:IsBannerLine(getline(lnum))
+    return
+  endif
+
+  " In Visual mode the whole selection has a counterpart, not just the
+  " byte under the cursor.
+  if mode() =~# "^[vV\<C-V>]$"
+    call s:HighlightSelection()
     return
   endif
 

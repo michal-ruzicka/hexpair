@@ -75,7 +75,7 @@ for name in ('ref1.bin', 'ref2.bin', 'ref3.bin', 'ref4.bin', 'ref5.bin'):
     open(os.path.join(w, name), 'wb').write(b'ABCDEFGH')
 # paged-mode fixture: 5000 bytes, byte i has value i % 256 - at 512
 # bytes/page that is 10 pages, the last one short (392 bytes)
-for name in ('paged21.bin', 'paged22.bin', 'paged23.bin', 'paged31.bin', 'paged32.bin', 'undo1.bin', 'layout1.bin', 'jump1.bin', 'paste1.bin', 'abandon1.bin', 'ulocal1.bin', 'src1.bin', 'off1.bin', 'multi.bin', 'multi2.bin', 'same1.bin', 'w1.bin', 'w2.bin', 'w3.bin', 'w4.bin', 'w5.bin', 'sp1.bin', 'sp2.bin', 'sp3.bin', 'sp4.bin'):
+for name in ('paged21.bin', 'paged22.bin', 'paged23.bin', 'paged31.bin', 'paged32.bin', 'undo1.bin', 'layout1.bin', 'jump1.bin', 'paste1.bin', 'abandon1.bin', 'ulocal1.bin', 'src1.bin', 'off1.bin', 'multi.bin', 'multi2.bin', 'same1.bin', 'vis1.bin', 'w1.bin', 'w2.bin', 'w3.bin', 'w4.bin', 'w5.bin', 'sp1.bin', 'sp2.bin', 'sp3.bin', 'sp4.bin'):
     with open(os.path.join(w, name), 'wb') as f:
         f.write(bytes(i % 256 for i in range(5000)))
 # single-page fixture, so a shrinking write can empty the file entirely
@@ -1487,6 +1487,39 @@ check "writing to the same file spelled longhand patches the page" "[0, 5000]" \
 check "the file is intact, not truncated" "5000" "$(file_size "$WORK/same1.bin")"
 check "the edit landed"    "00000200: de ad" "$(xxd -s 512 -l 2 -g 1 "$WORK/same1.bin" | cut -c1-15)"
 check "the rest is intact" "$SAME_BEFORE" "$(hash_range "$WORK/same1.bin" 1024 -1)"
+
+# --- A Visual selection is mirrored in the other column --------------------
+# Vim highlights what is selected; hexpair adds the same BYTES on the other
+# side of the dump. Visual mode cannot be driven under `vim -es`, so what
+# is tested is the function that works out where the counterpart is - the
+# same split the version-gate and prompt-parsing functions use.
+cat > "$WORK/tv1.vim" <<EOF
+$(printf "$HEX")
+HexPairOpen $WORK/vis1.bin 1
+" the 2nd to the 5th byte of line 2, selected in the HEX column
+let inhex = HexPairPagedSelectionPositions([0,2,14,0], [0,2,23,0], 'v', 2, 2)
+" three bytes selected in the ASCII column, mirrored back as hex pairs
+let inascii = HexPairPagedSelectionPositions([0,2,61,0], [0,2,63,0], 'v', 2, 2)
+" across two lines: from byte 14 of line 2 to byte 1 of line 3
+let across = HexPairPagedSelectionPositions([0,2,50,0], [0,3,14,0], 'v', 2, 3)
+" linewise takes whole lines
+let linewise = HexPairPagedSelectionPositions([0,2,1,0], [0,2,1,0], 'V', 2, 2)
+" the banner contributes nothing
+let banner = HexPairPagedSelectionPositions([0,1,1,0], [0,2,14,0], 'v', 1, 2)
+call writefile([string(inhex), string(inascii), string(across), string(linewise), string(banner)], '$WORK/tv1.out')
+qa!
+EOF
+vim -es -u NONE -S "$WORK/tv1.vim" < /dev/null
+check "a hex selection mirrors into the ASCII column" "[[2, 61, 4]]" \
+    "$(sed -n 1p "$WORK/tv1.out")"
+check "an ASCII selection mirrors into the hex column" "[[2, 14, 8]]" \
+    "$(sed -n 2p "$WORK/tv1.out")"
+check "a selection across lines mirrors line by line" \
+    "[[2, 73, 3], [3, 60, 2]]" "$(sed -n 3p "$WORK/tv1.out")"
+check "linewise takes the whole line's bytes" "[[2, 60, 16]]" \
+    "$(sed -n 4p "$WORK/tv1.out")"
+check "a banner line contributes nothing"     "[[2, 60, 2]]" \
+    "$(sed -n 5p "$WORK/tv1.out")"
 
 # ---------------------------------------------------------------------------
 if [ "$FAIL" -eq 0 ]; then

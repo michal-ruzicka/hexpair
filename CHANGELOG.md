@@ -44,6 +44,13 @@ and this project adheres to
   a byte of content.
 
 ### Added
+- A **Visual selection** is mirrored in the other column, the way the
+  byte under the cursor already was: select hex digits and the text they
+  are is highlighted, select text and the bytes it is are highlighted.
+  Characterwise, linewise and blockwise selections all work, and one
+  spanning several lines is mirrored line by line. Only the part on
+  screen is mirrored, which keeps the work per cursor movement the same
+  however much of a page is selected.
 - `:HexPairGoOffset[!] {byte}` jumps straight to a byte, decimal or
   `0x`-prefixed, turning the page it falls on and leaving you in
   whichever view you were in. The position is 1-based — byte 1 is the
