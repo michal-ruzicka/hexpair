@@ -1527,8 +1527,8 @@ function! s:GotoOffsetPrompt(force) abort
   if !s:RequirePaged()
     return
   endif
-  let text = input(printf('hexpair: goto byte (0-%d): ',
-        \ b:hexpair_page_total > 0 ? b:hexpair_page_total - 1 : 0))
+  let text = input(printf('hexpair: goto byte (1-%d): ',
+        \ b:hexpair_page_total))
   redraw
   let parsed = HexPairPagedParseOffsetInput(text)
   if has_key(parsed, 'msg')
@@ -1564,27 +1564,39 @@ endfunction
 " Jump straight to a byte offset, wherever in the file it is: the page
 " holding it is a division now that pages are plain fixed-size slices.
 " Global and pure so the arithmetic is testable without a file.
+" a:off is 0-based, the message 1-based - see
+" HexPairPagedParseOffsetInput() for why the two differ.
 function! HexPairPagedOffsetError(off, total) abort
   if a:off < 0 || (a:off >= a:total && a:total > 0) || (a:off > 0 && a:total == 0)
-    return printf('hexpair: byte offset %d is outside the file (%d bytes)',
-          \ a:off, a:total)
+    return printf('hexpair: byte %d is outside the file (%d bytes)',
+          \ a:off + 1, a:total)
   endif
   return ''
 endfunction
 
 " {} for an empty string (cancelled), a 'msg' key for input that is not a
-" byte offset, otherwise an 'offset' key with its value. Global and pure so
-" it is directly testable, like the page-number parser above.
+" byte position, otherwise an 'offset' key with the 0-based offset it
+" names. Global and pure so it is directly testable, like the page-number
+" parser above.
+"
+" What the user types is 1-BASED: byte 1 is the file's first byte, which
+" is what the page banner and |:HexPairPages| say ("bytes 1-131072 of
+" ..."), so a number read off the banner can be typed straight back in.
+" The 0-based offsets are the dump's own column, xxd's native addresses,
+" and are left alone - the same split the banner already makes.
 function! HexPairPagedParseOffsetInput(text) abort
   if empty(a:text)
     return {}
   endif
   if a:text !~# '^\%(0[xX]\)\=\x\+$'
-    return {'msg': printf('hexpair: not a byte offset: %s '
-          \ . '(decimal, or 0x for hex)', string(a:text))}
+    return {'msg': printf('hexpair: not a byte position: %s '
+          \ . '(decimal, or 0x for hex; byte 1 is the first)', string(a:text))}
   endif
-  return {'offset': a:text =~# '^0[xX]'
-        \ ? str2nr(a:text[2:], 16) : str2nr(a:text)}
+  let n = a:text =~# '^0[xX]' ? str2nr(a:text[2:], 16) : str2nr(a:text)
+  if n < 1
+    return {'msg': 'hexpair: byte positions start at 1, not 0'}
+  endif
+  return {'offset': n - 1}
 endfunction
 
 function! s:GotoOffset(text, force) abort

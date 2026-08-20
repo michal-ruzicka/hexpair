@@ -196,7 +196,7 @@ page. Close and reopen the file for the ordinary view.
 | `:HexPairRefresh` | Regenerate the offset and ASCII columns from the current hex payload, without writing |
 | `:HexPairOpen[!] {file} [page]` | Open `{file}` paged, without loading it |
 | `:HexPairPageNext[!]` / `:HexPairPagePrev[!]` / `:HexPairPageGoto[!] {n}` | Turn pages (`!` discards unwritten changes) |
-| `:HexPairGoOffset[!] {byte}` | Jump to a byte offset, decimal or `0x`-prefixed, turning the page if needed |
+| `:HexPairGoOffset[!] {byte}` | Jump to a byte, decimal or `0x`-prefixed, turning the page if needed; 1-based, like the banner |
 | `:HexPairPages` | Report page X of Y, the offsets covered and the file size |
 
 Editing rules (see `:help hexpair` for details): keep bytes in the hex
@@ -266,7 +266,7 @@ is ever read.
 | `:HexPairOpen[!] {file} [page]` | Open `{file}` paged at `[page]` (1-based, default 1) without loading it |
 | `:HexPairPageNext[!]` / `:HexPairPagePrev[!]` | Turn the page; refuses to discard unwritten changes without `!` |
 | `:HexPairPageGoto[!] {N}` | Jump to page `{N}` |
-| `:HexPairGoOffset[!] {byte}` | Jump to a byte offset, decimal or `0x`-prefixed |
+| `:HexPairGoOffset[!] {byte}` | Jump to a byte, decimal or `0x`-prefixed; 1-based, like the banner |
 | `:HexPairPages` | Report the current page, total pages and the byte range shown |
 
 `<Plug>(HexPairPageGoto)` (mapping example above) prompts for a page

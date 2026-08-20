@@ -1316,18 +1316,22 @@ redir END
 redir => m2
 silent HexPairGoOffset zz
 redir END
+redir => m3
+silent HexPairGoOffset 0
+redir END
 HexPairToggle
 HexPairGoOffset 100
 let intext = string([b:hexpair_view, b:hexpair_page_index, line('.'), col('.')])
-call writefile([dec, hex, string([m1 =~# 'outside the file', m2 =~# 'not a byte offset']), intext], '$WORK/tp3.out')
+call writefile([dec, hex, string([m1 =~# 'outside the file', m2 =~# 'not a byte position', m3 =~# 'start at 1']), intext], '$WORK/tp3.out')
 qa!
 EOF
 vim -es -b -u NONE "$WORK/off1.bin" -S "$WORK/tp3.vim" < /dev/null
-check "a decimal offset lands on its byte"     "[3, 2000]" "$(sed -n 1p "$WORK/tp3.out")"
-check "a 0x offset lands on its byte"          "[2, 1024]" "$(sed -n 2p "$WORK/tp3.out")"
-check "out of range and non-numeric are both refused" "[1, 1]" \
+check "byte 2000 is offset 1999 - positions are 1-based, like the banner" \
+    "[3, 1999]" "$(sed -n 1p "$WORK/tp3.out")"
+check "and so is a 0x one"                     "[1, 1023]" "$(sed -n 2p "$WORK/tp3.out")"
+check "out of range, non-numeric and zero are all refused" "[1, 1, 1]" \
     "$(sed -n 3p "$WORK/tp3.out")"
-check "the jump keeps you in the view you were in" "['text', 0, 3, 90]" \
+check "the jump keeps you in the view you were in" "['text', 0, 3, 89]" \
     "$(sed -n 4p "$WORK/tp3.out")"
 
 check "HexPairPagedOffsetError() accepts what is in range" "''" \
@@ -1408,10 +1412,10 @@ EOF
 vim -es -u NONE -S "$WORK/tk1.vim" < /dev/null
 check "every command has a <Plug> target" "[]" "$(sed -n 1p "$WORK/tk1.out")"
 check "an empty offset prompt cancels"    "{}" "$(sed -n 2p "$WORK/tk1.out")"
-check "a decimal offset parses"           "{'offset': 1234}" "$(sed -n 3p "$WORK/tk1.out")"
-check "an 0x offset parses"               "{'offset': 16}"   "$(sed -n 4p "$WORK/tk1.out")"
-check "a non-offset is reported" \
-    "hexpair: not a byte offset: 'zz' (decimal, or 0x for hex)" \
+check "byte 1234 parses to offset 1233"   "{'offset': 1233}" "$(sed -n 3p "$WORK/tk1.out")"
+check "byte 0x10 parses to offset 15"     "{'offset': 15}"   "$(sed -n 4p "$WORK/tk1.out")"
+check "a non-position is reported" \
+    "hexpair: not a byte position: 'zz' (decimal, or 0x for hex; byte 1 is the first)" \
     "$(sed -n 5p "$WORK/tk1.out")"
 
 # --- Piped input that Vim may already have transcoded is flagged -----------

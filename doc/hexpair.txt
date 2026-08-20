@@ -427,11 +427,15 @@ HexPairOpenFile({file} [, {page}])
 
                                                         *:HexPairGoOffset*
 :HexPairGoOffset[!] {byte}
-                        Jump straight to a byte offset, decimal or 0x-
-                        prefixed, turning the page it falls on if needed.
-                        Pages are plain fixed-size slices, so the page
-                        holding an offset is simply the offset divided by
-                        |g:hexpair_page_size|.  Refuses to leave a page
+                        Jump straight to a byte, decimal or 0x-prefixed,
+                        turning the page it falls on if needed.  The
+                        position is 1-BASED: byte 1 is the file's first
+                        byte, the same numbering the page banner and
+                        |:HexPairPages| use, so a number read off the
+                        banner can be typed straight back in.  (The dump's
+                        own offset column is `xxd`'s native 0-based
+                        address and is left alone - the same split the
+                        banner already makes.)  Refuses to leave a page
                         with unwritten changes without !, like the other
                         navigation commands, and leaves you in whichever
                         view you were in.

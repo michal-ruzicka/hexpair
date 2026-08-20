@@ -44,9 +44,11 @@ and this project adheres to
   a byte of content.
 
 ### Added
-- `:HexPairGoOffset[!] {byte}` jumps straight to a byte offset, decimal
-  or `0x`-prefixed, turning the page it falls on and leaving you in
-  whichever view you were in. Pages are fixed-size slices, so the page
+- `:HexPairGoOffset[!] {byte}` jumps straight to a byte, decimal or
+  `0x`-prefixed, turning the page it falls on and leaving you in
+  whichever view you were in. The position is 1-based — byte 1 is the
+  file's first byte, the numbering the page banner and `:HexPairPages`
+  already use, so a number read off the banner can be typed back in. Pages are fixed-size slices, so the page
   holding an offset is a division. `<Plug>(HexPairGoOffset)` prompts for
   the offset the way `<Plug>(HexPairPageGoto)` prompts for a page;
   `<Plug>(HexPairGoOffsetForce)` is the `!` variant.
