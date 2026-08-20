@@ -29,6 +29,25 @@ check() { # name expected actual
     fi
 }
 
+# A file's size, and the SHA-256 of a byte range of it. Both go through
+# python3, which this suite already needs for its binary fixtures, rather
+# than through wc/dd/sha256sum: sha256sum is GNU-only (macOS ships shasum
+# instead), and the suite is meant to need nothing beyond vim, xxd and
+# python3.
+file_size() { # file
+    python3 -c 'import os,sys; print(os.path.getsize(sys.argv[1]))' "$1"
+}
+
+hash_range() { # file offset length (-1 = to the end of the file)
+    python3 - "$1" "$2" "$3" <<'PYHASH'
+import hashlib, sys
+name, off, length = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
+with open(name, 'rb') as f:
+    f.seek(off)
+    print(hashlib.sha256(f.read() if length < 0 else f.read(length)).hexdigest())
+PYHASH
+}
+
 # --- Fixtures --------------------------------------------------------------
 python3 - "$WORK" <<'EOF'
 import sys, os
@@ -43,6 +62,10 @@ open(os.path.join(w, 'eol.bin'), 'wb').write(b'AB\n')
 open(os.path.join(w, 'ins.bin'), 'wb').write(b'ABCDEFGH')
 # validation / reload fixture (must stay unmodified by the tests)
 open(os.path.join(w, 'val.bin'), 'wb').write(b'ABCDEFGH')
+# the degenerate cases around an empty file: nothing at all, and a lone 0a
+open(os.path.join(w, 'empty.bin'), 'wb').write(b'')
+open(os.path.join(w, 'nl.bin'), 'wb').write(b'\n')
+open(os.path.join(w, 'wipe.bin'), 'wb').write(b'ABCDEFGH')
 # modified-flag fixtures: separate copies so a write in one test cannot
 # affect another test's expectations
 for name in ('mod12.bin', 'mod13.bin', 'mod14.bin', 'mod15.bin'):
@@ -52,9 +75,17 @@ for name in ('ref1.bin', 'ref2.bin', 'ref3.bin', 'ref4.bin', 'ref5.bin'):
     open(os.path.join(w, name), 'wb').write(b'ABCDEFGH')
 # paged-mode fixture: 5000 bytes, byte i has value i % 256 - at 512
 # bytes/page that is 10 pages, the last one short (392 bytes)
-for name in ('paged21.bin', 'paged22.bin', 'paged23.bin', 'paged31.bin', 'paged32.bin'):
+for name in ('paged21.bin', 'paged22.bin', 'paged23.bin', 'paged31.bin', 'paged32.bin', 'undo1.bin', 'layout1.bin', 'jump1.bin', 'paste1.bin', 'abandon1.bin', 'ulocal1.bin', 'src1.bin', 'off1.bin', 'multi.bin', 'multi2.bin', 'w1.bin', 'w2.bin', 'w3.bin', 'w4.bin', 'w5.bin', 'sp1.bin', 'sp2.bin', 'sp3.bin', 'sp4.bin'):
     with open(os.path.join(w, name), 'wb') as f:
         f.write(bytes(i % 256 for i in range(5000)))
+# single-page fixture, so a shrinking write can empty the file entirely
+open(os.path.join(w, 'sp5.bin'), 'wb').write(bytes(range(16)))
+# a real file past the 4 GiB mark, where xxd's offset column widens from
+# eight to nine hex digits. Sparse: a few KiB on disk, not 4 GiB.
+with open(os.path.join(w, 'huge.bin'), 'wb') as f:
+    f.truncate(4 * 1024**3 + 4096)
+    f.seek(4 * 1024**3)
+    f.write(bytes(range(16)))
 # fixture with a name that is awkward for Ex command-line argument
 # parsing: a space and a literal '$NAME' substring
 special_dir = os.path.join(w, 'space dir')
@@ -62,89 +93,106 @@ os.mkdir(special_dir)
 with open(os.path.join(special_dir, 'dollar $HOSTNAME name.bin'), 'wb') as f:
     f.write(b'ABCDEFGH')
 EOF
-PAGEDPLUGIN=../plugin/hexpair_paged.vim
 
-# --- Test 1: round trip preserves content and cursor byte offset -----------
+# ===========================================================================
+# Hex mode: one mode, always paged
+# ===========================================================================
+# :HexPairToggle moves PLAIN -> HEX-PAGE -> WINDOWED-TEXT -> HEX-PAGE ...
+# A small file simply has one page. Most of these use a 512-byte page so a
+# 2900-byte fixture has several of them.
+HEX="source $PLUGIN\nlet g:hexpair_page_size = 512\nlet g:hexpair_page_confirm = 0"
+
+# --- Test 1: every transition keeps the cursor on the same byte -------------
+# The cursor's byte also picks the page hex mode opens on - not page 1.
 cat > "$WORK/t1.vim" <<EOF
-source $PLUGIN
+$(printf "$HEX")
 execute 'goto 1423'
 HexPairToggle
-let dump = [line('.'), col('.'), strpart(getline('.'), col('.') - 1, 2)]
+let hex = [b:hexpair_page_index, line('.'), col('.'), strpart(getline('.'), col('.') - 1, 2), HexPairPagedByteOffset()]
 HexPairToggle
-let off = line2byte(line('.')) + col('.') - 2
-call writefile([string(dump), string(off)], '$WORK/t1.out')
+let text = [b:hexpair_view, line('.'), col('.')]
+HexPairToggle
+let back = [b:hexpair_view, line('.'), col('.'), strpart(getline('.'), col('.') - 1, 2), HexPairPagedByteOffset()]
+call writefile([string(hex), string(text), string(back)], '$WORK/t1.out')
 qa!
 EOF
-vim -es -b -u NONE "$WORK/pos.bin" -S "$WORK/t1.vim"
-check "round-trip dump position"  "[89, 53, '69']" "$(sed -n 1p "$WORK/t1.out")"
-check "round-trip cursor offset"  "1422"           "$(sed -n 2p "$WORK/t1.out")"
+vim -es -b -u NONE "$WORK/pos.bin" -S "$WORK/t1.vim" < /dev/null
+check "hex mode opens on the cursor's page, on its byte" \
+    "[2, 26, 53, '69', 1422]" "$(sed -n 1p "$WORK/t1.out")"
+check "the text view keeps the byte"  "['text', 16, 2]" "$(sed -n 2p "$WORK/t1.out")"
+check "and so does the way back"      "['hex', 26, 53, '69', 1422]" "$(sed -n 3p "$WORK/t1.out")"
 
-# --- Test 2: final newline byte is visible in the dump ---------------------
+# --- Test 2: the banner, and a final newline byte in the dump --------------
 cat > "$WORK/t2.vim" <<EOF
-source $PLUGIN
+$(printf "$HEX")
 HexPairToggle
-call writefile([getline(1)], '$WORK/t2.out')
+call writefile([getline(1), getline(2), getline('\$'), string(line('\$'))], '$WORK/t2.out')
 qa!
 EOF
-vim -es -b -u NONE "$WORK/eol.bin" -S "$WORK/t2.vim"
+vim -es -b -u NONE "$WORK/eol.bin" -S "$WORK/t2.vim" < /dev/null
+check "a one-page file still gets a banner" \
+    "\" hexpair: page 1/1  bytes 1-3 of 3  $WORK/eol.bin" "$(sed -n 1p "$WORK/t2.out")"
 check "final newline in dump" \
     "00000000: 41 42 0a                                         AB." \
-    "$(cat "$WORK/t2.out")"
+    "$(sed -n 2p "$WORK/t2.out")"
+check "and a closing banner" "\" hexpair: end of page 1/1" "$(sed -n 3p "$WORK/t2.out")"
+check "banner, dump line, banner"     "3" "$(sed -n 4p "$WORK/t2.out")"
 
-# --- Test 3: write with inserted bytes; cursor stays on the typed byte -----
+# --- Test 3: inserting bytes and writing ------------------------------------
 cat > "$WORK/t3.vim" <<EOF
-source $PLUGIN
+$(printf "$HEX")
 HexPairToggle
-call append(1, '01 02 03 04 05')
-call cursor(2, 7)
+call append(2, '01 02 03 04 05')
+call cursor(3, 7)
 write
 call writefile([line('.') . ',' . col('.') . '=' . strpart(getline('.'), col('.') - 1, 2)], '$WORK/t3.out')
 qa!
 EOF
-vim -es -b -u NONE "$WORK/ins.bin" -S "$WORK/t3.vim"
-check "insert-write cursor on typed byte" "1,41=03" "$(cat "$WORK/t3.out")"
+vim -es -b -u NONE "$WORK/ins.bin" -S "$WORK/t3.vim" < /dev/null
+check "insert-write cursor on typed byte" "2,41=03" "$(cat "$WORK/t3.out")"
 check "insert-write file content" \
     "00000000: 41 42 43 44 45 46 47 48 01 02 03 04 05           ABCDEFGH....." \
     "$(xxd -g 1 "$WORK/ins.bin")"
 
 # --- Test 4: non-default bytes_per_line geometry ---------------------------
+# g:hexpair_page_size must stay a multiple of it, so both move together.
 cat > "$WORK/t4.vim" <<EOF
 source $PLUGIN
 let g:hexpair_bytes_per_line = 23
+let g:hexpair_page_size = 23 * 20
 execute 'goto 1423'
 HexPairToggle
 let dump = line('.') . ',' . col('.') . '=' . strpart(getline('.'), col('.') - 1, 2)
-HexPairToggle
-call writefile([dump, string(line2byte(line('.')) + col('.') - 2)], '$WORK/t4.out')
+call writefile([dump, string(HexPairPagedByteOffset())], '$WORK/t4.out')
 qa!
 EOF
-vim -es -b -u NONE "$WORK/pos.bin" -S "$WORK/t4.vim"
-check "n=23 dump position"  "62,68=69" "$(sed -n 1p "$WORK/t4.out")"
-check "n=23 return offset"  "1422"     "$(sed -n 2p "$WORK/t4.out")"
+vim -es -b -u NONE "$WORK/pos.bin" -S "$WORK/t4.vim" < /dev/null
+check "n=23 dump position"  "3,68=69" "$(sed -n 1p "$WORK/t4.out")"
+check "n=23 cursor byte"    "1422"     "$(sed -n 2p "$WORK/t4.out")"
 
-# --- Test 5: ftplugin defaults + managed 'paste' across the toggle ---------
-# The original filetype of a binary buffer is empty, so this also covers
-# the explicit b:undo_ftplugin execution in s:FromHex() (no FileType
-# event fires when an empty filetype is restored).
+# --- Test 5: ftplugin defaults and 'paste' across the three states ---------
+# The xxd editing defaults belong to a dump: they apply in the hex view and
+# are reverted in the text view, which shows raw bytes. 'paste' stays on for
+# both - it is the buffer that is a hex buffer, not the view.
 cat > "$WORK/t5.vim" <<EOF
 " Hermetic runtimepath: only the repo and \$VIMRUNTIME, so a developer's
 " personal ~/.vim/ftplugin/xxd.vim cannot leak into the assertions.
 let &runtimepath = '$ROOT,' . \$VIMRUNTIME
 filetype plugin on
-source $PLUGIN
+$(printf "$HEX")
 HexPairToggle
 let on = [&l:tabstop, &l:shiftwidth, &l:expandtab, &paste]
 HexPairToggle
-let off = [&l:tabstop, &l:shiftwidth, &l:expandtab, &paste, exists('b:did_ftplugin')]
+let text = [&l:tabstop, &l:shiftwidth, &l:expandtab, &paste, exists('b:did_ftplugin')]
 HexPairToggle
 let re = [&l:tabstop, &l:expandtab, &paste]
-call writefile([string(on), string(off), string(re)], '$WORK/t5.out')
+call writefile([string(on), string(text), string(re)], '$WORK/t5.out')
 qa!
 EOF
-vim -es -b -u NONE "$WORK/ins.bin" -S "$WORK/t5.vim"
-check "ftplugin + paste active in hex mode"     "[10, 3, 1, 1]"   "$(sed -n 1p "$WORK/t5.out")"
-check "ftplugin + paste reverted on toggle-off" "[8, 8, 0, 0, 0]" "$(sed -n 2p "$WORK/t5.out")"
-check "ftplugin re-applied on re-toggle"        "[10, 1, 1]"      "$(sed -n 3p "$WORK/t5.out")"
+vim -es -b -u NONE "$WORK/ins.bin" -S "$WORK/t5.vim" < /dev/null
+check "ftplugin + paste active in the hex view"  "[10, 3, 1, 1]"   "$(sed -n 1p "$WORK/t5.out")"
+check "ftplugin reverted in the text view"       "[8, 8, 0, 1, 0]" "$(sed -n 2p "$WORK/t5.out")"
+check "ftplugin re-applied back in the hex view" "[10, 1, 1]"      "$(sed -n 3p "$WORK/t5.out")"
 
 # --- Test 6: a user ftplugin with b:did_ftplugin suppresses the bundled one -
 mkdir -p "$WORK/user-rtp/ftplugin"
@@ -155,25 +203,24 @@ EOF
 cat > "$WORK/t6.vim" <<EOF
 let &runtimepath = '$WORK/user-rtp,$ROOT,' . \$VIMRUNTIME
 filetype plugin on
-source $PLUGIN
+$(printf "$HEX")
 HexPairToggle
 call writefile([string([&l:tabstop, &l:shiftwidth])], '$WORK/t6.out')
 qa!
 EOF
-vim -es -b -u NONE "$WORK/ins.bin" -S "$WORK/t6.vim"
+vim -es -b -u NONE "$WORK/ins.bin" -S "$WORK/t6.vim" < /dev/null
 check "user ftplugin overrules bundled defaults" "[4, 8]" "$(cat "$WORK/t6.out")"
 
 # --- Test 7: g:hexpair_paste opt-out; restore on leaving the hex buffer ----
 cat > "$WORK/t7.vim" <<EOF
 let &runtimepath = '$ROOT,' . \$VIMRUNTIME
 filetype plugin on
-source $PLUGIN
+$(printf "$HEX")
 let g:hexpair_paste = 0
 HexPairToggle
 let optout = &paste
-HexPairToggle
 let g:hexpair_paste = 1
-HexPairToggle
+HexPairPageGoto 1
 let inhex = &paste
 new
 let outside = &paste
@@ -182,27 +229,27 @@ let back = &paste
 call writefile([string([optout, inhex, outside, back])], '$WORK/t7.out')
 qa!
 EOF
-vim -es -b -u NONE "$WORK/ins.bin" -S "$WORK/t7.vim"
+vim -es -b -u NONE "$WORK/ins.bin" -S "$WORK/t7.vim" < /dev/null
 check "paste opt-out and restore on buffer switch" "[0, 1, 0, 1]" "$(cat "$WORK/t7.out")"
 
 # --- Test 8: a non-hex character aborts :w; file and dump stay intact ------
 cat > "$WORK/t8.vim" <<EOF
-source $PLUGIN
+$(printf "$HEX")
 HexPairToggle
-call setline(1, substitute(getline(1), '41', '4x', ''))
+call setline(2, substitute(getline(2), '41', '4x', ''))
 let caught = ''
 try
   write
 catch /^hexpair:/
   let caught = 'caught'
 endtry
-let state = string([get(b:, 'hexpair_active', 0), line('.'), col('.')])
-call writefile([caught, state, getline(1)], '$WORK/t8.out')
+let state = string([get(b:, 'hexpair_page_active', 0), line('.'), col('.')])
+call writefile([caught, state, getline(2)], '$WORK/t8.out')
 qa!
 EOF
-vim -es -b -u NONE "$WORK/val.bin" -S "$WORK/t8.vim"
+vim -es -b -u NONE "$WORK/val.bin" -S "$WORK/t8.vim" < /dev/null
 check "invalid char aborts the write"  "caught"     "$(sed -n 1p "$WORK/t8.out")"
-check "cursor parked on the offender"  "[1, 1, 12]" "$(sed -n 2p "$WORK/t8.out")"
+check "cursor parked on the offender"  "[1, 2, 12]" "$(sed -n 2p "$WORK/t8.out")"
 check "dump kept after aborted write" \
     "00000000: 4x 42 43 44 45 46 47 48                          ABCDEFGH" \
     "$(sed -n 3p "$WORK/t8.out")"
@@ -210,23 +257,25 @@ check "file kept after aborted write" \
     "00000000: 41 42 43 44 45 46 47 48                          ABCDEFGH" \
     "$(xxd -g 1 "$WORK/val.bin")"
 
-# --- Test 9: a non-hex character refuses hex-mode toggle-off ---------------
+# --- Test 9: a non-hex character refuses the switch to the text view -------
 cat > "$WORK/t9.vim" <<EOF
-source $PLUGIN
+$(printf "$HEX")
 HexPairToggle
-call append(1, '01 0g 03')
+call append(2, '01 0g 03')
+redir => msg
 HexPairToggle
-call writefile([string([get(b:, 'hexpair_active', 0), line('.'), col('.')])], '$WORK/t9.out')
+redir END
+call writefile([string([b:hexpair_view, line('.'), col('.'), msg =~# 'still in the hex view'])], '$WORK/t9.out')
 qa!
 EOF
-vim -es -b -u NONE "$WORK/val.bin" -S "$WORK/t9.vim"
-check "invalid char refuses toggle-off" "[1, 2, 5]" "$(cat "$WORK/t9.out")"
+vim -es -b -u NONE "$WORK/val.bin" -S "$WORK/t9.vim" < /dev/null
+check "invalid char refuses the text view" "['hex', 3, 5, 1]" "$(cat "$WORK/t9.out")"
 
 # --- Test 10: an odd total number of hex digits aborts :w ------------------
 cat > "$WORK/t10.vim" <<EOF
-source $PLUGIN
+$(printf "$HEX")
 HexPairToggle
-call append(1, '01 2')
+call append(2, '01 2')
 let caught = ''
 try
   write
@@ -236,162 +285,190 @@ endtry
 call writefile([caught], '$WORK/t10.out')
 qa!
 EOF
-vim -es -b -u NONE "$WORK/val.bin" -S "$WORK/t10.vim"
+vim -es -b -u NONE "$WORK/val.bin" -S "$WORK/t10.vim" < /dev/null
 check "odd digit count aborts the write" "odd" "$(cat "$WORK/t10.out")"
 
-# --- Test 11: :e while in hex mode regenerates the dump --------------------
+# --- Test 11: :e re-reads the page from disk -------------------------------
 cat > "$WORK/t11.vim" <<EOF
-source $PLUGIN
+$(printf "$HEX")
 HexPairToggle
-call cursor(1, 20)
+call cursor(2, 20)
+" :e resets the cursor before BufReadCmd runs, so the plugin restores it
+" from the position noted on every CursorMoved - which no autocommand
+" fires for in Ex mode, hence the explicit jump command here.
 HexPairGoHex
-silent edit
-let state = string([get(b:, 'hexpair_active', 0), line('.'), col('.'), &l:modified])
-call writefile([getline(1), state], '$WORK/t11.out')
+call setline(2, substitute(getline(2), '41', 'ff', ''))
+silent edit!
+let state = string([get(b:, 'hexpair_page_active', 0), b:hexpair_view, line('.'), col('.'), &l:modified])
+call writefile([getline(2), state], '$WORK/t11.out')
 qa!
 EOF
-vim -es -b -u NONE "$WORK/val.bin" -S "$WORK/t11.vim"
-check "reload regenerates the dump" \
+vim -es -b -u NONE "$WORK/val.bin" -S "$WORK/t11.vim" < /dev/null
+check "reload regenerates the page" \
     "00000000: 41 42 43 44 45 46 47 48                          ABCDEFGH" \
     "$(sed -n 1p "$WORK/t11.out")"
-check "reload keeps hex mode and cursor byte" "[1, 1, 20, 0]" \
+check "reload keeps hex mode and the cursor" "[1, 'hex', 2, 20, 0]" \
     "$(sed -n 2p "$WORK/t11.out")"
 
-# --- Test 12: an edit made in hex mode marks the buffer modified -----------
-# This is the regression test for the data-loss bug: toggling back used to
-# unconditionally mirror the PRE-hex-mode modified state, silently clearing
-# 'modified' even though the dump had just been edited.
+# --- Test 12: an edit made in the hex view marks the buffer modified -------
+# It used to be cleared on the way out of hex mode, so :q discarded it.
 cat > "$WORK/t12.vim" <<EOF
-source $PLUGIN
+$(printf "$HEX")
 HexPairToggle
-call setline(1, substitute(getline(1), '41', '5a', ''))
+call setline(2, substitute(getline(2), '41', 'ff', ''))
+let inhex = &l:modified
 HexPairToggle
-call writefile([string([&modified, getline(1)])], '$WORK/t12.out')
+call writefile([string([inhex, &l:modified, char2nr(getline(2)[0])])], '$WORK/t12.out')
 qa!
 EOF
-vim -es -b -u NONE "$WORK/mod12.bin" -S "$WORK/t12.vim"
-check "edit in hex mode marks buffer modified" "[1, 'ZBCDEFGH']" "$(cat "$WORK/t12.out")"
+vim -es -b -u NONE "$WORK/mod12.bin" -S "$WORK/t12.vim" < /dev/null
+check "an edit in the hex view survives into the text view, still modified" \
+    "[1, 1, 255]" "$(cat "$WORK/t12.out")"
 
-# --- Test 13: an edit-free round trip stays unmodified ----------------------
+# --- Test 13: an edit-free round trip stays unmodified ---------------------
 cat > "$WORK/t13.vim" <<EOF
-source $PLUGIN
+$(printf "$HEX")
 HexPairToggle
 HexPairToggle
-call writefile([string([&modified, getline(1)])], '$WORK/t13.out')
+let text = &l:modified
+HexPairToggle
+call writefile([string([text, &l:modified])], '$WORK/t13.out')
 qa!
 EOF
-vim -es -b -u NONE "$WORK/mod13.bin" -S "$WORK/t13.vim"
-check "edit-free round trip stays unmodified" "[0, 'ABCDEFGH']" "$(cat "$WORK/t13.out")"
+vim -es -b -u NONE "$WORK/mod13.bin" -S "$WORK/t13.vim" < /dev/null
+check "an edit-free round trip stays unmodified" "[0, 0]" "$(cat "$WORK/t13.out")"
 
-# --- Test 14: a pre-existing modification survives an edit-free round trip -
+# --- Test 14: an edit made in the text view survives back into the dump ----
 cat > "$WORK/t14.vim" <<EOF
-source $PLUGIN
-call setline(1, substitute(getline(1), '^A', 'Z', ''))
+$(printf "$HEX")
 HexPairToggle
 HexPairToggle
-call writefile([string([&modified, getline(1)])], '$WORK/t14.out')
+call setline(2, 'ZZ' . getline(2)[2:])
+let intext = &l:modified
+HexPairToggle
+call writefile([string([intext, &l:modified]), getline(2)], '$WORK/t14.out')
 qa!
 EOF
-vim -es -b -u NONE "$WORK/mod14.bin" -S "$WORK/t14.vim"
-check "pre-existing modification survives edit-free hex round trip" "[1, 'ZBCDEFGH']" "$(cat "$WORK/t14.out")"
+vim -es -b -u NONE "$WORK/mod14.bin" -S "$WORK/t14.vim" < /dev/null
+check "an edit in the text view keeps the buffer modified" "[1, 1]" \
+    "$(sed -n 1p "$WORK/t14.out")"
+check "and shows up in the dump" \
+    "00000000: 5a 5a 43 44 45 46 47 48                          ZZCDEFGH" \
+    "$(sed -n 2p "$WORK/t14.out")"
 
-# --- Test 15: a write in hex mode resets the modified baseline -------------
+# --- Test 15: a write clears 'modified' and reaches the file ---------------
 cat > "$WORK/t15.vim" <<EOF
-source $PLUGIN
+$(printf "$HEX")
 HexPairToggle
-call setline(1, substitute(getline(1), '41', '5a', ''))
+call setline(2, substitute(getline(2), '41', 'ff', ''))
 write
+let afterwrite = &l:modified
 HexPairToggle
-call writefile([string([&modified, getline(1)])], '$WORK/t15.out')
+call writefile([string([afterwrite, &l:modified])], '$WORK/t15.out')
 qa!
 EOF
-vim -es -b -u NONE "$WORK/mod15.bin" -S "$WORK/t15.vim"
-check "write in hex mode resets the modified baseline" "[0, 'ZBCDEFGH']" "$(cat "$WORK/t15.out")"
-check "write in hex mode persists the edit to disk" \
-    "00000000: 5a 42 43 44 45 46 47 48                          ZBCDEFGH" \
+vim -es -b -u NONE "$WORK/mod15.bin" -S "$WORK/t15.vim" < /dev/null
+check "a write clears 'modified' and the text view keeps it clear" "[0, 0]" \
+    "$(cat "$WORK/t15.out")"
+check "the write reached the file" \
+    "00000000: ff 42 43 44 45 46 47 48                          .BCDEFGH" \
     "$(xxd -g 1 "$WORK/mod15.bin")"
 
 # --- Test 16: :HexPairRefresh self-heals offsets/ASCII without writing -----
 cat > "$WORK/t16.vim" <<EOF
-source $PLUGIN
+$(printf "$HEX")
 HexPairToggle
-call append(1, '01 02 03 04 05')
-call cursor(2, 7)
+call setline(2, '41 42 43 44 45 46 47 48')
+call cursor(2, 17)
 HexPairRefresh
-let state = string([line('.'), col('.'), strpart(getline('.'), col('.') - 1, 2), line('\$')])
-call writefile([state, getline(1)], '$WORK/t16.out')
+call writefile([getline(2), string([line('.'), col('.'), &l:modified])], '$WORK/t16.out')
 qa!
 EOF
-vim -es -b -u NONE "$WORK/ref1.bin" -S "$WORK/t16.vim"
-check "refresh: cursor stays on same byte, dump merges to one line" \
-    "[1, 41, '03', 1]" "$(sed -n 1p "$WORK/t16.out")"
+vim -es -b -u NONE "$WORK/ref1.bin" -S "$WORK/t16.vim" < /dev/null
 check "refresh: offsets and ASCII column regenerated" \
-    "00000000: 41 42 43 44 45 46 47 48 01 02 03 04 05           ABCDEFGH....." \
-    "$(sed -n 2p "$WORK/t16.out")"
-check "refresh never writes to disk" \
     "00000000: 41 42 43 44 45 46 47 48                          ABCDEFGH" \
-    "$(xxd -g 1 "$WORK/ref1.bin")"
+    "$(sed -n 1p "$WORK/t16.out")"
+check "refresh: cursor stays on the same byte, buffer still modified" \
+    "[2, 26, 1]" "$(sed -n 2p "$WORK/t16.out")"
 
-# --- Test 17: refresh after a real edit keeps 'modified' through toggle-off
+# --- Test 17: a no-op refresh leaves 'modified' alone ----------------------
 cat > "$WORK/t17.vim" <<EOF
-source $PLUGIN
+$(printf "$HEX")
 HexPairToggle
-call setline(1, substitute(getline(1), '41', '5a', ''))
 HexPairRefresh
-let afterrefresh = &modified
-HexPairToggle
-call writefile([string([afterrefresh, &modified, getline(1)])], '$WORK/t17.out')
+call writefile([string([&l:modified, getline(2) ==# '00000000: 41 42 43 44 45 46 47 48                          ABCDEFGH'])], '$WORK/t17.out')
 qa!
 EOF
-vim -es -b -u NONE "$WORK/ref2.bin" -S "$WORK/t17.vim"
-check "edit survives refresh and toggle-off as modified" "[1, 1, 'ZBCDEFGH']" \
-    "$(cat "$WORK/t17.out")"
+vim -es -b -u NONE "$WORK/ref2.bin" -S "$WORK/t17.vim" < /dev/null
+check "a no-op refresh changes nothing" "[0, 1]" "$(cat "$WORK/t17.out")"
 
-# --- Test 18: a no-op refresh stays unmodified through toggle-off ----------
+# --- Test 18: an invalid dump refuses the refresh --------------------------
 cat > "$WORK/t18.vim" <<EOF
-source $PLUGIN
+$(printf "$HEX")
 HexPairToggle
+call setline(2, substitute(getline(2), '41', '4x', ''))
+redir => msg
 HexPairRefresh
-let afterrefresh = &modified
-HexPairToggle
-call writefile([string([afterrefresh, &modified, getline(1)])], '$WORK/t18.out')
+redir END
+call writefile([getline(2), string([msg =~# 'invalid character', line('.'), col('.')])], '$WORK/t18.out')
 qa!
 EOF
-vim -es -b -u NONE "$WORK/ref3.bin" -S "$WORK/t18.vim"
-check "no-op refresh stays unmodified through toggle-off" "[0, 0, 'ABCDEFGH']" \
-    "$(cat "$WORK/t18.out")"
+vim -es -b -u NONE "$WORK/ref3.bin" -S "$WORK/t18.vim" < /dev/null
+check "an invalid dump is left as typed" \
+    "00000000: 4x 42 43 44 45 46 47 48                          ABCDEFGH" \
+    "$(sed -n 1p "$WORK/t18.out")"
+check "and the refresh is refused with the cursor on it" "[1, 2, 12]" \
+    "$(sed -n 2p "$WORK/t18.out")"
 
-# --- Test 19: an invalid dump refuses refresh -------------------------------
+# --- Test 19: refresh outside hex mode, and in the text view ---------------
 cat > "$WORK/t19.vim" <<EOF
-source $PLUGIN
+$(printf "$HEX")
+redir => outside
+HexPairRefresh
+redir END
 HexPairToggle
-call setline(1, substitute(getline(1), '41', '4x', ''))
-let before = getline(1)
+HexPairToggle
+redir => intext
 HexPairRefresh
-let state = string([get(b:, 'hexpair_active', 0), line('.'), col('.'), getline(1) ==# before])
-call writefile([state], '$WORK/t19.out')
+redir END
+call writefile([string([outside =~# 'not active', intext =~# 'no offset or ASCII columns', b:hexpair_view])], '$WORK/t19.out')
 qa!
 EOF
-vim -es -b -u NONE "$WORK/ref4.bin" -S "$WORK/t19.vim"
-check "invalid char refuses refresh" "[1, 1, 12, 1]" "$(cat "$WORK/t19.out")"
+vim -es -b -u NONE "$WORK/ref4.bin" -S "$WORK/t19.vim" < /dev/null
+check "refresh says so outside hex mode and in the text view" "[1, 1, 'text']" \
+    "$(cat "$WORK/t19.out")"
 
-# --- Test 20: refresh outside hex mode is a no-op --------------------------
+# --- Test 20: the banner cannot be faked away in the text view -------------
+# A dump line always starts with a hex digit, so '"' marks a banner there
+# unambiguously - but a page of raw bytes may start with one, so the text
+# view checks the banner text itself and refuses to guess.
 cat > "$WORK/t20.vim" <<EOF
-source $PLUGIN
-HexPairRefresh
-call writefile([string([get(b:, 'hexpair_active', 0)])], '$WORK/t20.out')
+$(printf "$HEX")
+HexPairToggle
+HexPairToggle
+call setline(1, '" hexpair: page 1/1  bytes 1-8 of 8  tampered')
+let caught = ''
+try
+  write
+catch /^hexpair:/
+  let caught = v:exception =~# 'banner was edited' ? 'refused' : v:exception
+endtry
+call writefile([caught, string(&l:modified)], '$WORK/t20.out')
 qa!
 EOF
-vim -es -b -u NONE "$WORK/ref5.bin" -S "$WORK/t20.vim"
-check "refresh outside hex mode is a no-op" "[0]" "$(cat "$WORK/t20.out")"
+vim -es -b -u NONE "$WORK/ref5.bin" -S "$WORK/t20.vim" < /dev/null
+check "an edited banner refuses the write"      "refused" "$(sed -n 1p "$WORK/t20.out")"
+check "and leaves the buffer unwritten"         "1"       "$(sed -n 2p "$WORK/t20.out")"
+check "the file is untouched" \
+    "00000000: 41 42 43 44 45 46 47 48                          ABCDEFGH" \
+    "$(xxd -g 1 "$WORK/ref5.bin")"
 
 # --- Test 21: :HexPairOpen shows page 1 with banner and absolute offsets ---
 cat > "$WORK/t21.vim" <<EOF
 source $PLUGIN
-source $PAGEDPLUGIN
 let g:hexpair_page_size = 512
 HexPairOpen $WORK/paged21.bin 1
-let state = string([line('\$'), line('.'), col('.')])
+let state = string([line('\$'), line('.'), col('.'), strpart(getline('.'), col('.') - 1, 2)])
 call writefile([getline(1), getline(2), getline('\$'), state], '$WORK/t21.out')
 qa!
 EOF
@@ -403,12 +480,12 @@ check "page 1 first data line" \
     "00000000: 00 01 02 03 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f  ................" \
     "$(sed -n 2p "$WORK/t21.out")"
 check "page 1 bottom banner" "\" hexpair: end of page 1/10" "$(sed -n 3p "$WORK/t21.out")"
-check "page 1 line count and cursor on first byte" "[34, 2, 10]" "$(sed -n 4p "$WORK/t21.out")"
+check "page 1 line count and cursor on first byte" "[34, 2, 11, '00']" \
+    "$(sed -n 4p "$WORK/t21.out")"
 
 # --- Test 22: :HexPairPageNext / :HexPairPageGoto move between pages -------
 cat > "$WORK/t22.vim" <<EOF
 source $PLUGIN
-source $PAGEDPLUGIN
 let g:hexpair_page_size = 512
 HexPairOpen $WORK/paged22.bin 1
 HexPairPageNext
@@ -438,7 +515,6 @@ check "next past the last page leaves the page unchanged" "1" "$(sed -n 4p "$WOR
 # --- Test 23: navigation guard refuses to discard unsaved edits ------------
 cat > "$WORK/t23.vim" <<EOF
 source $PLUGIN
-source $PAGEDPLUGIN
 let g:hexpair_page_size = 512
 HexPairOpen $WORK/paged23.bin 1
 call setline(2, substitute(getline(2), '00 01', 'ff ee', ''))
@@ -460,7 +536,6 @@ check "next! discards edits and advances" \
 # --- Test 24: :HexPairPages reports the expected text -----------------------
 cat > "$WORK/t24.vim" <<EOF
 source $PLUGIN
-source $PAGEDPLUGIN
 let g:hexpair_page_size = 512
 HexPairOpen $WORK/paged21.bin 3
 redir => msg
@@ -474,10 +549,9 @@ check "HexPairPages reports page/offsets/total" \
     "hexpair: page 3 of 10, offsets 1025-1536 of total 5000 bytes ($WORK/paged21.bin)" \
     "$(cat "$WORK/t24.out")"
 
-# --- Test 25: version-gate message function, both branches -----------------
+# --- Test 25: splice version-gate message function, both branches ----------
 cat > "$WORK/t25.vim" <<EOF
 source $PLUGIN
-source $PAGEDPLUGIN
 let ok = HexPairPagedGateMessage(1)
 let fail = HexPairPagedGateMessage(0)
 call writefile([string(ok), fail], '$WORK/t25.out')
@@ -486,13 +560,12 @@ EOF
 vim -es -u NONE -S "$WORK/t25.vim"
 check "gate message empty when supported"     "''" "$(sed -n 1p "$WORK/t25.out")"
 check "gate message set when unsupported" \
-    "hexpair: paged mode requires Vim patch 8.2.4906 or later with +num64 (readblob(), 64-bit Numbers for large file offsets); this Vim does not qualify, paged commands are unavailable" \
+    "hexpair: inserting or deleting bytes needs Vim patch 8.2.4906 or later with +num64 (readblob(), 64-bit Numbers for large file offsets); this Vim does not qualify, so only same-length edits can be written - nothing was written" \
     "$(sed -n 2p "$WORK/t25.out")"
 
 # --- Test 26: g:hexpair_page_size validation --------------------------------
 cat > "$WORK/t26.vim" <<EOF
 source $PLUGIN
-source $PAGEDPLUGIN
 let ok       = HexPairPagedSizeError(1024, 16)
 let notmult  = HexPairPagedSizeError(1000, 16)
 let negative = HexPairPagedSizeError(-16, 16)
@@ -512,31 +585,33 @@ check "page size not positive" \
 # multi-GiB fixture needed - the bounds/page-count functions are pure) -----
 cat > "$WORK/t27.vim" <<EOF
 source $PLUGIN
-source $PAGEDPLUGIN
-" total = 4 GiB + 1000 bytes; size = 900 MB, so a naive page would
-" straddle the 4 GiB offset-width boundary
-let total = 4294967296 + 1000
+" total = 4 GiB + 1 GB; size = 900 MB, so page 4 straddles the
+" 4 GiB offset-width boundary - which is allowed: the layout is read off
+" each line, so a page needs no alignment to anything.
+let total = 4294967296 + 1000000000
 let size  = 900000000
 let idx = 4294967296 / size
 let straddling = HexPairPagedBounds(idx, size, total)
-let boundaries = HexPairPagedWidthBoundaries(total)
 let n = HexPairPagedTotalPages(size, total)
+let last = HexPairPagedBounds(n - 1, size, total)
 let oob = HexPairPagedBounds(999999, 512, 5000)
-call writefile([string(straddling), string(boundaries), string(n), string(oob)], '$WORK/t27.out')
+let neg = HexPairPagedBounds(-1, 512, 5000)
+call writefile([string(straddling), string(n), string(last), string(oob), string(neg)], '$WORK/t27.out')
 qa!
 EOF
 vim -es -u NONE -S "$WORK/t27.vim"
-check "page straddling a width boundary is clamped to end at it" \
-    "[3600000000, 694967296]" "$(sed -n 1p "$WORK/t27.out")"
-check "width boundary list contains exactly the 4 GiB transition" \
-    "[4294967296]" "$(sed -n 2p "$WORK/t27.out")"
-check "total pages accounts for the boundary split" "6" "$(sed -n 3p "$WORK/t27.out")"
-check "out-of-range page index" "[-1, -1]" "$(sed -n 4p "$WORK/t27.out")"
+check "a page may straddle a width boundary, at full size" \
+    "[3600000000, 900000000]" "$(sed -n 1p "$WORK/t27.out")"
+check "page count is just the file divided by the page size" "6" \
+    "$(sed -n 2p "$WORK/t27.out")"
+check "the last page is the short one" "[4500000000, 794967296]" \
+    "$(sed -n 3p "$WORK/t27.out")"
+check "out-of-range page index"        "[-1, -1]" "$(sed -n 4p "$WORK/t27.out")"
+check "negative page index"            "[-1, -1]" "$(sed -n 5p "$WORK/t27.out")"
 
 # --- Test 28: banner-aware stripping and validation -------------------------
 cat > "$WORK/t28.vim" <<EOF
 source $PLUGIN
-source $PAGEDPLUGIN
 let banner = '" hexpair: page 3/21  bytes 2097152-3145727 of 45678901  big.bin'
 let stripped_banner = HexPairPagedStripLine(banner)
 let stripped_data    = HexPairPagedStripLine('00000000: 41 42 43 44                                      ABCD')
@@ -563,7 +638,6 @@ check "validation still catches a real invalid character"            "{'lnum': 2
 SPECIAL_FILE="$WORK/space dir/dollar \$HOSTNAME name.bin"
 cat > "$WORK/t29.vim" <<EOF
 source $PLUGIN
-source $PAGEDPLUGIN
 let g:hexpair_page_size = 512
 call HexPairOpenFile(\$HEXPAIR_TEST_FILE)
 let state = string([get(b:, 'hexpair_page_active', 0), b:hexpair_page_file ==# \$HEXPAIR_TEST_FILE])
@@ -580,7 +654,6 @@ check "HexPairOpenFile shows the correct content" \
 # --- Test 30: HexPairPagedParsePageInput() - the goto-prompt parsing -------
 cat > "$WORK/t30.vim" <<EOF
 source $PLUGIN
-source $PAGEDPLUGIN
 let empty_input = HexPairPagedParsePageInput('')
 let valid_input = HexPairPagedParsePageInput('7')
 let bad_input   = HexPairPagedParsePageInput('abc')
@@ -598,7 +671,6 @@ check "non-numeric prompt input is a clear error"         "{'msg': 'hexpair: not
 # already exercise via HexPairPageNext! in test 23).
 cat > "$WORK/t31.vim" <<EOF
 source $PLUGIN
-source $PAGEDPLUGIN
 let g:hexpair_page_size = 512
 HexPairOpen $WORK/paged31.bin 1
 call setline(2, substitute(getline(2), '00 01', 'ff ee', ''))
@@ -627,7 +699,6 @@ check "goto! discards edits and jumps" \
 # out-of-range or a non-numeric page number.
 cat > "$WORK/t32.vim" <<EOF
 source $PLUGIN
-source $PAGEDPLUGIN
 let g:hexpair_page_size = 512
 let before = [bufname('%'), &l:buftype]
 HexPairOpen $WORK/paged32.bin 999
@@ -640,6 +711,736 @@ EOF
 vim -es -u NONE -S "$WORK/t32.vim"
 check "out-of-range page number leaves the buffer untouched" "1" "$(sed -n 1p "$WORK/t32.out")"
 check "non-numeric page number leaves the buffer untouched"  "1" "$(sed -n 2p "$WORK/t32.out")"
+
+# --- An empty file must survive the round trip -----------------------------
+# A file with no bytes has no pages, but must still be viewable - and must
+# still be empty afterwards. A file holding a lone 0a looks the same in a
+# buffer and must NOT be mistaken for it.
+cat > "$WORK/te1.vim" <<EOF
+$(printf "$HEX")
+HexPairToggle
+let view = string([line('\$'), b:hexpair_page_totalpages, get(b:, 'hexpair_page_active', 0)])
+write
+call writefile([getline(1), view], '$WORK/te1.out')
+qa!
+EOF
+vim -es -b -u NONE "$WORK/empty.bin" -S "$WORK/te1.vim" < /dev/null
+check "an empty file says so" "\" hexpair: $WORK/empty.bin is empty" \
+    "$(sed -n 1p "$WORK/te1.out")"
+check "an empty file has no pages but is still open" "[2, 0, 1]" \
+    "$(sed -n 2p "$WORK/te1.out")"
+check "an empty file stays empty"       "0"       "$(file_size "$WORK/empty.bin")"
+
+cat > "$WORK/te2.vim" <<EOF
+$(printf "$HEX")
+HexPairToggle
+let dump = getline(2)
+write
+call writefile([dump], '$WORK/te2.out')
+qa!
+EOF
+vim -es -b -u NONE "$WORK/nl.bin" -S "$WORK/te2.vim" < /dev/null
+check "a lone newline is still dumped" \
+    "00000000: 0a                                               ." \
+    "$(cat "$WORK/te2.out")"
+check "a lone newline survives the round trip" "1" "$(file_size "$WORK/nl.bin")"
+
+# --- Deleting the whole page writes an empty file --------------------------
+cat > "$WORK/te3.vim" <<EOF
+$(printf "$HEX")
+HexPairToggle
+%delete _
+write
+call writefile([string([&l:modified, b:hexpair_page_totalpages]), getline(1)], '$WORK/te3.out')
+qa!
+EOF
+vim -es -b -u NONE "$WORK/wipe.bin" -S "$WORK/te3.vim" < /dev/null
+check "an emptied page writes an empty file" "0" "$(file_size "$WORK/wipe.bin")"
+check "and leaves a view saying the file is empty" "[0, 0]" \
+    "$(sed -n 1p "$WORK/te3.out")"
+check "with the banner to match" "\" hexpair: $WORK/wipe.bin is empty" \
+    "$(sed -n 2p "$WORK/te3.out")"
+
+# --- Undo does not reach across a page boundary ----------------------------
+# Undoing into the previous page would put bytes from a different part of
+# the file into a buffer that claims to be this page - and once writing is
+# implemented, the next :w would patch them in at this page's offset.
+cat > "$WORK/tu1.vim" <<EOF
+source $PLUGIN
+let g:hexpair_page_size = 512
+HexPairOpen $WORK/undo1.bin 1
+setlocal undolevels=1000
+call setline(2, substitute(getline(2), '00 01', 'aa bb', ''))
+HexPairPageNext!
+let fresh = [getline(1), getline(2)]
+silent! undo
+call writefile([string([getline(1) ==# fresh[0], getline(2) ==# fresh[1], b:hexpair_page_index, &l:modified])], '$WORK/tu1.out')
+qa!
+EOF
+vim -es -u NONE -S "$WORK/tu1.vim" < /dev/null
+check "undo stops at the page boundary" "[1, 1, 1, 0]" "$(cat "$WORK/tu1.out")"
+
+# --- Undo still works INSIDE a page ----------------------------------------
+cat > "$WORK/tu2.vim" <<EOF
+source $PLUGIN
+let g:hexpair_page_size = 512
+HexPairOpen $WORK/undo1.bin 2
+let before = getline(2)
+call setline(2, substitute(getline(2), '00 01', 'aa bb', ''))
+let edited = getline(2) !=# before
+silent! undo
+call writefile([string([edited, getline(2) ==# before])], '$WORK/tu2.out')
+qa!
+EOF
+vim -es -u NONE -S "$WORK/tu2.vim" < /dev/null
+check "undo still works inside a page" "[1, 1]" "$(cat "$WORK/tu2.out")"
+
+# --- A page that did not come out the expected size is refused -------------
+# xxd runs through the shell, which can fail without Vim noticing; a short
+# or empty buffer presented as the page would be patched into the file by
+# the next write.
+cat > "$WORK/ts1.vim" <<EOF
+source $PLUGIN
+let g:hexpair_page_size = 512
+HexPairOpen $WORK/undo1.bin 1
+let good = string([line('\$'), b:hexpair_page_len])
+call writefile([good], '$WORK/ts1.out')
+qa!
+EOF
+vim -es -u NONE -S "$WORK/ts1.vim" < /dev/null
+check "a full page is two banner lines plus its dump lines" "[34, 512]" \
+    "$(cat "$WORK/ts1.out")"
+
+# --- The paged column layout lines up with the dump it describes -----------
+# hexstart used to be the offset digits + 2, which lands on the SPACE
+# after the ':' rather than on the first hex digit - so the pair
+# highlight covered a space and one digit, and the cursor came to rest one
+# column short of the byte it was meant to be on.
+cat > "$WORK/tl1.vim" <<EOF
+source $PLUGIN
+let g:hexpair_page_size = 512
+HexPairOpen $WORK/layout1.bin 2
+let l = getline(2)
+let hexstart = b:hexpair_page_hexstart
+let hexend = hexstart + 3 * b:hexpair_n - 2
+let asciistart = hexend + 3
+let found_hex = match(l, '[0-9a-f]', stridx(l, ':')) + 1
+let found_ascii = match(l, '  \zs', stridx(l, ':')) + 1
+call writefile([string([hexstart, found_hex]), string([hexend, strpart(l, hexend - 1, 1)]), string([asciistart, found_ascii])], '$WORK/tl1.out')
+qa!
+EOF
+vim -es -u NONE -S "$WORK/tl1.vim" < /dev/null
+check "hexstart is the first hex digit"     "[11, 11]"   "$(sed -n 1p "$WORK/tl1.out")"
+check "hexend is the last hex digit"        "[57, 'f']"  "$(sed -n 2p "$WORK/tl1.out")"
+check "asciistart is the first ASCII char"  "[60, 60]"   "$(sed -n 3p "$WORK/tl1.out")"
+
+# ===========================================================================
+# Paged mode: writing a page
+# ===========================================================================
+PAGEDW="source $PLUGIN\nlet g:hexpair_page_size = 512\nlet g:hexpair_page_confirm = 0"
+
+# --- A same-length write patches ONLY the page it belongs to ---------------
+# This is the guarantee the in-place path exists for: the file must not be
+# truncated, nothing may be appended, and every byte outside the page must
+# be bit-identical afterwards, whatever the file's size.
+W1_HEAD=$(hash_range "$WORK/w1.bin" 0 512)
+W1_TAIL=$(hash_range "$WORK/w1.bin" 1024 -1)
+cat > "$WORK/tw1.vim" <<EOF
+$(printf "$PAGEDW")
+HexPairOpen $WORK/w1.bin 2
+call cursor(2, b:hexpair_page_hexstart)
+call setline(2, substitute(getline(2), '00 01', 'de ad', ''))
+write
+call writefile([string([&l:modified, line('.'), col('.')]), getline(2)], '$WORK/tw1.out')
+qa!
+EOF
+vim -es -u NONE -S "$WORK/tw1.vim" < /dev/null
+check "in-place write clears 'modified' and keeps the cursor byte" "[0, 2, 11]" \
+    "$(sed -n 1p "$WORK/tw1.out")"
+check "in-place write shows in the re-read page" \
+    "00000200: de ad 02 03 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f  ................" \
+    "$(sed -n 2p "$WORK/tw1.out")"
+check "in-place write keeps the file length"     "5000"     "$(file_size "$WORK/w1.bin")"
+check "in-place write leaves the head untouched" "$W1_HEAD" "$(hash_range "$WORK/w1.bin" 0 512)"
+check "in-place write leaves the tail untouched" "$W1_TAIL" "$(hash_range "$WORK/w1.bin" 1024 -1)"
+check "in-place write changed exactly the edited bytes" \
+    "00000200: de ad 02 03                                      ...." \
+    "$(xxd -s 512 -l 4 -g 1 "$WORK/w1.bin")"
+
+# --- A write on the short LAST page is patched the same way ----------------
+cat > "$WORK/tw2.vim" <<EOF
+$(printf "$PAGEDW")
+HexPairOpen $WORK/w2.bin 10
+call setline(2, substitute(getline(2), '00 01', 'ff 01', ''))
+write
+call writefile([string([&l:modified, b:hexpair_page_len])], '$WORK/tw2.out')
+qa!
+EOF
+vim -es -u NONE -S "$WORK/tw2.vim" < /dev/null
+check "the short last page writes too" "[0, 392]" "$(cat "$WORK/tw2.out")"
+check "the short last page keeps the file length" "5000" "$(file_size "$WORK/w2.bin")"
+check "the short last page patched its first byte" \
+    "00001200: ff                                               ." \
+    "$(xxd -s 4608 -l 1 -g 1 "$WORK/w2.bin")"
+
+# --- An invalid dump refuses the write, on disk and in the buffer ----------
+W3_ALL=$(hash_range "$WORK/w3.bin" 0 -1)
+cat > "$WORK/tw3.vim" <<EOF
+$(printf "$PAGEDW")
+HexPairOpen $WORK/w3.bin 2
+call setline(2, substitute(getline(2), '00 01', '00 0x', ''))
+let caught = ''
+try
+  write
+catch /hexpair:/
+  let caught = 'refused'
+endtry
+call writefile([caught, string([&l:modified, line('.'), col('.')])], '$WORK/tw3.out')
+qa!
+EOF
+vim -es -u NONE -S "$WORK/tw3.vim" < /dev/null
+check "an invalid dump refuses the paged write" "refused"     "$(sed -n 1p "$WORK/tw3.out")"
+check "the cursor is parked on the offender"    "[1, 2, 15]"  "$(sed -n 2p "$WORK/tw3.out")"
+check "an invalid dump leaves the file alone"   "$W3_ALL"     "$(hash_range "$WORK/w3.bin" 0 -1)"
+
+# --- A file that changed on disk is refused --------------------------------
+W4_ALL=$(hash_range "$WORK/w4.bin" 0 -1)
+cat > "$WORK/tw4.vim" <<EOF
+$(printf "$PAGEDW")
+HexPairOpen $WORK/w4.bin 2
+call setline(2, substitute(getline(2), '00 01', 'de ad', ''))
+let b:hexpair_page_total = b:hexpair_page_total - 1
+let caught = ''
+try
+  write
+catch /hexpair:/
+  let caught = v:exception =~# 'changed on disk' ? 'refused' : v:exception
+endtry
+call writefile([caught, string([&l:modified])], '$WORK/tw4.out')
+qa!
+EOF
+vim -es -u NONE -S "$WORK/tw4.vim" < /dev/null
+check "a file changed on disk refuses the write" "refused" "$(sed -n 1p "$WORK/tw4.out")"
+check "the refused write left the buffer dirty"  "[1]"     "$(sed -n 2p "$WORK/tw4.out")"
+check "the refused write left the file alone"    "$W4_ALL" "$(hash_range "$WORK/w4.bin" 0 -1)"
+
+# --- ':w {file}' saves the WHOLE content, with this page's edits in it -----
+# Not the page on its own: the buffer shows one page, but what the user
+# means by "save it over there" is the thing they are looking into. The
+# original is left exactly as it was.
+W5_BEFORE=$(hash_range "$WORK/w5.bin" 0 -1)
+cat > "$WORK/tw5.vim" <<EOF
+$(printf "$PAGEDW")
+HexPairOpen $WORK/w5.bin 2
+call setline(2, substitute(getline(2), '00 01', 'de ad', ''))
+write $WORK/elsewhere.bin
+let state = string([&l:modified, b:hexpair_page_file ==# '$WORK/w5.bin'])
+write
+call writefile([state, string([&l:modified])], '$WORK/tw5.out')
+qa!
+EOF
+vim -es -u NONE -S "$WORK/tw5.vim" < /dev/null
+check "':w other' leaves the buffer and its own file alone" "[1, 1]" \
+    "$(sed -n 1p "$WORK/tw5.out")"
+check "the copy is the whole file, not just the page" "5000" \
+    "$(file_size "$WORK/elsewhere.bin")"
+check "with the page's edit in it" \
+    "00000200: de ad 02 03" "$(xxd -s 512 -l 4 -g 1 "$WORK/elsewhere.bin" | cut -c1-21)"
+check "and everything outside the page copied verbatim" \
+    "$(hash_range "$WORK/w5.bin" 1024 -1)" "$(hash_range "$WORK/elsewhere.bin" 1024 -1)"
+check "':w' afterwards still writes the page to its own file" "[0]" \
+    "$(sed -n 2p "$WORK/tw5.out")"
+check "which is where the edit ended up too" \
+    "00000200: de ad 02 03" "$(xxd -s 512 -l 4 -g 1 "$WORK/w5.bin" | cut -c1-21)"
+
+# --- Piped input can only be saved with ':w {file}' - and then adopts it ---
+# `cat x | vim -` has no file behind it. A plain :w says so; :w {file}
+# writes everything, and the view goes on editing that file.
+cat > "$WORK/tw6.vim" <<EOF
+$(printf "$PAGEDW")
+enew
+call setline(1, ['piped line one', 'piped line two'])
+HexPairToggle
+redir => msg
+silent! write
+redir END
+let plain = msg =~# 'no file to write it back to' || msg =~# 'E32'
+call setline(2, substitute(getline(2), '^\(.\{10\}\)..', '\1ff', ''))
+write $WORK/frompipe.bin
+let after = string([&l:modified, b:hexpair_page_file ==# '$WORK/frompipe.bin', get(b:, 'hexpair_page_spill', 'gone') ==# ''])
+call setline(2, substitute(getline(2), '^\(.\{10\}\)..', '\1ee', ''))
+write
+call writefile([string(plain), after, string([&l:modified])], '$WORK/tw6.out')
+qa!
+EOF
+vim -es -u NONE -S "$WORK/tw6.vim" < /dev/null
+check "a plain ':w' on piped input says there is no file"  "1" "$(sed -n 1p "$WORK/tw6.out")"
+check "':w file' saves it and the view adopts the file" "[0, 1, 1]" \
+    "$(sed -n 2p "$WORK/tw6.out")"
+check "the saved file has all of the piped content, edited" \
+    "00000000: ee 69 70 65 64 20 6c 69 6e 65 20 6f 6e 65 0a 70  .iped line one.p" \
+    "$(xxd -s 0 -l 16 -g 1 "$WORK/frompipe.bin")"
+check "and a later plain ':w' now patches that file" "[0]" "$(sed -n 3p "$WORK/tw6.out")"
+check "which it did" "00000000: ee" "$(xxd -s 0 -l 1 -g 1 "$WORK/frompipe.bin" | cut -c1-12)"
+
+# --- A growing write splices the file ---------------------------------------
+SP1_HEAD=$(hash_range "$WORK/sp1.bin" 0 512)
+SP1_TAIL=$(hash_range "$WORK/sp1.bin" 512 -1)
+cat > "$WORK/ts3a.vim" <<EOF
+$(printf "$PAGEDW")
+HexPairOpen $WORK/sp1.bin 2
+call cursor(2, b:hexpair_page_hexstart)
+call append(1, 'aa bb cc')
+write
+call writefile([string([&l:modified, b:hexpair_page_total, line('.'), col('.')]), getline(2)], '$WORK/ts3a.out')
+qa!
+EOF
+vim -es -u NONE -S "$WORK/ts3a.vim" < /dev/null
+check "grow: the file is three bytes longer, cursor still on its byte" \
+    "[0, 5003, 2, 20]" "$(sed -n 1p "$WORK/ts3a.out")"
+check "grow: the inserted bytes open the page" \
+    "00000200: aa bb cc 00 01 02 03 04 05 06 07 08 09 0a 0b 0c  ................" \
+    "$(sed -n 2p "$WORK/ts3a.out")"
+check "grow: the file really grew"   "5003"      "$(file_size "$WORK/sp1.bin")"
+check "grow: the head is unchanged"  "$SP1_HEAD" "$(hash_range "$WORK/sp1.bin" 0 512)"
+check "grow: the tail is unchanged, just moved" "$SP1_TAIL" \
+    "$(hash_range "$WORK/sp1.bin" 515 -1)"
+
+# --- A shrinking write splices the file -------------------------------------
+SP2_HEAD=$(hash_range "$WORK/sp2.bin" 0 512)
+SP2_TAIL=$(hash_range "$WORK/sp2.bin" 528 -1)
+cat > "$WORK/ts3b.vim" <<EOF
+$(printf "$PAGEDW")
+HexPairOpen $WORK/sp2.bin 2
+2delete _
+write
+call writefile([string([&l:modified, b:hexpair_page_total, b:hexpair_page_len])], '$WORK/ts3b.out')
+qa!
+EOF
+vim -es -u NONE -S "$WORK/ts3b.vim" < /dev/null
+check "shrink: the file is sixteen bytes shorter" "[0, 4984, 512]" \
+    "$(cat "$WORK/ts3b.out")"
+check "shrink: the file really shrank" "4984"      "$(file_size "$WORK/sp2.bin")"
+check "shrink: the head is unchanged"  "$SP2_HEAD" "$(hash_range "$WORK/sp2.bin" 0 512)"
+check "shrink: the tail is unchanged, just moved" "$SP2_TAIL" \
+    "$(hash_range "$WORK/sp2.bin" 512 -1)"
+
+# --- The temp file is gone after a successful splice ------------------------
+# tempname() names files in a private per-session directory; nothing of
+# ours may be left in it once the write has succeeded.
+cat > "$WORK/ts3c.vim" <<EOF
+$(printf "$PAGEDW")
+HexPairOpen $WORK/sp3.bin 2
+let dir = fnamemodify(tempname(), ':h')
+let before = len(glob(dir . '/*', 0, 1))
+call append(1, 'aa bb cc')
+write
+call writefile([string([before, len(glob(dir . '/*', 0, 1)), &l:modified])], '$WORK/ts3c.out')
+qa!
+EOF
+vim -es -u NONE -S "$WORK/ts3c.vim" < /dev/null
+check "a successful splice leaves no temp files behind" "[0, 0, 0]" \
+    "$(cat "$WORK/ts3c.out")"
+
+# --- A splice that cannot replace the file keeps the recovery copy ----------
+# Making the target read-only makes the copy back fail after the temp
+# already holds the complete new content - the one case where the temp is
+# deliberately NOT deleted. (Skipped when running as root, which ignores
+# the permission bits.)
+SP4_ALL=$(hash_range "$WORK/sp4.bin" 0 -1)
+if [ "$(id -u)" = "0" ]; then
+    echo "ok   - (skipped as root) a failed splice keeps a recovery copy"
+    echo "ok   - (skipped as root) a failed splice leaves the file alone"
+else
+    chmod 444 "$WORK/sp4.bin"
+    cat > "$WORK/ts3d.vim" <<EOF
+$(printf "$PAGEDW")
+let dir = fnamemodify(tempname(), ':h')
+HexPairOpen $WORK/sp4.bin 2
+call append(1, 'aa bb cc')
+let failed = ''
+try
+  write
+catch
+  let failed = 'failed'
+endtry
+let kept = filter(glob(dir . '/*', 0, 1), 'getfsize(v:val) == 5003')
+call writefile([string([failed, len(kept), &l:modified])], '$WORK/ts3d.out')
+qa!
+EOF
+    vim -es -u NONE -S "$WORK/ts3d.vim" < /dev/null
+    check "a failed splice keeps a recovery copy" "['failed', 1, 1]" \
+        "$(cat "$WORK/ts3d.out")"
+    check "a failed splice leaves the file alone" "$SP4_ALL" \
+        "$(hash_range "$WORK/sp4.bin" 0 -1)"
+    chmod 644 "$WORK/sp4.bin"
+fi
+
+# --- Emptying the only page leaves a view with nothing to show --------------
+cat > "$WORK/ts3e.vim" <<EOF
+$(printf "$PAGEDW")
+HexPairOpen $WORK/sp5.bin 1
+2delete _
+write
+call writefile([getline(1), string([&l:modified, line('\$'), b:hexpair_page_totalpages]), s:nothing], '$WORK/ts3e.out')
+qa!
+EOF
+sed -i 's/, s:nothing//' "$WORK/ts3e.vim"
+vim -es -u NONE -S "$WORK/ts3e.vim" < /dev/null
+check "emptying the file leaves a banner saying so" \
+    "\" hexpair: $WORK/sp5.bin is empty" "$(sed -n 1p "$WORK/ts3e.out")"
+check "emptying the file leaves no pages" "[0, 2, 0]" "$(sed -n 2p "$WORK/ts3e.out")"
+check "the emptied file really is empty"  "0" "$(file_size "$WORK/sp5.bin")"
+
+# --- The resize prompt says what it is about to do --------------------------
+# confirm() cannot run under this harness, so the message it asks is
+# tested on its own, like the version-gate and page-size messages.
+cat > "$WORK/ts3f.vim" <<EOF
+source $PLUGIN
+call writefile(split(HexPairPagedResizeMessage(-16, 5000), "\n"), '$WORK/ts3f.out')
+qa!
+EOF
+vim -es -u NONE -S "$WORK/ts3f.vim" < /dev/null
+check "the resize prompt names the delta" \
+    "hexpair: this page changed length by -16 bytes." "$(sed -n 1p "$WORK/ts3f.out")"
+check "the resize prompt names both sizes" \
+    "Inserting or deleting bytes cannot be done in place, so the whole file has to be rewritten (5000 -> 4984 bytes)." \
+    "$(sed -n 2p "$WORK/ts3f.out")"
+
+# --- The help file must produce tags ---------------------------------------
+# :helptags aborts on the FIRST duplicate tag and writes none at all, so
+# one repeated tag costs the plugin its whole :help - after exactly the
+# `vim -c 'helptags ALL'` the README tells users to run.
+cat > "$WORK/th1.vim" <<EOF
+let result = 'ok'
+try
+  execute 'helptags' fnameescape('$WORK/doctags')
+catch
+  let result = v:exception
+endtry
+call writefile([result, string(len(readfile('$WORK/doctags/tags')))], '$WORK/th1.out')
+qa!
+EOF
+mkdir -p "$WORK/doctags"
+cp "$ROOT/doc/hexpair.txt" "$WORK/doctags/"
+vim -es -u NONE -S "$WORK/th1.vim" < /dev/null
+check "helptags accepts the help file" "ok" "$(sed -n 1p "$WORK/th1.out")"
+check "helptags found the plugin's tags" "1" \
+    "$(test "$(sed -n 2p "$WORK/th1.out")" -gt 30 && echo 1 || echo 0)"
+
+# --- A real page STRADDLING 4 GiB, where the offset column widens mid-page --
+# Pages are plain fixed-size slices, so nothing stops one from spanning the
+# point where xxd goes from eight offset digits to nine. 1536 is a multiple
+# of the 16-byte line width but not a divisor of 4 GiB, so page 2796203 of
+# this sparse fixture carries both widths - line 65 eight digits, line 66
+# nine - and every column must follow the line it is on, not the page.
+HUGE_HEAD=$(hash_range "$WORK/huge.bin" 0 4096)
+cat > "$WORK/t4g.vim" <<EOF
+source $PLUGIN
+let g:hexpair_page_size = 1536
+let g:hexpair_page_confirm = 0
+HexPairOpen $WORK/huge.bin 2796203
+let widths = string([HexPairPagedLineHexStart(65), HexPairPagedLineHexStart(66)])
+call cursor(66, 12)
+let mapped = HexPairPagedByteOffset()
+HexPairGoAscii
+let jumped = string([line('.'), col('.')])
+call cursor(66, 12)
+call setline(66, substitute(getline(66), '00 01', 'fe ed', ''))
+write
+call writefile([getline(65), getline(66), widths, string(mapped), jumped, string([&l:modified, b:hexpair_page_total])], '$WORK/t4g.out')
+qa!
+EOF
+vim -es -u NONE -S "$WORK/t4g.vim" < /dev/null
+check "the line before the 4 GiB mark keeps eight offset digits" \
+    "fffffff0: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................" \
+    "$(sed -n 1p "$WORK/t4g.out")"
+check "the line after it has nine, and was patched in place" \
+    "100000000: fe ed 02 03 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f  ................" \
+    "$(sed -n 2p "$WORK/t4g.out")"
+check "the hex column follows each line's own offset width" "[11, 12]" \
+    "$(sed -n 3p "$WORK/t4g.out")"
+check "the cursor maps to the absolute offset"  "4294967296" "$(sed -n 4p "$WORK/t4g.out")"
+check "the column jump follows the wider line" "[66, 61]" "$(sed -n 5p "$WORK/t4g.out")"
+check "patching across the boundary left the length alone" "[0, 4294971392]" \
+    "$(sed -n 6p "$WORK/t4g.out")"
+check "patching across the boundary left the head alone" "$HUGE_HEAD" \
+    "$(hash_range "$WORK/huge.bin" 0 4096)"
+
+# --- The column jumps work in a paged buffer -------------------------------
+# They used to be keyed on the whole-file mode's active flag, which a paged
+# buffer never sets, so :HexPairGoAscii and friends did nothing there.
+cat > "$WORK/tg1.vim" <<EOF
+$(printf "$PAGEDW")
+HexPairOpen $WORK/jump1.bin 2
+call cursor(2, 14)
+HexPairGoAscii
+let ascii = string([line('.'), col('.'), strpart(getline('.'), col('.') - 1, 1)])
+HexPairSwap
+let back = string([line('.'), col('.'), strpart(getline('.'), col('.') - 1, 2)])
+call cursor(2, 63)
+HexPairGoHex
+let hex = string([line('.'), col('.'), strpart(getline('.'), col('.') - 1, 2)])
+normal! 1G
+HexPairGoAscii
+let banner = string([line('.'), col('.')])
+call writefile([ascii, back, hex, banner], '$WORK/tg1.out')
+qa!
+EOF
+vim -es -u NONE -S "$WORK/tg1.vim" < /dev/null
+check "GoAscii lands on the byte's ASCII character" "[2, 61, '.']" \
+    "$(sed -n 1p "$WORK/tg1.out")"
+check "Swap comes back to the same byte"            "[2, 14, '01']" \
+    "$(sed -n 2p "$WORK/tg1.out")"
+check "GoHex lands on the byte's hex digits"        "[2, 20, '03']" \
+    "$(sed -n 3p "$WORK/tg1.out")"
+check "a jump from the banner line does nothing"    "[1, 1]" \
+    "$(sed -n 4p "$WORK/tg1.out")"
+
+# --- 'paste' is managed in a paged buffer too ------------------------------
+cat > "$WORK/tg2.vim" <<EOF
+$(printf "$PAGEDW")
+HexPairOpen $WORK/paste1.bin 1
+let inpage = &paste
+new
+let outside = &paste
+wincmd p
+let back = &paste
+call writefile([string([inpage, outside, back])], '$WORK/tg2.out')
+qa!
+EOF
+vim -es -u NONE -S "$WORK/tg2.vim" < /dev/null
+check "'paste' is on in a paged buffer and restored outside it" "[1, 0, 1]" \
+    "$(cat "$WORK/tg2.out")"
+
+# --- Opening a page never abandons a modified buffer -----------------------
+# :HexPairOpen leaves the current buffer alone; Vim's own refusal to
+# abandon unsaved work must survive, whatever the entry point does.
+cat > "$WORK/tx1.vim" <<EOF
+$(printf "$PAGEDW")
+enew
+call setline(1, 'precious unsaved work')
+let refused = ''
+try
+  HexPairOpen $WORK/abandon1.bin 1
+catch
+  let refused = v:exception =~# 'E37' ? 'refused' : v:exception
+endtry
+call writefile([refused, string([getline(1), get(b:, 'hexpair_page_active', 0)])], '$WORK/tx1.out')
+qa!
+EOF
+vim -es -u NONE -S "$WORK/tx1.vim" < /dev/null
+check "opening a page refuses to abandon a modified buffer" "refused" \
+    "$(sed -n 1p "$WORK/tx1.out")"
+check "the modified buffer is left untouched" "['precious unsaved work', 0]" \
+    "$(sed -n 2p "$WORK/tx1.out")"
+
+# --- A buffer-local 'undolevels' cannot keep the history alive -------------
+# 'undolevels' is global-local: clearing only the global value would leave
+# the history intact for exactly the users who set a buffer-local one.
+cat > "$WORK/tx2.vim" <<EOF
+$(printf "$PAGEDW")
+HexPairOpen $WORK/ulocal1.bin 1
+setlocal undolevels=500
+HexPairPageNext
+let fresh = getline(2)
+silent! undo
+let kept = getline(2) ==# fresh
+call setline(2, substitute(getline(2), '00 01', 'aa bb', ''))
+silent! undo
+let restored = getline(2) ==# fresh
+call writefile([string([kept, restored, &l:undolevels])], '$WORK/tx2.out')
+qa!
+EOF
+vim -es -u NONE -S "$WORK/tx2.vim" < /dev/null
+check "a buffer-local 'undolevels' is restored, history still cleared" \
+    "[1, 1, 500]" "$(cat "$WORK/tx2.out")"
+
+# ===========================================================================
+# Where a toggled buffer's pages come from
+# ===========================================================================
+
+# --- An unnamed buffer is paged from a spill of its own content ------------
+# `cat x | vim -` has no file to read pages from, and by the time hex mode
+# can be asked for, the content is fully in memory anyway.
+cat > "$WORK/tp1.vim" <<EOF
+$(printf "$HEX")
+enew
+call setline(1, ['first line', 'second line', 'third line'])
+HexPairToggle
+let state = string([get(b:, 'hexpair_page_active', 0), b:hexpair_page_totalpages, b:hexpair_page_total])
+call writefile([getline(1), getline(2), state], '$WORK/tp1.out')
+qa!
+EOF
+vim -es -u NONE -S "$WORK/tp1.vim" < /dev/null
+check "an unnamed buffer names itself in the banner" \
+    "\" hexpair: page 1/1  bytes 1-34 of 34  [unnamed buffer]" \
+    "$(sed -n 1p "$WORK/tp1.out")"
+check "and its bytes are dumped" \
+    "00000000: 66 69 72 73 74 20 6c 69 6e 65 0a 73 65 63 6f 6e  first line.secon" \
+    "$(sed -n 2p "$WORK/tp1.out")"
+check "one page, 34 bytes" "[1, 1, 34]" "$(sed -n 3p "$WORK/tp1.out")"
+
+# --- A modified file-backed buffer is refused ------------------------------
+# The buffer and the file disagree. Paging from disk would hide the edits;
+# paging from memory would let a page-range write drop every edit outside
+# the visible page. Both lose data quietly, so neither is done.
+cat > "$WORK/tp2.vim" <<EOF
+$(printf "$HEX")
+call setline(1, 'tampered')
+redir => msg
+HexPairToggle
+redir END
+call writefile([string([msg =~# 'unwritten changes', get(b:, 'hexpair_page_active', 0), &l:buftype, getline(1)])], '$WORK/tp2.out')
+qa!
+EOF
+vim -es -b -u NONE "$WORK/src1.bin" -S "$WORK/tp2.vim" < /dev/null
+check "a modified file-backed buffer is refused, and left alone" \
+    "[1, 0, '', 'tampered']" "$(cat "$WORK/tp2.out")"
+check "and the file is untouched" \
+    "00000000: 00 01 02 03 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f  ................" \
+    "$(xxd -s 0 -l 16 -g 1 "$WORK/src1.bin")"
+
+# --- :HexPairGoOffset jumps to a byte, wherever it is ----------------------
+# Pages are fixed-size slices, so the page holding an offset is a division.
+cat > "$WORK/tp3.vim" <<EOF
+$(printf "$HEX")
+HexPairToggle
+HexPairGoOffset 2000
+let dec = string([b:hexpair_page_index, HexPairPagedByteOffset()])
+HexPairGoOffset 0x400
+let hex = string([b:hexpair_page_index, HexPairPagedByteOffset()])
+redir => m1
+silent HexPairGoOffset 99999
+redir END
+redir => m2
+silent HexPairGoOffset zz
+redir END
+HexPairToggle
+HexPairGoOffset 100
+let intext = string([b:hexpair_view, b:hexpair_page_index, line('.'), col('.')])
+call writefile([dec, hex, string([m1 =~# 'outside the file', m2 =~# 'not a byte offset']), intext], '$WORK/tp3.out')
+qa!
+EOF
+vim -es -b -u NONE "$WORK/off1.bin" -S "$WORK/tp3.vim" < /dev/null
+check "a decimal offset lands on its byte"     "[3, 2000]" "$(sed -n 1p "$WORK/tp3.out")"
+check "a 0x offset lands on its byte"          "[2, 1024]" "$(sed -n 2p "$WORK/tp3.out")"
+check "out of range and non-numeric are both refused" "[1, 1]" \
+    "$(sed -n 3p "$WORK/tp3.out")"
+check "the jump keeps you in the view you were in" "['text', 0, 3, 90]" \
+    "$(sed -n 4p "$WORK/tp3.out")"
+
+check "HexPairPagedOffsetError() accepts what is in range" "''" \
+    "$(vim -es -u NONE -c "source $PLUGIN" -c "call writefile([string(HexPairPagedOffsetError(0, 1))], '$WORK/tp4.out')" -c 'qa!' < /dev/null; cat "$WORK/tp4.out")"
+
+# --- Editing and writing several pages of one file, one after another ------
+# Each :w patches the page on screen; the pages you never opened keep their
+# bytes. This is the ordinary way to work on a multi-page file, so it is
+# asserted end to end: three pages edited, including the short last one, and
+# every other byte of the file compared against what it was.
+cp "$WORK/multi.bin" "$WORK/multi.before"
+cat > "$WORK/tm1.vim" <<EOF
+$(printf "$HEX")
+HexPairOpen $WORK/multi.bin 1
+call setline(2, substitute(getline(2), '^\(.\{10\}\)..', '\1aa', ''))
+write
+let p1 = &l:modified
+HexPairPageGoto 5
+call setline(2, substitute(getline(2), '^\(.\{10\}\)..', '\1bb', ''))
+write
+let p5 = &l:modified
+HexPairPageGoto 10
+call setline(2, substitute(getline(2), '^\(.\{10\}\)..', '\1cc', ''))
+write
+let p10 = [&l:modified, b:hexpair_page_len, b:hexpair_page_total]
+call writefile([string([p1, p5]), string(p10)], '$WORK/tm1.out')
+qa!
+EOF
+vim -es -u NONE -S "$WORK/tm1.vim" < /dev/null
+check "each page write clears 'modified'" "[0, 0]" "$(sed -n 1p "$WORK/tm1.out")"
+check "the short last page writes too, file size unchanged" "[0, 392, 5000]" \
+    "$(sed -n 2p "$WORK/tm1.out")"
+check "page 1's byte was patched"  "00000000: aa" "$(xxd -s 0 -l 1 -g 1 "$WORK/multi.bin" | cut -c1-12)"
+check "page 5's byte was patched"  "00000800: bb" "$(xxd -s 2048 -l 1 -g 1 "$WORK/multi.bin" | cut -c1-12)"
+check "page 10's byte was patched" "00001200: cc" "$(xxd -s 4608 -l 1 -g 1 "$WORK/multi.bin" | cut -c1-12)"
+check "the file kept its length" "5000" "$(file_size "$WORK/multi.bin")"
+check "everything between the edits is untouched" \
+    "$(hash_range "$WORK/multi.before" 1 2047)" "$(hash_range "$WORK/multi.bin" 1 2047)"
+check "and after them too" \
+    "$(hash_range "$WORK/multi.before" 4609 -1)" "$(hash_range "$WORK/multi.bin" 4609 -1)"
+
+# --- Entering hex mode from a buffer with unsaved changes is refused -------
+# Not a limitation on writing: it is the one transition that cannot be made
+# without losing something. The buffer holds whole-file edits, the hex view
+# holds one page, and a page-range write would drop every edit outside it.
+# Once in hex mode, editing and writing any page works (above).
+cat > "$WORK/tm2.vim" <<EOF
+$(printf "$HEX")
+call setline(1, 'edited in the plain view')
+redir => msg
+HexPairToggle
+redir END
+let refused = [msg =~# 'unwritten changes', msg =~# ':HexPairOpen', get(b:, 'hexpair_page_active', 0)]
+write
+HexPairToggle
+let after = [get(b:, 'hexpair_page_active', 0), b:hexpair_page_totalpages]
+call writefile([string(refused), string(after)], '$WORK/tm2.out')
+qa!
+EOF
+vim -es -b -u NONE "$WORK/multi2.bin" -S "$WORK/tm2.vim" < /dev/null
+check "a dirty buffer is refused, and told both ways out" "[1, 1, 0]" \
+    "$(sed -n 1p "$WORK/tm2.out")"
+check "writing it first makes the toggle work"            "[1, 10]" \
+    "$(sed -n 2p "$WORK/tm2.out")"
+
+# --- Every command has a way to be mapped, and the offset parser works -----
+# The <Plug> targets are the plugin's whole key surface (it defines no
+# mappings), so a command that has none cannot be bound to a key at all.
+cat > "$WORK/tk1.vim" <<EOF
+source $PLUGIN
+let want = ['(HexPairToggle)', '(HexPairGoHex)', '(HexPairGoAscii)', '(HexPairSwap)', '(HexPairRefresh)', '(HexPairPageNext)', '(HexPairPagePrev)', '(HexPairPageGoto)', '(HexPairPageGotoForce)', '(HexPairGoOffset)', '(HexPairGoOffsetForce)', '(HexPairPages)']
+let listed = execute('nmap')
+let missing = filter(copy(want), 'stridx(listed, "<Plug>" . v:val) < 0')
+let parsed = [HexPairPagedParseOffsetInput(''), HexPairPagedParseOffsetInput('1234'), HexPairPagedParseOffsetInput('0x10'), HexPairPagedParseOffsetInput('zz')]
+call writefile([string(missing), string(parsed[0]), string(parsed[1]), string(parsed[2]), parsed[3].msg], '$WORK/tk1.out')
+qa!
+EOF
+vim -es -u NONE -S "$WORK/tk1.vim" < /dev/null
+check "every command has a <Plug> target" "[]" "$(sed -n 1p "$WORK/tk1.out")"
+check "an empty offset prompt cancels"    "{}" "$(sed -n 2p "$WORK/tk1.out")"
+check "a decimal offset parses"           "{'offset': 1234}" "$(sed -n 3p "$WORK/tk1.out")"
+check "an 0x offset parses"               "{'offset': 16}"   "$(sed -n 4p "$WORK/tk1.out")"
+check "a non-offset is reported" \
+    "hexpair: not a byte offset: 'zz' (decimal, or 0x for hex)" \
+    "$(sed -n 5p "$WORK/tk1.out")"
+
+# --- Piped input that Vim may already have transcoded is flagged -----------
+# A named file can be re-read with ++bin; piped input cannot, so if the
+# buffer was not read in binary mode its bytes may no longer be the input's
+# and nothing can put that back. Say so rather than present them as exact.
+cat > "$WORK/tw7.vim" <<EOF
+$(printf "$HEX")
+enew
+setlocal nobinary
+call setline(1, ['some text'])
+redir => msg
+HexPairToggle
+redir END
+let warned = [msg =~# 'not read in binary mode', msg =~# 'vim -b -', get(b:, 'hexpair_page_active', 0)]
+enew!
+setlocal binary
+call setline(1, ['some text'])
+redir => msg2
+HexPairToggle
+redir END
+call writefile([string(warned), string([msg2 =~# 'not read in binary mode', get(b:, 'hexpair_page_active', 0)])], '$WORK/tw7.out')
+qa!
+EOF
+vim -es -u NONE -S "$WORK/tw7.vim" < /dev/null
+check "a non-binary piped buffer is flagged, and still opens" "[1, 1, 1]" \
+    "$(sed -n 1p "$WORK/tw7.out")"
+check "a binary one is not flagged"                          "[0, 1]" \
+    "$(sed -n 2p "$WORK/tw7.out")"
 
 # ---------------------------------------------------------------------------
 if [ "$FAIL" -eq 0 ]; then

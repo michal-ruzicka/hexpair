@@ -16,7 +16,16 @@
 " back to binary before the write and re-converted afterwards, so the
 " original binary content is what ends up on disk.
 "
-" Command:          :HexPairToggle
+" Files too large to hold in a buffer are viewed one PAGE at a time with
+" :HexPairOpen, which reads only that page off disk - a hex dump with
+" ABSOLUTE file offsets, bracketed by a banner saying which page it is.
+" :w writes just the page back: an edit that kept its length patches it
+" in place, one that changed the length splices the file.
+"
+" Commands:         :HexPairToggle, :HexPairGoHex, :HexPairGoAscii,
+"                   :HexPairSwap, :HexPairRefresh, :HexPairOpen,
+"                   :HexPairPageNext, :HexPairPagePrev,
+"                   :HexPairPageGoto, :HexPairPages
 " Mapping:          none by default; map <Plug>(HexPairToggle) in your vimrc
 "
 " Configuration (set in your vimrc before the plugin loads):
@@ -24,9 +33,12 @@
 "   g:hexpair_paste            set to 0 to stop the plugin from managing
 "                              the global 'paste' option while the cursor
 "                              is in a hex buffer (default 1)
+"   g:hexpair_page_size        bytes per page (default 128 KiB)
+"   g:hexpair_page_confirm     set to 0 to skip the confirmation a
+"                              length-changing write asks for
 "   g:hexpair_debug            set to 1 to echo position-mapping traces
 "                              (inspect with :messages)
-"   HexPairActive, HexPairMirror  highlight groups (cursor side / counterpart)
+"   HexPairActive, HexPairMirror, HexPairPageBanner  highlight groups
 "
 " Editing defaults for the dump (tabstop, shiftwidth, no automatic
 " formatting) live in the bundled ftplugin/xxd.vim; see
@@ -52,6 +64,32 @@ if !exists('g:hexpair_paste')
   let g:hexpair_paste = 1
 endif
 
+" A page is an ordinary Vim buffer, so everything it costs is what that
+" many lines cost: at 16 bytes per line, 128 KiB is 8192 lines, which
+" loads in hundredths of a second and writes in about a third of one.
+" The size buys nothing in return - :HexPairPageGoto reaches any page
+" directly - so it is deliberately small; raise it only to see more of
+" the file at once, and expect a write to slow down roughly in
+" proportion (1 MiB ~ 2.4 s, 4 MiB ~ 9.5 s on the author's machine).
+if !exists('g:hexpair_page_size')
+  let g:hexpair_page_size = 128 * 1024
+endif
+
+" A write that changes the page's length cannot patch in place - the
+" whole file has to be rewritten - so it asks first. Set to 0 to answer
+" yes automatically, which is also what makes the length-changing write
+" path testable: confirm(), like input(), is unusable under this
+" project's `vim -es -u NONE` harness.
+if !exists('g:hexpair_page_confirm')
+  let g:hexpair_page_confirm = 1
+endif
+
+" Highlight group for the page banner (leading/trailing comment lines).
+" xxd.vim's bundled syntax file defines no comment group to link to
+" (only xxdAddress/xxdSep/xxdAscii, all tied to real dump lines), so
+" this is the plugin's own, following the HexPairActive/HexPairMirror
+" precedent in plugin/hexpair.vim.
+
 " Highlight groups for the byte-pair highlight:
 "   HexPairActive - the byte in the column the cursor is in (subtle)
 "   HexPairMirror - its counterpart in the other column (prominent)
@@ -60,91 +98,76 @@ endif
 highlight default HexPairActive cterm=underline gui=underline
 highlight default link HexPairMirror IncSearch
 
+" Highlight group for the page banner (leading/trailing comment lines).
+" xxd.vim's bundled syntax file defines no comment group to link to
+" (only xxdAddress/xxdSep/xxdAscii, all tied to real dump lines), so
+" this is the plugin's own, following the HexPairActive/HexPairMirror
+" precedent above.
+highlight default link HexPairPageBanner Comment
+
+" --------------------------------------------------------------------------
+" Vim version gate
+" --------------------------------------------------------------------------
+"
+" ONLY the length-changing (splice) write needs readblob(), available
+" since patch 8.2.4906, and 64-bit Numbers for large absolute offsets
+" (+num64, standard on modern builds). Everything else - reading pages,
+" navigating them, and the same-length in-place write - runs on the
+" Vim 8.0 baseline the rest of the plugin requires, so the check is
+" made at the moment a length-changing write is attempted rather than
+" refusing to load the feature at all. Factored into a function of an
+" explicit boolean (rather than calling has() internally) so its
+" failure branch - which cannot be produced by an actual old Vim in
+" this project's test environment - can be tested by passing 0.
+
+" Global (not script-local) so test/run-tests.sh can call it directly
+" with both true and false without needing an actual unsupported Vim.
+function! HexPairPagedGateMessage(supported) abort
+  if a:supported
+    return ''
+  endif
+  return 'hexpair: inserting or deleting bytes needs Vim patch 8.2.4906 or '
+        \ . 'later with +num64 (readblob(), 64-bit Numbers for large file '
+        \ . 'offsets); this Vim does not qualify, so only same-length edits '
+        \ . 'can be written - nothing was written'
+endfunction
+
+" Checked where it matters: s:Splice(). has() cannot be faked, so the
+" message itself lives in the function above, which the suite tests
+" directly.
+function! s:SpliceSupported() abort
+  return has('patch-8.2.4906') && has('num64')
+endfunction
+
+" Global (not script-local) so it is directly testable: a positive
+" multiple of bytesperline is required, and both are passed explicitly
+" rather than read from g: internally, so tests do not need to fiddle
+" with global state to exercise the error branch.
+function! HexPairPagedSizeError(size, bytesperline) abort
+  if a:size <= 0 || a:size % a:bytesperline != 0
+    return printf('hexpair: g:hexpair_page_size (%d) must be a positive '
+          \ . 'multiple of g:hexpair_bytes_per_line (%d)',
+          \ a:size, a:bytesperline)
+  endif
+  return ''
+endfunction
+
+" Blocks the length-changing write copies in. Bounded on purpose: the
+" whole point of the paged mode is that memory use does not follow the
+" size of the file.
+let s:blocksize = 8 * 1024 * 1024
+
+" Blocks the length-changing write copies in. Bounded on purpose: the
+" whole point of paging is that memory use does not follow the size of
+" the file.
+let s:blocksize = 8 * 1024 * 1024
+
 " ---------------------------------------------------------------------------
 " Layout helpers
 " ---------------------------------------------------------------------------
 
-" The dump is always produced with 'xxd -g 1 -c N', which yields a fixed
-" layout (1-based columns):
-"
-"   00000000: 48 65 6c 6c 6f 20 57 6f 72 6c 64 21 0a 0a 0a 0a  Hello World!....
-"   |offset |^ hex area (3 chars per byte, last byte has no    ^ ASCII area
-"            |trailing space)                                  |
-"            hexstart                                          asciistart
-"
-" Returns [bytes_per_line, hexstart, hexend, asciistart].
-function! s:Layout() abort
-  " Use the per-buffer value captured when the dump was generated, so that
-  " changing g:hexpair_bytes_per_line while a dump is open (or using
-  " different values in different buffers) cannot desynchronize the layout
-  " arithmetic from the actual dump geometry.
-  let n = get(b:, 'hexpair_n', g:hexpair_bytes_per_line)
-  let hexstart   = 11                      " 8 hex digits + ': '
-  let hexend     = hexstart + 3 * n - 2    " last hex digit of the last byte
-  let asciistart = hexend + 3              " two spaces after the hex area
-  return [n, hexstart, hexend, asciistart]
-endfunction
 
-" ---------------------------------------------------------------------------
-" Pair highlighting
-" ---------------------------------------------------------------------------
 
-function! s:ClearHighlight() abort
-  if exists('w:hexpair_ids')
-    for id in w:hexpair_ids
-      silent! call matchdelete(id)
-    endfor
-  endif
-  let w:hexpair_ids = []
-endfunction
-
-function! s:Highlight() abort
-  call s:ClearHighlight()
-  if !get(b:, 'hexpair_active', 0)
-    return
-  endif
-
-  " Track the cursor for s:PostReload(): when BufReadPre fires the old
-  " buffer content is already gone, so the position must be remembered
-  " while the dump is still in the buffer.  This runs on every
-  " CursorMoved, which keeps it current for any interactive movement.
-  let b:hexpair_last_pos = [line('.'), col('.')]
-
-  let [n, hexstart, hexend, asciistart] = s:Layout()
-  let lnum    = line('.')
-  let col     = col('.')
-  let linelen = strlen(getline('.'))
-
-  " Determine the byte index (0 .. n-1) from the cursor column and remember
-  " which column the cursor is in - the counterpart gets the prominent
-  " highlight, the cursor side only the subtle one.
-  let idx    = -1
-  let in_hex = 0
-  if col >= hexstart && col <= hexend
-    let idx    = (col - hexstart) / 3
-    let in_hex = 1
-  elseif col >= asciistart && col < asciistart + n
-    let idx = col - asciistart
-  endif
-  if idx < 0
-    return
-  endif
-
-  " Skip padding on a short last line (fewer than n bytes): if there is no
-  " ASCII character at the computed position, the byte does not exist.
-  if asciistart + idx > linelen
-    return
-  endif
-
-  " Highlight both representations of the byte: two hex digits + one
-  " ASCII character, with the group chosen by cursor side.
-  let hexgrp   = in_hex ? 'HexPairActive' : 'HexPairMirror'
-  let asciigrp = in_hex ? 'HexPairMirror' : 'HexPairActive'
-  call add(w:hexpair_ids,
-        \ matchaddpos(hexgrp,   [[lnum, hexstart + idx * 3, 2]]))
-  call add(w:hexpair_ids,
-        \ matchaddpos(asciigrp, [[lnum, asciistart + idx, 1]]))
-endfunction
 
 " ---------------------------------------------------------------------------
 " xxd resolution
@@ -169,76 +192,20 @@ endfunction
 " Reverse conversion
 " ---------------------------------------------------------------------------
 
-" Strip one dump line down to its hex payload.  Steps (formerly a sed/tr
-" pipeline, rewritten in VimScript so the plugin also works on Windows,
-" where sed and tr are not available):
-"   1. strip leading whitespace (so bare hex lines may be indented for
-"      alignment without being eaten by the double-space rule below),
-"   2. strip everything up to the first ':' (the offset column; lines
-"      without a colon are left intact, so bare inserted hex lines work),
-"   3. strip everything from the first run of two spaces (the ASCII
-"      column, including the padding of a short last line),
-"   4. drop any remaining non-hex characters as a safety net.
-function! s:StripDumpLine(line) abort
-  let l = substitute(a:line, '^\s*', '', '')
-  let l = substitute(l, '^[^:]*:', '', '')
-  let l = substitute(l, '  .*$', '', '')
-  return substitute(l, '[^0-9a-fA-F ]', '', 'g')
+
+
+
+" Would this buffer be written as zero bytes?  A binary buffer has two
+" representations of that: the state a 0-byte file is read into, where
+" line2byte() reports there is no line at all, and one empty line with
+" 'eol' off.  A buffer holding a single 0a byte looks like neither -
+" which is what makes the two cases distinguishable, since by content
+" both are one empty line.
+function! s:ZeroBytes() abort
+  return line('$') == 1 && getline(1) ==# ''
+        \ && (line2byte(1) < 0 || !&l:eol)
 endfunction
 
-" Scan the dump for input that the reverse conversion would otherwise
-" mangle silently.  Returns {} when the dump is clean, or a dictionary
-" with 'msg' and - for a locatable offender - 'lnum'/'col' (1-based,
-" column in the original line).  Two classes of errors:
-"   - a character in the hex area that is not a hex digit or a space
-"     (it would be dropped by the safety net of s:StripDumpLine()),
-"   - an odd TOTAL number of hex digits (the last nibble would be
-"     dropped by xxd -r -p).
-" The scanned payload region of each line MUST mirror the stripping
-" logic of s:StripDumpLine() exactly: skip leading whitespace and the
-" offset column (up to the first ':'), stop at the first run of two
-" spaces (the ASCII column) - keep the two in sync.
-function! s:ValidateDump() abort
-  let digits = 0
-  for lnum in range(1, line('$'))
-    let line = getline(lnum)
-    let start = matchend(line, '^\s*')
-    let colon = stridx(line, ':')
-    if colon >= 0
-      let start = colon + 1
-    endif
-    let end = match(line, '  ', start)
-    if end < 0
-      let end = strlen(line)
-    endif
-    let bad = match(line, '[^0-9a-fA-F ]', start)
-    if bad >= 0 && bad < end
-      return {'lnum': lnum, 'col': bad + 1,
-            \ 'msg': printf('invalid character %s in the hex area (line %d, column %d)',
-            \               string(matchstr(line, '.', bad)), lnum, bad + 1)}
-    endif
-    let digits += strlen(substitute(strpart(line, start, end - start),
-          \                         '[^0-9a-fA-F]', '', 'g'))
-  endfor
-  if digits % 2
-    return {'msg': 'odd number of hex digits - the last nibble would be dropped'}
-  endif
-  return {}
-endfunction
-
-" Convert the dump back to binary while ignoring the offset and ASCII
-" columns entirely, so that lines inserted or reordered by the user do not
-" need correct offsets (plain 'xxd -r' seeks according to them and breaks
-" on edited dumps).  The stripped buffer is fed to 'xxd -r -p', which reads
-" free-form hex pairs and is whitespace-insensitive.
-" Consequence: within the hex area keep bytes separated by at most ONE
-" space - a double space is interpreted as the start of the ASCII column.
-function! s:ReverseDump() abort
-  let lines = map(getline(1, '$'), {_, l -> s:StripDumpLine(l)})
-  silent! undojoin
-  call setline(1, lines)
-  silent execute '%!' . s:xxd . ' -r -p'
-endfunction
 
 " ---------------------------------------------------------------------------
 " ---------------------------------------------------------------------------
@@ -253,41 +220,7 @@ function! s:BufOffset() abort
   return off < 0 ? 0 : off
 endfunction
 
-" 0-based byte offset of the byte under the cursor in the DUMP buffer.
-" Bytes on preceding lines are counted from their actual (stripped) hex
-" content, so the result stays exact even after lines were inserted,
-" deleted or reordered.  On the current line the byte index is likewise
-" derived from content: the number of complete hex pairs actually present
-" before the cursor - which stays correct on edited lines (bare inserted
-" lines, extra bytes appended into a line) where layout coordinates would
-" be wrong.  Only when the cursor sits in the ASCII column (detected by a
-" double space before it) is the index mapped by layout.
-function! s:DumpOffset() abort
-  let [n, hexstart, hexend, asciistart] = s:Layout()
-  let prefix = strpart(getline('.'), 0, col('.') - 1)
-  if prefix =~# '  '
-    " A double space before the cursor means the hex payload of this line
-    " ended (same rule as the reverse conversion): the cursor is in the
-    " ASCII column - map it by layout.
-    let [idx, l:unused] = s:CursorByte()
-  else
-    let stripped = substitute(prefix, '^\s*', '', '')
-    let stripped = substitute(stripped, '^[^:]*:', '', '')
-    let idx = strlen(substitute(stripped, '[^0-9a-fA-F]', '', 'g')) / 2
-  endif
-  let off = idx
-  for line in getline(1, line('.') - 1)
-    let off += strlen(substitute(s:StripDumpLine(line), ' ', '', 'g')) / 2
-  endfor
-  return off
-endfunction
 
-" [lnum, col] of the given 0-based byte offset in a canonical dump; the
-" column points at the first hex digit of the byte (HEX column).
-function! s:DumpPos(off) abort
-  let [n, hexstart, hexend, asciistart] = s:Layout()
-  return [a:off / n + 1, hexstart + (a:off % n) * 3]
-endfunction
 
 " Length in bytes of the byte order mark the buffer would be written with.
 function! s:BomLen() abort
@@ -337,53 +270,7 @@ function! s:PostReloadOffset(pos) abort
   return line2byte(lnum) - 1 + a:pos.wcol + (lnum == 1 ? a:pos.bom : 0)
 endfunction
 
-" ---------------------------------------------------------------------------
-" Safe writing while in hex mode
-" ---------------------------------------------------------------------------
 
-" Before a write: convert the dump back to binary so the file on disk gets
-" the real content, not the textual dump.  An invalid dump aborts the
-" write instead: the exception propagates out of the BufWritePre
-" autocommand, Vim cancels the write, and both the file on disk and the
-" dump in the buffer keep their previous content.
-function! s:PreWrite() abort
-  if !get(b:, 'hexpair_active', 0)
-    return
-  endif
-  let err = s:ValidateDump()
-  if !empty(err)
-    if has_key(err, 'lnum')
-      call cursor(err.lnum, err.col)
-      call s:Highlight()
-    endif
-    throw 'hexpair: ' . err.msg . '; nothing was written'
-  endif
-  let b:hexpair_off = s:DumpOffset()
-  call s:ReverseDump()
-endfunction
-
-" After the write: re-create the dump so the user keeps working in hex
-" mode, with the cursor back on the SAME BYTE (not the same screen
-" coordinates - offsets of all lines may have shifted if bytes were
-" inserted or deleted).
-function! s:PostWrite() abort
-  if !get(b:, 'hexpair_active', 0)
-    return
-  endif
-  silent execute '%!' . s:xxd . ' -g 1 -c ' . b:hexpair_n
-  if exists('b:hexpair_off')
-    call cursor(s:DumpPos(b:hexpair_off))
-    unlet b:hexpair_off
-  endif
-  setlocal nomodified
-  " The file on disk now matches this dump: it is the new baseline for
-  " both the toggle-off modified check and the edited-while-in-hex-mode
-  " detection in s:FromHex().
-  let b:hexpair_saved.modified = 0
-  let b:hexpair_dump_tick = b:changedtick
-  call s:Highlight()
-  redraw!
-endfunction
 
 " ---------------------------------------------------------------------------
 " Global 'paste' management
@@ -398,7 +285,10 @@ endfunction
 " other buffer keeps the user's own 'paste' state.  Disable with
 " g:hexpair_paste = 0.
 function! s:PasteOn() abort
-  if !g:hexpair_paste || !get(b:, 'hexpair_active', 0)
+  if !g:hexpair_paste
+    return
+  endif
+  if !get(b:, 'hexpair_page_active', 0)
     return
   endif
   if !exists('b:hexpair_paste_save')
@@ -421,60 +311,476 @@ function! s:PasteOff() abort
   endif
 endfunction
 
-" ---------------------------------------------------------------------------
-" Surviving a file reload (:e, :e!)
-" ---------------------------------------------------------------------------
-
-" Without this hook a reload would leave the raw binary content in a
-" buffer that still believes it is a dump - the highlight arithmetic
-" would point nowhere and the next :w would feed the binary content to
-" the reverse conversion.  Instead, the freshly read content is dumped
-" again: hex mode survives the reload and the cursor stays on the same
-" byte offset.
-function! s:PostReload() abort
-  if !get(b:, 'hexpair_active', 0)
-    return
-  endif
-  " Refresh the parts of the toggle-off snapshot that the reload
-  " re-detected from disk; the reloaded buffer is unmodified by
-  " definition.
-  let b:hexpair_saved.binary   = &l:binary
-  let b:hexpair_saved.eol      = &l:eol
-  let b:hexpair_saved.modified = 0
-  silent execute '%!' . s:xxd . ' -g 1 -c ' . b:hexpair_n
-  setlocal filetype=xxd
-  setlocal nomodified
-  " The reloaded file is the new baseline for the edited-while-in-hex-
-  " mode detection in s:FromHex() as well.
-  let b:hexpair_dump_tick = b:changedtick
-  " Map the last tracked cursor position back to a byte offset by
-  " canonical layout: exact for an unedited dump (:e), best-effort for
-  " a discarded edited one (:e!), where the old content that an exact
-  " mapping would need no longer exists.
-  if exists('b:hexpair_last_pos')
-    let [n, hexstart, hexend, asciistart] = s:Layout()
-    let [lnum, col] = b:hexpair_last_pos
-    if col >= asciistart
-      let idx = col - asciistart
-    elseif col >= hexstart
-      let idx = (col - hexstart) / 3
-    else
-      let idx = 0
-    endif
-    if idx >= n
-      let idx = n - 1
-    endif
-    call cursor(s:DumpPos((lnum - 1) * n + idx))
-  endif
-  call s:Highlight()
-  redraw!
-endfunction
 
 " ---------------------------------------------------------------------------
 " Mode switching
 " ---------------------------------------------------------------------------
 
-function! s:ToHex() abort
+
+
+
+" ---------------------------------------------------------------------------
+" Refreshing the dump
+" ---------------------------------------------------------------------------
+
+
+" ---------------------------------------------------------------------------
+" Page boundary arithmetic
+" ---------------------------------------------------------------------------
+
+" Pages are plain fixed-size slices of the file: page idx covers
+" [idx * size, idx * size + size), the last one short. Nothing about
+" the file's content or xxd's formatting perturbs that - see
+" s:PagedLineLayout() for why the offset column widening past 4 GiB
+" does not have to.
+"
+" Global (not script-local) and pure (no I/O, no buffer/window state):
+" directly testable with a fabricated `total` far larger than any real
+" test fixture, without needing an actual multi-GiB file.
+"
+" [base, len] (0-based byte offset, byte count) of page `idx` (0-based)
+" for a file of `total` bytes with page size `size`. Returns [-1, -1]
+" for an out-of-range index.
+function! HexPairPagedBounds(idx, size, total) abort
+  if a:idx < 0
+    return [-1, -1]
+  endif
+  let base = a:idx * a:size
+  if base >= a:total
+    return [-1, -1]
+  endif
+  return [base, min([a:size, a:total - base])]
+endfunction
+
+" Total number of pages for a file of `total` bytes at page size
+" `size` (0 for an empty file).
+function! HexPairPagedTotalPages(size, total) abort
+  return a:total <= 0 ? 0 : (a:total + a:size - 1) / a:size
+endfunction
+
+" Hex digit width xxd uses for offsets in the same width-segment as
+" `base` (constant across a whole page by construction - see above).
+function! s:HexDigitWidth(base) abort
+  return max([8, strlen(printf('%x', a:base))])
+endfunction
+
+" 1-based column of the first hex digit on a dump line whose offset
+" column holds `base`. The offset column is the hex digits, a ':' and a
+" space - so the first digit sits one column past all three, which for
+" the base plugin's fixed eight digits is its hardcoded 11.
+function! s:HexStart(base) abort
+  return s:HexDigitWidth(a:base) + 3
+endfunction
+
+" ---------------------------------------------------------------------------
+" Page banner
+" ---------------------------------------------------------------------------
+
+" Any line whose FIRST character is '"' is a full-line comment,
+" contributing zero bytes - never ambiguous with real xxd output (data
+" lines always start with a hex digit) or with a bare inserted hex
+" line (never starts with '"' either).
+function! s:IsBannerLine(line) abort
+  return a:line[0] ==# '"'
+endfunction
+
+" Byte positions in the banner are 1-based and inclusive (byte 1 is the
+" file's first byte), unlike a:base/a:len themselves (0-based, like
+" everything else in this file, matching the hex dump's own offset
+" column - real xxd -s output, left alone): the LAST page's displayed
+" end must equal the total for it to read as "covers through the end
+" of the file", which only holds with 1-based-inclusive numbering
+" (0-based-inclusive is off by one short of the total; only relevant
+" here, this is purely a display convention for these two human-facing
+" summaries, not the offsets xxd itself prints per line).
+function! s:BannerTop(pageidx, totalpages, base, len, total, fname) abort
+  return printf('" hexpair: page %d/%d  bytes %d-%d of %d  %s',
+        \ a:pageidx + 1, a:totalpages, a:base + 1, a:base + a:len,
+        \ a:total, a:fname)
+endfunction
+
+function! s:BannerBottom(pageidx, totalpages) abort
+  return printf('" hexpair: end of page %d/%d', a:pageidx + 1, a:totalpages)
+endfunction
+
+" ---------------------------------------------------------------------------
+" Layout helpers
+" ---------------------------------------------------------------------------
+
+" Analogous to plugin/hexpair.vim's s:Layout(), but hexstart is not the
+" hardcoded 11: xxd widens its offset column past eight hex digits once
+" an offset reaches 4 GiB (16^8), and again at 64 GiB, and so on -
+" verified empirically, a single dump can show "fffffffc:" immediately
+" followed by "100000000:". So the width is read off the LINE itself,
+" from where its offset column ends, which
+"   - needs no constraint whatsoever on where pages may start, so pages
+"     stay plain fixed-size slices even across a widening (a page that
+"     straddles one simply carries both widths, each line correct),
+"   - and gets the bare hex lines a user may insert right too: a line
+"     with no offset column at all starts its payload after its indent.
+" The rule for where the offset column ends is the one the whole plugin
+" shares (invariant 1): up to the first ':'.
+" Returns [bytes_per_line, hexstart, hexend, asciistart].
+function! s:PagedLineLayout(lnum) abort
+  let line  = getline(a:lnum)
+  let colon = stridx(line, ':')
+  let hexstart = colon < 0 ? matchend(line, '^\s*') + 1 : colon + 3
+  return s:PagedLayoutFor(hexstart)
+endfunction
+
+" The same layout for a line whose offset column holds `off`, for
+" callers that know the offset but do not have the line (yet).
+function! s:PagedOffsetLayout(off) abort
+  return s:PagedLayoutFor(s:HexStart(a:off))
+endfunction
+
+function! s:PagedLayoutFor(hexstart) abort
+  let n = b:hexpair_n
+  let hexend     = a:hexstart + 3 * n - 2
+  let asciistart = hexend + 3
+  return [n, a:hexstart, hexend, asciistart]
+endfunction
+
+" ---------------------------------------------------------------------------
+" Reverse conversion (stripping and validation only - Stage 1 has no
+" write path yet; kept in sync now so a later stage's :w reuses this
+" unchanged)
+" ---------------------------------------------------------------------------
+
+" THE payload rule of the paged mode, in ONE function: a banner line
+" contributes nothing at all; any other line loses its offset column
+" (everything up to the first ':', or just its indent if it has none, so
+" a bare hex line the user inserted still works) and its ASCII column
+" (everything from the first run of two spaces). Banner-aware
+" counterpart of plugin/hexpair.vim's s:StripDumpLine(), extending
+" invariant 1 - the stripper, the validator and the cursor mapping all
+" go through here, so the three cannot drift apart.
+"
+" Anchored matchend() plus a plain stridx() rather than a substitute()
+" with a pattern that has to be tried at every column: this runs once
+" per line of a page, and a page is thousands of lines.
+function! s:PagedPayload(line) abort
+  if s:IsBannerLine(a:line)
+    return ''
+  endif
+  let start = matchend(a:line, '^\s*[^:]*:')
+  if start < 0
+    let start = matchend(a:line, '^\s*')
+  endif
+  let ascii = stridx(a:line, '  ', start)
+  return ascii < 0 ? strpart(a:line, start)
+        \          : strpart(a:line, start, ascii - start)
+endfunction
+
+function! s:PagedStripDumpLine(line) abort
+  return substitute(s:PagedPayload(a:line), '[^0-9a-fA-F ]', '', 'g')
+endfunction
+
+" Describe the offending character on one line, for the error message
+" and for parking the cursor on it. Only called for a line s:PagedScan()
+" already rejected, so the match is guaranteed to be found.
+function! s:PagedBadChar(lnum) abort
+  let line  = getline(a:lnum)
+  let start = matchend(line, '^\s*')
+  let colon = stridx(line, ':')
+  if colon >= 0
+    let start = colon + 1
+  endif
+  let bad = match(line, '[^0-9a-fA-F ]', start)
+  return {'lnum': a:lnum, 'col': bad + 1,
+        \ 'msg': printf('invalid character %s in the hex area (line %d, column %d)',
+        \               string(matchstr(line, '.', bad)), a:lnum, bad + 1)}
+endfunction
+
+" ONE pass over the page, answering everything a write needs:
+"
+"   err    {} when the page is clean, otherwise {'msg'} plus 'lnum'/'col'
+"          for a locatable offender. Two classes of input would be
+"          mangled silently: a character in the hex area that is neither
+"          a hex digit nor a space (s:PagedStripDumpLine() would drop
+"          it), and an odd TOTAL number of hex digits (xxd -r -p would
+"          drop the last nibble). On an error the other fields are absent.
+"   lines  the stripped hex payload of every line, ready for xxd -r -p
+"   bytes  how many bytes lines 1 .. a:lnum-1 hold (a:lnum = 0: not wanted)
+"
+" One pass rather than three - validate, map the cursor, strip - because
+" every separate walk over a page costs real time at any page size worth
+" having.
+function! s:PagedScan(lnum) abort
+  let lines  = getline(1, '$')
+  let digits = 0
+  let bytes  = 0
+  let i      = 0
+  let total  = len(lines)
+  while i < total
+    let payload = s:PagedPayload(lines[i])
+    if payload =~# '[^0-9a-fA-F ]'
+      return {'err': s:PagedBadChar(i + 1)}
+    endif
+    let lines[i] = payload
+    " Only hex digits and spaces are left, so counting the spaces away
+    " is enough - and cheaper than substituting them out.
+    let n = strlen(payload) - count(payload, ' ')
+    let digits += n
+    if i + 1 < a:lnum
+      let bytes += n / 2
+    endif
+    let i += 1
+  endwhile
+  if digits % 2
+    return {'err': {'msg': 'odd number of hex digits - the last nibble would be dropped'}}
+  endif
+  return {'err': {}, 'lines': lines, 'bytes': bytes}
+endfunction
+
+" Scan without wanting anything but the verdict.
+function! s:PagedValidateDump() abort
+  return s:PagedScan(0).err
+endfunction
+
+" Thin global wrappers so test/run-tests.sh can exercise the banner-
+" aware stripping/validation on their own, independently of the write
+" path that now also drives them.
+function! HexPairPagedStripLine(line) abort
+  return s:PagedStripDumpLine(a:line)
+endfunction
+
+function! HexPairPagedValidate() abort
+  return s:PagedValidateDump()
+endfunction
+
+" Test hooks: the layout of one line, and the absolute file offset the
+" cursor is on. Both are what the paged mode's correctness across a
+" 4 GiB offset-width change comes down to, and neither is otherwise
+" observable from outside this script scope.
+function! HexPairPagedLineHexStart(lnum) abort
+  return s:PagedLineLayout(a:lnum)[1]
+endfunction
+
+" Move the cursor to the HEX column, the ASCII column or the opposite
+" one, staying on the same byte - :HexPairGoHex and friends hand a paged
+" buffer over here, because the layout of a paged line is its business.
+function! s:PagedJumpTo(target) abort
+  if !s:RequirePaged()
+    return
+  endif
+  let lnum = line('.')
+  if s:IsBannerLine(getline(lnum))
+    return
+  endif
+
+  " Remembered for s:Reread(): :e moves the cursor away before BufReadCmd
+  " runs, so the position has to have been noted while the user was still
+  " on it. Recorded only for a real dump line, which is also what keeps
+  " that very move - onto the top banner - from overwriting it first.
+  let b:hexpair_last_pos = [lnum, col('.')]
+  let [n, hexstart, hexend, asciistart] = s:PagedLineLayout(lnum)
+  let idx = s:PagedCursorByte()
+  let in_hex = col('.') <= hexend
+  let target = a:target ==# 'swap' ? (in_hex ? 'ascii' : 'hex') : a:target
+  if target ==# 'hex'
+    call cursor(lnum, hexstart + idx * 3)
+  else
+    call cursor(lnum, asciistart + idx)
+  endif
+  call s:PagedHighlight()
+endfunction
+
+
+function! HexPairPagedByteOffset() abort
+  return s:PagedByteOffset()
+endfunction
+
+" ---------------------------------------------------------------------------
+" Pair highlighting (duplicated from plugin/hexpair.vim's
+" s:Highlight()/s:ClearHighlight(): same visual behaviour, but keyed
+" off b:hexpair_page_active and s:PagedLineLayout(), and skips the banner
+" lines, which the base plugin's dump never has)
+" ---------------------------------------------------------------------------
+
+function! s:PagedClearHighlight() abort
+  if exists('w:hexpair_page_ids')
+    for id in w:hexpair_page_ids
+      silent! call matchdelete(id)
+    endfor
+  endif
+  let w:hexpair_page_ids = []
+endfunction
+
+function! s:PagedHighlight() abort
+  call s:PagedClearHighlight()
+  if !get(b:, 'hexpair_page_active', 0) || !s:IsHexView()
+    return
+  endif
+
+  let lnum = line('.')
+  if s:IsBannerLine(getline(lnum))
+    return
+  endif
+
+  " Remembered for s:Reread(): :e moves the cursor away before BufReadCmd
+  " runs, so the position has to have been noted while the user was still
+  " on it. Recorded only for a real dump line, which is also what keeps
+  " that very move - onto the top banner - from overwriting it first.
+  let b:hexpair_last_pos = [lnum, col('.')]
+
+  let [n, hexstart, hexend, asciistart] = s:PagedLineLayout(lnum)
+  let col     = col('.')
+  let linelen = strlen(getline('.'))
+
+  let idx    = -1
+  let in_hex = 0
+  if col >= hexstart && col <= hexend
+    let idx    = (col - hexstart) / 3
+    let in_hex = 1
+  elseif col >= asciistart && col < asciistart + n
+    let idx = col - asciistart
+  endif
+  if idx < 0
+    return
+  endif
+
+  if asciistart + idx > linelen
+    return
+  endif
+
+  let hexgrp   = in_hex ? 'HexPairActive' : 'HexPairMirror'
+  let asciigrp = in_hex ? 'HexPairMirror' : 'HexPairActive'
+  call add(w:hexpair_page_ids,
+        \ matchaddpos(hexgrp,   [[lnum, hexstart + idx * 3, 2]]))
+  call add(w:hexpair_page_ids,
+        \ matchaddpos(asciigrp, [[lnum, asciistart + idx, 1]]))
+endfunction
+
+" ---------------------------------------------------------------------------
+" Opening and navigating pages
+" ---------------------------------------------------------------------------
+
+" Bounds for page `idx` (0-based) of a `size`-byte file at `pagesize`
+" bytes/page, reporting the standard "page N does not exist" error via
+" echomsg if out of range (a non-numeric page number, e.g. from
+" str2nr() on bad :HexPairOpen input, ends up negative here too -
+" HexPairPagedBounds() reports that the same way, base < 0). Returns
+" [base, len, total, totalpages]; callers must check base before using
+" the rest.
+" Deliberately callable BEFORE any buffer exists (pure arithmetic plus
+" one getfsize() - no buffer/window state), so s:Open() can validate
+" the requested page and bail out with nothing created at all on a bad
+" one, rather than leaving a renamed, half-initialized scratch buffer
+" behind for the caller to clean up.
+" What the banner and :HexPairPages call this buffer's content. A spilled
+" unnamed buffer has no file name worth showing - its temp is an
+" implementation detail - so it says so instead.
+function! s:PageLabel() abort
+  return get(b:, 'hexpair_page_spill', '') !=# ''
+        \ ? '[unnamed buffer]' : b:hexpair_page_file
+endfunction
+
+function! s:ResolvePage(file, pagesize, idx) abort
+  let total = getfsize(a:file)
+  let totalpages = HexPairPagedTotalPages(a:pagesize, total)
+  let [base, len] = HexPairPagedBounds(a:idx, a:pagesize, total)
+  if base < 0
+    echohl ErrorMsg
+    echomsg printf('hexpair: page %d does not exist (file has %d page%s)',
+          \ a:idx + 1, totalpages, totalpages == 1 ? '' : 's')
+    echohl None
+  endif
+  return [base, len, total, totalpages]
+endfunction
+
+" Populates the CURRENT (already-created, empty) buffer with page
+" `pageidx` (0-based) of `b:hexpair_page_file` and refreshes all
+" buffer-local page state. Does not create or rename the buffer -
+" callers do that first (s:Open() for the initial page, s:GotoPage()
+" when navigating) - and, unlike s:Open(), an invalid `pageidx` here
+" leaves an EXISTING, already-loaded buffer showing its previous page
+" untouched, which is the correct behaviour for :HexPairPageNext and
+" friends running past either end.
+function! s:LoadPage(pageidx) abort
+  " No bytes means no pages - but the file is still perfectly openable,
+  " and saying so is more use than refusing to show it.
+  if getfsize(b:hexpair_page_file) <= 0
+    call s:LoadEmpty()
+    return 1
+  endif
+  let [base, len, total, totalpages] =
+        \ s:ResolvePage(b:hexpair_page_file, b:hexpair_page_size, a:pageidx)
+  if base < 0
+    return 0
+  endif
+
+  let b:hexpair_page_index      = a:pageidx
+  let b:hexpair_page_base       = base
+  let b:hexpair_page_len        = len
+  let b:hexpair_page_total      = total
+  let b:hexpair_page_totalpages = totalpages
+  let b:hexpair_page_ftime      = getftime(b:hexpair_page_file)
+  let b:hexpair_n               = g:hexpair_bytes_per_line
+  " Where the page's FIRST line starts its hex column; later lines
+  " derive their own (s:PagedLineLayout()), which differs only on a
+  " page that straddles an offset-width change.
+  let b:hexpair_page_hexstart   = s:HexStart(base)
+
+  " Replacing the page must not be an undoable edit: undo history that
+  " survived a page turn would let a single |u| put the bytes of a
+  " DIFFERENT part of the file into a buffer that now claims to be this
+  " page - and a :w would then patch them in at this page's offset.
+  " |clear-undo|: making the change with 'undolevels' at -1 discards the
+  " history; restoring the option afterwards resumes normal undo, so
+  " edits made to the page itself stay undoable. Buffer-local, not
+  " global: 'undolevels' is global-local, and a buffer-local value would
+  " otherwise keep winning over the global one and the history survive.
+  let save_ul = &l:undolevels
+  setlocal noreadonly modifiable
+  try
+    setlocal undolevels=-1
+    silent %delete _
+    silent execute '%!' . s:xxd . printf(' -s %d -l %d -g 1 -c %d %s',
+          \ base, len, b:hexpair_n, shellescape(b:hexpair_page_file))
+    let b:hexpair_banner_top = s:BannerTop(a:pageidx, totalpages, base,
+          \ len, total, s:PageLabel())
+    let b:hexpair_banner_bottom = s:BannerBottom(a:pageidx, totalpages)
+    call append(0, b:hexpair_banner_top)
+    call append(line('$'), b:hexpair_banner_bottom)
+  finally
+    let &l:undolevels = save_ul
+  endtry
+
+  " xxd runs through the shell, which can fail for reasons Vim never
+  " reports - leaving an empty or short buffer presented as the page,
+  " and a later :w patching that into the file. The dump's shape is
+  " known exactly, so check it: one line per bytesperline bytes, plus
+  " the two banner lines.
+  let expect = (len + b:hexpair_n - 1) / b:hexpair_n + 2
+  if line('$') != expect
+    throw printf('hexpair: reading page %d of %s produced %d lines, '
+          \ . 'expected %d - is xxd working?',
+          \ a:pageidx + 1, b:hexpair_page_file, line('$'), expect)
+  endif
+
+  call cursor(2, b:hexpair_page_hexstart)
+
+  setlocal filetype=xxd
+  call s:ApplyBannerSyntax()
+  setlocal nomodified
+  let b:hexpair_page_active = 1
+  let b:hexpair_view = 'hex'
+  call s:PasteOn()
+  call s:PagedHighlight()
+  redraw!
+  return 1
+endfunction
+
+function! s:ApplyBannerSyntax() abort
+  if !has('syntax') || !exists('g:syntax_on')
+    return
+  endif
+  syntax match HexPairPageBanner '^".*$'
+endfunction
+
+function! s:Open(file, ...) abort
+  let page = a:0 > 0 ? str2nr(a:1) : 1
   let s:xxd = s:ResolveXxd()
   if s:xxd ==# ''
     echohl ErrorMsg
@@ -482,279 +788,55 @@ function! s:ToHex() abort
     echohl None
     return
   endif
-
-  " If the buffer was NOT loaded in binary mode (plain 'vim file' instead of
-  " 'vim -b file'), Vim has already applied read-time conversions: CR
-  " stripping for fileformat=dos, possible fileencoding transcoding, etc.
-  " Setting 'binary' now cannot undo those, so re-read the file with ++bin
-  " to get the exact on-disk bytes.  This is only possible for an unmodified
-  " buffer backed by a readable file; otherwise fall back to dumping the
-  " in-memory content and warn the user.
-  let off = -1
-  if !&l:binary
-    if !&l:modified && filereadable(expand('%'))
-      " Capture the cursor byte offset BEFORE the reload, in file-byte
-      " terms: the reload changes the buffer content (BOM bytes and CRs
-      " materialize, fileencoding transcoding is undone) while the cursor
-      " keeps its old line/column coordinates, which would then point at
-      " a different byte.
-      let pos = s:PreReloadPos()
-      silent edit ++bin
-      let off = s:PostReloadOffset(pos)
-    else
-      setlocal binary
-      echohl WarningMsg
-      echomsg 'hexpair: buffer not loaded in binary mode and cannot be'
-            \ 'reloaded; the dump shows buffer content, not on-disk bytes'
-      echohl None
-    endif
-  endif
-
-  " Remember buffer-local settings so they can be restored on toggle-off.
-  " Taken AFTER the possible ++bin reload so that toggling off keeps the
-  " buffer in a state consistent with its (binary) content.
-  let b:hexpair_saved = {
-        \ 'binary':   &l:binary,
-        \ 'eol':      &l:eol,
-        \ 'filetype': &l:filetype,
-        \ 'modified': &l:modified,
-        \ }
-
-  " Note: 'eol' is deliberately left as detected by the binary read - it
-  " controls whether the final newline byte is passed to the filter, so
-  " forcing 'noeol' here would hide a genuine trailing 0a from the dump.
-
-  " Snapshot the line width for this buffer: the dump about to be
-  " generated is laid out with this value, and all later position and
-  " highlight arithmetic must keep using it even if the global setting
-  " changes meanwhile.
-  let b:hexpair_n = g:hexpair_bytes_per_line
-
-  " Convert, then place the cursor on the SAME BYTE it was on in the
-  " normal view - in the HEX column of the dump.  If the offset was not
-  " already captured before a ++bin reload, compute it now from the
-  " (binary) buffer.
-  if off < 0
-    let off = s:BufOffset()
-  endif
-  if get(g:, 'hexpair_debug', 0)
-    echomsg printf('hexpair ToHex: pos=%d,%d off=%d -> dump target %s',
-          \ line('.'), col('.'), off, string(s:DumpPos(off)))
-  endif
-  silent execute '%!' . s:xxd . ' -g 1 -c ' . b:hexpair_n
-  call cursor(s:DumpPos(off))
-  if get(g:, 'hexpair_debug', 0)
-    echomsg printf('hexpair ToHex: landed %d,%d', line('.'), col('.'))
-  endif
-
-  setlocal filetype=xxd
-  let b:hexpair_active = 1
-
-  " Only mark the buffer modified if it really was before the conversion;
-  " the dump itself is just a different view of the same content.
-  if !b:hexpair_saved.modified
-    setlocal nomodified
-  endif
-
-  " Baseline for detecting real edits made while in hex mode (see
-  " s:FromHex()): b:changedtick right after the dump above was
-  " generated, before the user has touched anything.
-  let b:hexpair_dump_tick = b:changedtick
-
-  " Buffer-local autocommands: pair highlighting + write safety + 'paste'
-  " tracking + reload survival.
-  augroup HexPairBuffer
-    autocmd! * <buffer>
-    autocmd CursorMoved,CursorMovedI <buffer> call s:Highlight()
-    autocmd BufWinLeave              <buffer> call s:ClearHighlight()
-    autocmd BufWritePre              <buffer> call s:PreWrite()
-    autocmd BufWritePost             <buffer> call s:PostWrite()
-    autocmd BufEnter                 <buffer> call s:PasteOn()
-    autocmd BufLeave                 <buffer> call s:PasteOff()
-    autocmd BufReadPost              <buffer> call s:PostReload()
-  augroup END
-
-  call s:PasteOn()
-  call s:Highlight()
-  redraw!
-endfunction
-
-function! s:FromHex() abort
-  " Refuse to convert a dump that the reverse conversion would mangle;
-  " the cursor is parked on the offender instead.  This also catches
-  " the case where an |u| in hex mode undid the conversion itself: the
-  " buffer then holds non-dump content, which almost always contains a
-  " non-hex character - :redo brings the dump back.
-  let err = s:ValidateDump()
-  if !empty(err)
-    if has_key(err, 'lnum')
-      call cursor(err.lnum, err.col)
-      call s:Highlight()
-    endif
+  if !filereadable(a:file)
     echohl ErrorMsg
-    echomsg 'hexpair: ' . err.msg . '; still in hex mode'
+    echomsg 'hexpair: cannot read ' . a:file
     echohl None
     return
   endif
-
-  " Remove the buffer-local autocommands first, then restore 'paste'
-  " while its saved value is still around.  This must happen BEFORE the
-  " filetype is restored below: switching 'paste' off restores the
-  " option values it overrode (e.g. 'expandtab'), and only then may
-  " b:undo_ftplugin revert them to the buffer's pre-hex state.
-  augroup HexPairBuffer
-    autocmd! * <buffer>
-  augroup END
-  call s:PasteOff()
-  call s:ClearHighlight()
-
-  " Did the user make a REAL edit while in hex mode (as opposed to just
-  " toggling back and forth without touching the dump)?  b:changedtick
-  " advances on any buffer-content change but not on cursor movement,
-  " so comparing it against the snapshot taken right after the dump was
-  " (re)generated - in s:ToHex(), s:PostWrite() or s:PostReload() -
-  " detects real edits regardless of whether the buffer was already
-  " modified before entering hex mode.  Must be read BEFORE
-  " s:ReverseDump() below, which advances the tick itself.
-  let edited = b:changedtick != get(b:, 'hexpair_dump_tick', b:changedtick)
-
-  " Convert back, then place the cursor on the SAME BYTE it was on in the
-  " dump; :goto positions by byte offset and lands on the character that
-  " contains the byte, which handles multibyte encodings correctly.
-  let off = s:DumpOffset()
-  if get(g:, 'hexpair_debug', 0)
-    echomsg printf('hexpair FromHex: dumppos=%d,%d off=%d goto=%d',
-          \ line('.'), col('.'), off, off + 1)
-  endif
-  call s:ReverseDump()
-  silent execute 'goto ' . (off + 1)
-  if get(g:, 'hexpair_debug', 0)
-    echomsg printf('hexpair FromHex: landed %d,%d line2byte-check=%d',
-          \ line('.'), col('.'), line2byte(line('.')) + col('.') - 2)
-  endif
-
-  " The silent filter plus :goto can leave the display stale (the cursor
-  " cell is drawn at its pre-conversion position until the next movement),
-  " so force a full redraw.
-  redraw!
-
-  let b:hexpair_active = 0
-  if exists('b:hexpair_n')
-    unlet b:hexpair_n
-  endif
-  unlet! b:hexpair_last_pos b:hexpair_dump_tick
-
-  " Restore the settings saved by s:ToHex().  The buffer is left
-  " modified if it already was before entering hex mode OR a real edit
-  " was made while in hex mode (the reverse-conversion filter above
-  " sets 'modified' regardless, which is what a bare 'nomodified' would
-  " otherwise incorrectly clear).
-  if exists('b:hexpair_saved')
-    let &l:binary   = b:hexpair_saved.binary
-    let &l:eol      = b:hexpair_saved.eol
-    let &l:filetype = b:hexpair_saved.filetype
-    if !b:hexpair_saved.modified && !edited
-      setlocal nomodified
-    endif
-    unlet b:hexpair_saved
-  else
-    setlocal filetype=
-  endif
-
-  " Restoring a NON-empty filetype fires the FileType autocmd, whose
-  " runtime loader runs b:undo_ftplugin and clears the b:did_ftplugin
-  " guard before sourcing the new filetype's plugins.  Restoring an
-  " empty filetype (typical for binary files) fires nothing, so the xxd
-  " ftplugin would linger: run its undo and drop the guard explicitly.
-  if &l:filetype ==# ''
-    if exists('b:undo_ftplugin')
-      execute b:undo_ftplugin
-      unlet b:undo_ftplugin
-    endif
-    unlet! b:did_ftplugin
-  endif
-endfunction
-
-function! s:Toggle() abort
-  if get(b:, 'hexpair_active', 0)
-    call s:FromHex()
-  else
-    call s:ToHex()
-  endif
-endfunction
-
-" ---------------------------------------------------------------------------
-" Refreshing the dump
-" ---------------------------------------------------------------------------
-
-" Regenerate the offset and ASCII columns from the current hex payload,
-" without touching the file on disk: the same round trip a toggle off
-" followed by a toggle on would perform, but staying in hex mode and
-" without the intervening write.  Useful after editing bytes, since
-" both columns are otherwise only refreshed on the next |:w| or
-" |:HexPairToggle|.
-function! s:Refresh() abort
-  if !get(b:, 'hexpair_active', 0)
-    echohl WarningMsg | echomsg 'hexpair: hex mode is not active' | echohl None
-    return
-  endif
-  let err = s:ValidateDump()
-  if !empty(err)
-    if has_key(err, 'lnum')
-      call cursor(err.lnum, err.col)
-      call s:Highlight()
-    endif
-    echohl ErrorMsg
-    echomsg 'hexpair: ' . err.msg . '; nothing refreshed'
-    echohl None
+  let sizeerr = HexPairPagedSizeError(g:hexpair_page_size, g:hexpair_bytes_per_line)
+  if !empty(sizeerr)
+    echohl ErrorMsg | echomsg sizeerr | echohl None
     return
   endif
 
-  " 'modified' must be preserved exactly as it stood before this call:
-  " no bytes actually change, only their rendering, so a buffer that
-  " already differed from disk still does, and one that did not still
-  " does not.  Captured BEFORE the filters below, which mark the
-  " buffer modified as a side effect regardless of prior state.
-  let was_modified = &l:modified
-  let off = s:DumpOffset()
-  call s:ReverseDump()
-  silent execute '%!' . s:xxd . ' -g 1 -c ' . b:hexpair_n
-  call cursor(s:DumpPos(off))
-  if !was_modified
-    setlocal nomodified
+  " Validate the requested page BEFORE creating or renaming any
+  " buffer: s:LoadPage() also does this, but only after enew/:file
+  " below already happened, which would otherwise leave behind an
+  " empty scratch buffer named "<file> [hexpair page]" - inactive
+  " (b:hexpair_page_active never gets set) but real-looking enough
+  " that a later :w would be attempted against that made-up path -
+  " which the write path would then patch bytes into.
+  let file = fnamemodify(a:file, ':p')
+  if s:ResolvePage(file, g:hexpair_page_size, page - 1)[0] < 0
+    return
   endif
 
-  " This refresh is a new baseline for both halves of the toggle-off
-  " modified check in s:FromHex(): the dump it just produced is what a
-  " FUTURE edit is compared against (b:hexpair_dump_tick, as after
-  " s:ToHex()/s:PostWrite()/s:PostReload()), and since no save
-  " happened, the buffer's standing relative to disk carries forward
-  " unchanged rather than being reset to clean (b:hexpair_saved.modified,
-  " unlike s:PostWrite() which just made them match).
-  let b:hexpair_saved.modified = was_modified
-  let b:hexpair_dump_tick = b:changedtick
+  enew
+  silent execute 'file ' . fnameescape(a:file . ' [hexpair page]')
+  let b:hexpair_page_file = file
+  let b:hexpair_page_spill = ''
+  call s:SetupPagedBuffer()
 
-  call s:Highlight()
-  redraw!
+  call s:LoadPage(page - 1)
 endfunction
 
 " ---------------------------------------------------------------------------
-" Column navigation
+" Cursor position <-> absolute file offset
 " ---------------------------------------------------------------------------
 
-" Returns [idx, in_hex] for the byte the cursor is on or nearest to.
-" Unlike s:Highlight(), this clamps: the offset column maps to byte 0, the
-" area right of the ASCII column maps to the last byte, and a short last
-" line clamps to its actual byte count - so the jump commands always have
-" a sensible target.
-function! s:CursorByte() abort
-  let [n, hexstart, hexend, asciistart] = s:Layout()
+" Byte index of the cursor within its own dump line: the number of
+" complete hex pairs actually present before it, which stays correct on
+" edited lines (bare inserted lines, extra bytes typed into a line) where
+" layout coordinates would be wrong. Only when the cursor sits in the
+" ASCII column - detected by a double space before it, the same rule the
+" stripper uses - is the index mapped by layout.
+function! s:PagedCursorByte() abort
+  let [n, hexstart, hexend, asciistart] = s:PagedLineLayout(line('.'))
   let col = col('.')
   if col <= hexend
-    let in_hex = 1
     let idx = col < hexstart ? 0 : (col - hexstart) / 3
   else
-    let in_hex = 0
     let idx = col < asciistart ? 0 : col - asciistart
     if idx >= n
       let idx = n - 1
@@ -768,37 +850,1142 @@ function! s:CursorByte() abort
   if nbytes > 0 && idx >= nbytes
     let idx = nbytes - 1
   endif
-  return [idx, in_hex]
+  return idx
 endfunction
 
-" Move the cursor to the given column ('hex', 'ascii', or 'swap' for the
-" opposite one) while staying on the same byte, and refresh the pair
-" highlight immediately.
-function! s:JumpTo(target) abort
-  if !get(b:, 'hexpair_active', 0)
+" ABSOLUTE file offset of the byte under the cursor. Banner-aware
+" counterpart of plugin/hexpair.vim's s:DumpOffset(): bytes on preceding
+" lines are counted from their actual stripped content (banner lines
+" contribute none), so the result stays exact even after lines were
+" inserted, deleted or reordered within the page.
+" Byte index of the cursor WITHIN its own dump line: the number of
+" complete hex pairs actually present before it, which stays correct on
+" edited lines (bare inserted lines, extra bytes typed into a line)
+" where layout coordinates would be wrong. Only when the cursor sits in
+" the ASCII column - detected by a double space before it, the same rule
+" the stripper uses - is the index mapped by layout.
+function! s:PagedCursorLineIndex() abort
+  let prefix = strpart(getline('.'), 0, col('.') - 1)
+  if prefix =~# '  '
+    return s:PagedCursorByte()
+  endif
+  let payload = s:PagedPayload(prefix)
+  return strlen(substitute(payload, '[^0-9a-fA-F]', '', 'g')) / 2
+endfunction
+
+function! s:PagedByteOffset() abort
+  if s:IsBannerLine(getline('.'))
+    return b:hexpair_page_base
+  endif
+  return b:hexpair_page_base + s:PagedScan(line('.')).bytes
+        \ + s:PagedCursorLineIndex()
+endfunction
+
+" Put the cursor on the given ABSOLUTE file offset, clamped to the page.
+" Dump line k is buffer line k + 1: line 1 is the top banner.
+function! s:PagedGotoOffset(abs) abort
+  " A page with no bytes has no dump line to land on - only the banner.
+  if b:hexpair_page_len <= 0
+    call cursor(1, 1)
+    return
+  endif
+  let rel = a:abs - b:hexpair_page_base
+  if rel < 0
+    let rel = 0
+  elseif rel >= b:hexpair_page_len
+    let rel = b:hexpair_page_len > 0 ? b:hexpair_page_len - 1 : 0
+  endif
+  " The target line's own offset decides its column layout, which is not
+  " the page's first line's when the page straddles a widening.
+  let n = b:hexpair_n
+  let [n, hexstart, hexend, asciistart] =
+        \ s:PagedOffsetLayout(b:hexpair_page_base + rel / n * n)
+  call cursor(rel / n + 2, hexstart + (rel % n) * 3)
+endfunction
+
+" ---------------------------------------------------------------------------
+" Writing a page
+" ---------------------------------------------------------------------------
+
+function! s:Run(cmd) abort
+  let out = system(a:cmd)
+  if v:shell_error
+    throw printf('hexpair: command failed (exit %d): %s: %s',
+          \ v:shell_error, a:cmd, substitute(out, '\n', ' ', 'g'))
+  endif
+  return out
+endfunction
+
+" Does the local xxd understand -o (add an offset to the displayed file
+" position)? Probed once per session: the in-place patch needs absolute
+" offsets in the dump it feeds back to xxd -r, and an xxd without -o has
+" to have them prepended by hand.
+function! s:HasOffsetOption() abort
+  if exists('s:has_o')
+    return s:has_o
+  endif
+  let s:has_o = 0
+  let probe = tempname()
+  let out   = tempname()
+  try
+    call writefile(0z00, probe, 'b')
+    call s:Run(printf('%s -g 1 -c 16 -o 16 %s %s',
+          \ s:xxd, shellescape(probe), shellescape(out)))
+    let lines = readfile(out)
+    let s:has_o = !empty(lines) && lines[0] =~# '^00000010:'
+  catch
+    let s:has_o = 0
+  finally
+    call delete(probe)
+    call delete(out)
+  endtry
+  return s:has_o
+endfunction
+
+" Canonical 'xxd -g 1 -c n' dump of a:src whose offset column starts at
+" the absolute file offset a:base, written to a:out. Generated fresh from
+" the raw bytes rather than reusing the user's dump on purpose: the
+" offsets in the buffer may be stale or reordered, and it is these
+" offsets that xxd -r seeks by.
+function! s:CanonicalDump(src, base, out) abort
+  if s:HasOffsetOption()
+    call s:Run(printf('%s -g 1 -c %d -o %d %s %s', s:xxd,
+          \ b:hexpair_n, a:base, shellescape(a:src), shellescape(a:out)))
+    return
+  endif
+  " Fallback for an xxd without -o: dump from zero and rewrite the offset
+  " column, one printf per line. %x widens past eight digits exactly as
+  " xxd does, so the fallback produces the same text xxd -o would.
+  call s:Run(printf('%s -g 1 -c %d %s %s', s:xxd,
+        \ b:hexpair_n, shellescape(a:src), shellescape(a:out)))
+  let lines = readfile(a:out)
+  let i = 0
+  while i < len(lines)
+    let colon = stridx(lines[i], ':')
+    let lines[i] = printf('%08x', a:base + i * b:hexpair_n)
+          \ . strpart(lines[i], colon)
+    let i += 1
+  endwhile
+  call writefile(lines, a:out)
+endfunction
+
+" Refuse to touch a file that changed underneath us. Size and mtime are
+" all a portable Vim can see; mtime has a one-second resolution, so a
+" change made within the same second as the read AND of exactly the same
+" size can slip through - documented in :help hexpair-paged.
+function! s:CheckFresh() abort
+  let total = getfsize(b:hexpair_page_file)
+  if total == b:hexpair_page_total
+        \ && getftime(b:hexpair_page_file) == b:hexpair_page_ftime
+    return
+  endif
+  throw printf('hexpair: %s changed on disk since the page was read '
+        \ . '(size %d -> %d); nothing was written - reload it with '
+        \ . ':HexPairPageGoto! %d',
+        \ b:hexpair_page_file, b:hexpair_page_total, total,
+        \ b:hexpair_page_index + 1)
+endfunction
+
+" Same length: patch the page in place. xxd -r with the target file as an
+" ARGUMENT opens it read-write and overwrites exactly the dumped range -
+" shell redirection ('>') would truncate the file instead, so it must
+" never be used here. Everything outside the page keeps its bytes and the
+" file keeps its length; cost is O(page), not O(file).
+function! s:PatchInPlace(raw) abort
+  let dump = tempname()
+  try
+    call s:CanonicalDump(a:raw, b:hexpair_page_base, dump)
+    call s:Run(printf('%s -r %s %s', s:xxd,
+          \ shellescape(dump), shellescape(b:hexpair_page_file)))
+  finally
+    call delete(dump)
+  endtry
+endfunction
+
+" ':w {other}' fires BufWriteCmd like any write, and means something
+" different from a plain ':w': not "patch this page into its own file" but
+" "save what I am looking at, as a whole, over there". Returns the target
+" for that, or '' for a plain write of the page.
+function! s:WriteTarget() abort
+  let target = expand('<amatch>')
+  if target ==# '' || target ==# get(b:, 'hexpair_page_bufname', target)
+    return ''
+  endif
+  return target
+endfunction
+
+" Append a byte range of a:src to a:dst in bounded blocks, so memory use
+" does not follow the size of the file. a:truncate starts a:dst from
+" scratch, which is also how a shrinking file gets its new length: Vim
+" cannot truncate a file except by writing it.
+function! s:CopyRange(src, off, len, dst, truncate) abort
+  if a:truncate && a:len == 0
+    call writefile(0z, a:dst, 'b')
+    return
+  endif
+  let done = 0
+  while done < a:len
+    let chunk = a:len - done
+    if chunk > s:blocksize
+      let chunk = s:blocksize
+    endif
+    let blob = readblob(a:src, a:off + done, chunk)
+    if empty(blob)
+      throw printf('hexpair: short read from %s at offset %d',
+            \ a:src, a:off + done)
+    endif
+    call writefile(blob, a:dst, (a:truncate && done == 0) ? 'b' : 'ab')
+    let done += len(blob)
+  endwhile
+endfunction
+
+" Global and pure, like the gate and page-size messages: the interactive
+" confirm() around it cannot run under this project's headless harness,
+" so the text it asks is testable on its own.
+function! HexPairPagedResizeMessage(delta, total) abort
+  return printf("hexpair: this page changed length by %+d bytes.\n"
+        \ . 'Inserting or deleting bytes cannot be done in place, so the '
+        \ . "whole file has to be rewritten (%d -> %d bytes).\nContinue?",
+        \ a:delta, a:total, a:total + a:delta)
+endfunction
+
+function! s:ConfirmResize(newlen) abort
+  if !g:hexpair_page_confirm
+    return 1
+  endif
+  return confirm(HexPairPagedResizeMessage(a:newlen - b:hexpair_page_len,
+        \ b:hexpair_page_total), "&Rewrite the file\n&Cancel", 2, 'Question') == 1
+endfunction
+
+" Changed length: splice the file. Head, edited page and tail are
+" block-copied into a temp file, which then replaces the original by
+" being copied BACK over it - not rename()d, because the temp usually
+" lives on a different filesystem (notably for /mnt/c/... paths under
+" WSL) and because copying back keeps the target's inode, owner and
+" permissions.
+"
+" That copy back is the one window in which a failure leaves the file
+" incomplete, so the temp is deleted only after it succeeded; when it
+" does not, the temp holds the complete new content and its path is
+" reported as the recovery copy instead.
+function! s:Splice(raw, newlen) abort
+  let msg = HexPairPagedGateMessage(s:SpliceSupported())
+  if !empty(msg)
+    throw msg
+  endif
+
+  let base     = b:hexpair_page_base
+  let tail     = base + b:hexpair_page_len
+  let tailsize = b:hexpair_page_total - tail
+  let total    = base + a:newlen + tailsize
+  let tmp      = tempname()
+
+  try
+    call s:CopyRange(b:hexpair_page_file, 0, base, tmp, 1)
+    call s:CopyRange(a:raw, 0, a:newlen, tmp, 0)
+    call s:CopyRange(b:hexpair_page_file, tail, tailsize, tmp, 0)
+    if getfsize(tmp) != total
+      throw printf('hexpair: internal error - spliced %d bytes, expected %d',
+            \ getfsize(tmp), total)
+    endif
+  catch
+    " Nothing has reached the target yet, so this temp is worthless.
+    call delete(tmp)
+    throw v:exception . '; nothing was written'
+  endtry
+
+  let replaced = 0
+  try
+    call s:CopyRange(tmp, 0, total, b:hexpair_page_file, 1)
+    let replaced = 1
+  finally
+    if replaced
+      call delete(tmp)
+    else
+      echohl ErrorMsg
+      echomsg printf('hexpair: rewriting %s failed part way through; the '
+            \ . 'complete new content is kept in %s - recover it from there',
+            \ b:hexpair_page_file, tmp)
+      echohl None
+    endif
+  endtry
+endfunction
+
+" The file has no bytes left - a shrinking write emptied it - so there is
+" no page to show. Leave a lone banner saying so, rather than a dump of
+" bytes that are gone.
+function! s:LoadEmpty() abort
+  let b:hexpair_page_index      = 0
+  let b:hexpair_page_base       = 0
+  let b:hexpair_page_len        = 0
+  let b:hexpair_page_total      = 0
+  let b:hexpair_page_totalpages = 0
+  let b:hexpair_page_ftime      = getftime(b:hexpair_page_file)
+  let b:hexpair_n               = g:hexpair_bytes_per_line
+  let b:hexpair_page_hexstart   = s:HexStart(0)
+  let b:hexpair_banner_top      = printf('" hexpair: %s is empty', s:PageLabel())
+  let b:hexpair_banner_bottom   = '" hexpair: end of empty file'
+
+  let save_ul = &l:undolevels
+  setlocal noreadonly modifiable
+  try
+    setlocal undolevels=-1
+    silent %delete _
+    call setline(1, [b:hexpair_banner_top, b:hexpair_banner_bottom])
+  finally
+    let &l:undolevels = save_ul
+  endtry
+  call cursor(1, 1)
+  setlocal filetype=xxd
+  call s:ApplyBannerSyntax()
+  setlocal nomodified
+  let b:hexpair_page_active = 1
+  let b:hexpair_view = 'hex'
+  call s:PasteOn()
+endfunction
+
+" After a successful write, show what is on disk now. A splice moved
+" every byte behind this page and may have changed how many pages there
+" are, so the page index is clamped to what is left.
+function! s:ReloadAfterWrite(off) abort
+  let wastext = !s:IsHexView()
+  let total = getfsize(b:hexpair_page_file)
+  let totalpages = HexPairPagedTotalPages(b:hexpair_page_size, total)
+  if totalpages == 0
+    call s:LoadEmpty()
+  else
+    let idx = b:hexpair_page_index
+    if idx >= totalpages
+      let idx = totalpages - 1
+    endif
+    call s:LoadPageInView(idx)
+    if wastext
+      call s:TextGotoOffset(a:off)
+    else
+      call s:PagedGotoOffset(a:off)
+    endif
+  endif
+  setlocal nomodified
+  call s:PagedHighlight()
+endfunction
+
+" Put the page's bytes AS THE BUFFER NOW HOLDS THEM into a:raw, and
+" return the absolute file offset the cursor is on. The two views hold
+" them differently - a dump to be stripped, or the bytes themselves - and
+" that is the only difference between writing from one and the other.
+function! s:PageBytes(raw) abort
+  let hex = tempname()
+  try
+    if s:IsHexView()
+      " One scan does the validation, the stripping and the cursor
+      " mapping; three separate walks over the page would cost three
+      " times as much.
+      let scan = s:PagedScan(line('.'))
+      if !empty(scan.err)
+        if has_key(scan.err, 'lnum')
+          call cursor(scan.err.lnum, scan.err.col)
+          call s:PagedHighlight()
+        endif
+        throw 'hexpair: ' . scan.err.msg . '; nothing was written'
+      endif
+      let off = s:IsBannerLine(getline('.')) ? b:hexpair_page_base
+            \ : b:hexpair_page_base + scan.bytes + s:PagedCursorLineIndex()
+      call writefile(scan.lines, hex)
+      call s:Run(printf('%s -r -p %s %s', s:xxd,
+            \ shellescape(hex), shellescape(a:raw)))
+    else
+      " The text view's bytes need no conversion at all - they are the
+      " page's bytes already, once the banner is off them.
+      let lines = s:TextViewLines()
+      let off = s:TextByteOffset()
+      call writefile(lines, a:raw, 'b')
+    endif
+  finally
+    call delete(hex)
+  endtry
+  if getfsize(a:raw) < 0
+    throw 'hexpair: the reverse conversion produced no output; '
+          \ . 'nothing was written'
+  endif
+  return off
+endfunction
+
+" ':w {file}' - write the WHOLE content being paged, with this page's
+" edits in it, to somewhere else. For a view paged from piped input this
+" is the only way to save at all; for one paged from a file it is a plain
+" save-as that leaves the original alone.
+"
+" Vim itself refuses an existing target without a ! (E13) before this
+" autocommand ever runs, so there is no need to check for that here.
+function! s:WriteWholeTo(target) abort
+  let msg = HexPairPagedGateMessage(s:SpliceSupported())
+  if !empty(msg)
+    throw substitute(msg, 'inserting or deleting bytes',
+          \ 'writing the whole file somewhere else', '')
+  endif
+  call s:CheckFresh()
+
+  let raw = tempname()
+  try
+    call s:PageBytes(raw)
+    let newlen = getfsize(raw)
+    let base = b:hexpair_page_base
+    let tail = base + b:hexpair_page_len
+    let tailsize = b:hexpair_page_total - tail
+    call s:CopyRange(b:hexpair_page_file, 0, base, a:target, 1)
+    call s:CopyRange(raw, 0, newlen, a:target, 0)
+    call s:CopyRange(b:hexpair_page_file, tail, tailsize, a:target, 0)
+  finally
+    call delete(raw)
+  endtry
+
+  let total = getfsize(a:target)
+  if get(b:, 'hexpair_page_spill', '') ==# ''
+    " A file-backed view: this was a copy, so nothing about the buffer
+    " changes - exactly as Vim's own ':w {file}' leaves a buffer alone.
+    echomsg printf('hexpair: "%s" %dB written; %s is unchanged',
+          \ a:target, total, b:hexpair_page_file)
+    return
+  endif
+
+  " A view paged from piped input has just acquired a file. Adopt it, the
+  " way Vim's own ':w {file}' adopts a name for an unnamed buffer, so the
+  " next plain :w patches pages into it and the spill can go.
+  call s:DropSpill()
+  silent execute 'file ' . fnameescape(a:target)
+  let b:hexpair_page_file = fnamemodify(a:target, ':p')
+  let b:hexpair_page_bufname = bufname('%') ==# ''
+        \ ? '' : fnamemodify(bufname('%'), ':p')
+  call s:LoadPageInView(b:hexpair_page_index)
+  setlocal nomodified
+  echomsg printf('hexpair: "%s" %dB written; this view now edits it',
+        \ a:target, total)
+endfunction
+
+function! s:Write() abort
+  if !get(b:, 'hexpair_page_active', 0)
+    throw 'hexpair: not a paged hex buffer; nothing was written'
+  endif
+
+  let target = s:WriteTarget()
+  if target !=# ''
+    call s:WriteWholeTo(target)
+    return
+  endif
+
+  if get(b:, 'hexpair_page_spill', '') !=# ''
+    throw 'hexpair: this view was paged from piped input, so there is no '
+          \ . 'file to write it back to; use :w {file} to save all of it'
+  endif
+
+  let raw = tempname()
+  try
+    call s:CheckFresh()
+    let off = s:PageBytes(raw)
+    let newlen = getfsize(raw)
+    if newlen == b:hexpair_page_len
+      call s:PatchInPlace(raw)
+    elseif s:ConfirmResize(newlen)
+      call s:Splice(raw, newlen)
+    else
+      echomsg 'hexpair: cancelled; nothing was written'
+      return
+    endif
+  finally
+    call delete(raw)
+  endtry
+
+  " Re-read from disk rather than trusting the buffer, and put the cursor
+  " back on the byte it was on by absolute offset.
+  call s:ReloadAfterWrite(off)
+  echomsg s:PagesText()
+endfunction
+
+" BufReadCmd: the buffer's name is not a file Vim could read, so :e
+" means "show this page as it is on disk now".
+" Absolute file offset of [lnum, col] in the page as this buffer last
+" rendered it, by canonical layout: dump line k is buffer line k + 1, and
+" the column maps as s:PagedCursorByte() would. Deliberately reads no
+" buffer content, so it works when there is none left to read.
+function! s:PosOffset(pos) abort
+  let [lnum, col] = a:pos
+  let idx = lnum - 2
+  if idx < 0
+    return b:hexpair_page_base
+  endif
+  let [n, hexstart, hexend, asciistart] =
+        \ s:PagedOffsetLayout(b:hexpair_page_base + idx * b:hexpair_n)
+  if col >= asciistart
+    let byte = col - asciistart
+  elseif col >= hexstart
+    let byte = (col - hexstart) / 3
+  else
+    let byte = 0
+  endif
+  if byte >= n
+    let byte = n - 1
+  endif
+  return b:hexpair_page_base + idx * n + byte
+endfunction
+
+function! s:Reread() abort
+  if !get(b:, 'hexpair_page_active', 0)
+    return
+  endif
+  try
+    " Neither the old content nor the cursor is available by the time
+    " BufReadCmd runs, so the byte is mapped from the position noted while
+    " the user was still on it (see s:PagedHighlight()) by CANONICAL
+    " layout - no buffer access at all. Exact for a page as it was read,
+    " best-effort for one that was edited, which :e is discarding anyway.
+    let off = s:PosOffset(get(b:, 'hexpair_last_pos', [2, 1]))
+    call s:LoadPageInView(b:hexpair_page_index)
+    if s:IsHexView()
+      call s:PagedGotoOffset(off)
+      call s:PagedHighlight()
+    else
+      call s:TextGotoOffset(off)
+    endif
+  catch /^hexpair:/
+    echohl ErrorMsg
+    echomsg v:exception
+    echohl None
+  endtry
+endfunction
+
+function! s:RequirePaged() abort
+  if !get(b:, 'hexpair_page_active', 0)
+    echohl WarningMsg
+    echomsg 'hexpair: not a paged hex buffer'
+    echohl None
+    return 0
+  endif
+  return 1
+endfunction
+
+" s:LoadPage() always builds the hex view, so anything that turns a page
+" while the user is in the text view has to put them back in it. Turning
+" a page must not also change which view they are looking at.
+function! s:LoadPageInView(pageidx) abort
+  let wastext = !s:IsHexView()
+  if !s:LoadPage(a:pageidx)
+    return 0
+  endif
+  if wastext
+    call s:ToText()
+  endif
+  return 1
+endfunction
+
+function! s:GotoPage(pageidx, force) abort
+  if !s:RequirePaged()
+    return
+  endif
+  if &l:modified && !a:force
+    echohl ErrorMsg
+    echomsg 'hexpair: page has unsaved changes; use ! to discard them'
+    echohl None
+    return
+  endif
+  call s:LoadPageInView(a:pageidx)
+endfunction
+
+function! s:PageNext(force) abort
+  if !s:RequirePaged()
+    return
+  endif
+  call s:GotoPage(b:hexpair_page_index + 1, a:force)
+endfunction
+
+function! s:PagePrev(force) abort
+  if !s:RequirePaged()
+    return
+  endif
+  call s:GotoPage(b:hexpair_page_index - 1, a:force)
+endfunction
+
+function! s:PageGoto(n, force) abort
+  if !s:RequirePaged()
+    return
+  endif
+  call s:GotoPage(a:n - 1, a:force)
+endfunction
+
+" Parses the text typed at the :HexPairPageGoto prompt (see
+" s:PageGotoPrompt() below): {} for an empty string (cancelled), a
+" 'msg' key for invalid input, otherwise a 'page' key (1-based, as
+" typed - not yet converted to a 0-based index or bounds-checked; the
+" existing HexPairPagedBounds()-backed s:LoadPage() already reports a
+" clear error for an out-of-range page, no need to duplicate that
+" here). Global and pure so it is directly testable: confirmed
+" empirically that input() itself does not behave usably under this
+" project's `vim -es -u NONE` test harness (hangs or silently aborts
+" the whole script depending on stdin), so the interactive prompt
+" below is deliberately a thin, untested wrapper around this.
+function! HexPairPagedParsePageInput(text) abort
+  if empty(a:text)
+    return {}
+  endif
+  if a:text !~# '^\d\+$'
+    return {'msg': 'hexpair: not a page number: ' . a:text}
+  endif
+  return {'page': str2nr(a:text)}
+endfunction
+
+" Prompt for a page number (bounds are reported so the user knows the
+" valid range) and jump to it - the <Plug> mapping equivalent of
+" :HexPairPageGoto, which itself needs a typed {N} argument that a
+" plain <Plug> target cannot supply. a:force mirrors :HexPairPageGoto's
+" own ! - <Plug>(HexPairPageGoto) passes 0 (refuses to discard unsaved
+" changes, same as the bare command), <Plug>(HexPairPageGotoForce)
+" passes 1 (same as the command with !).
+function! s:PageGotoPrompt(force) abort
+  if !s:RequirePaged()
+    return
+  endif
+  let n = input(printf('hexpair: goto page (1-%d): ', b:hexpair_page_totalpages))
+  redraw
+  let parsed = HexPairPagedParsePageInput(n)
+  if has_key(parsed, 'msg')
+    echohl ErrorMsg
+    echomsg parsed.msg
+    echohl None
+  elseif has_key(parsed, 'page')
+    call s:GotoPage(parsed.page - 1, a:force)
+  endif
+endfunction
+
+" 1-based, inclusive byte positions - see the comment on s:BannerTop(),
+" which this must stay consistent with (it reports the same
+" information the banner shows).
+function! s:PagesText() abort
+  if b:hexpair_page_totalpages == 0
+    return printf('hexpair: %s is empty (no pages)', b:hexpair_page_file)
+  endif
+  return printf('hexpair: page %d of %d, offsets %d-%d of total %d bytes (%s)',
+        \ b:hexpair_page_index + 1, b:hexpair_page_totalpages,
+        \ b:hexpair_page_base + 1, b:hexpair_page_base + b:hexpair_page_len,
+        \ b:hexpair_page_total, s:PageLabel())
+endfunction
+
+" Prompt for a byte offset and jump to it - the <Plug> equivalent of
+" :HexPairGoOffset, which needs a typed {byte} a bare <Plug> cannot
+" supply. a:force mirrors the command's own !. Deliberately untested, for
+" the reason given at s:PageGotoPrompt(): input() does not behave usably
+" under `vim -es`. All the decision logic lives in
+" HexPairPagedParseOffsetInput(), which the suite exercises directly.
+function! s:GotoOffsetPrompt(force) abort
+  if !s:RequirePaged()
+    return
+  endif
+  let text = input(printf('hexpair: goto byte (0-%d): ',
+        \ b:hexpair_page_total > 0 ? b:hexpair_page_total - 1 : 0))
+  redraw
+  let parsed = HexPairPagedParseOffsetInput(text)
+  if has_key(parsed, 'msg')
+    echohl ErrorMsg
+    echomsg parsed.msg
+    echohl None
+  elseif has_key(parsed, 'offset')
+    call s:GotoOffset(text, a:force)
+  endif
+endfunction
+
+function! s:Pages() abort
+  if !s:RequirePaged()
+    return
+  endif
+  echo s:PagesText()
+endfunction
+
+" Function form of :HexPairOpen, for scripts and mappings building the
+" filename programmatically (e.g. from an environment variable or a
+" shell wrapper) instead of typing it on the Ex command line.
+" :HexPairOpen's own -nargs=+ parsing round-trips a filename through
+" <f-args>, which only un-escapes the handful of characters IT treats
+" as argument separators (e.g. a space) - fnameescape()'s broader
+" escaping (also covers '$', to stop Vim's command-line file-argument
+" expansion of a literal "$VAR" in the name) does not fully round-trip
+" through it, confirmed empirically: a name containing '$' comes out
+" with a stray backslash still in front of it. A direct function call
+" has no such text round trip - the string is evaluated once as a
+" plain expression and reaches s:Open() unchanged, verified against a
+" name containing spaces, non-ASCII characters and a literal '$NAME'
+" substring.
+" Jump straight to a byte offset, wherever in the file it is: the page
+" holding it is a division now that pages are plain fixed-size slices.
+" Global and pure so the arithmetic is testable without a file.
+function! HexPairPagedOffsetError(off, total) abort
+  if a:off < 0 || (a:off >= a:total && a:total > 0) || (a:off > 0 && a:total == 0)
+    return printf('hexpair: byte offset %d is outside the file (%d bytes)',
+          \ a:off, a:total)
+  endif
+  return ''
+endfunction
+
+" {} for an empty string (cancelled), a 'msg' key for input that is not a
+" byte offset, otherwise an 'offset' key with its value. Global and pure so
+" it is directly testable, like the page-number parser above.
+function! HexPairPagedParseOffsetInput(text) abort
+  if empty(a:text)
+    return {}
+  endif
+  if a:text !~# '^\%(0[xX]\)\=\x\+$'
+    return {'msg': printf('hexpair: not a byte offset: %s '
+          \ . '(decimal, or 0x for hex)', string(a:text))}
+  endif
+  return {'offset': a:text =~# '^0[xX]'
+        \ ? str2nr(a:text[2:], 16) : str2nr(a:text)}
+endfunction
+
+function! s:GotoOffset(text, force) abort
+  if !s:RequirePaged()
+    return
+  endif
+  try
+    let parsed = HexPairPagedParseOffsetInput(a:text)
+    if has_key(parsed, 'msg')
+      throw parsed.msg
+    endif
+    if !has_key(parsed, 'offset')
+      return
+    endif
+    let off = parsed.offset
+    let err = HexPairPagedOffsetError(off, getfsize(b:hexpair_page_file))
+    if !empty(err)
+      throw err
+    endif
+    let page = off / b:hexpair_page_size
+    if page != b:hexpair_page_index
+      call s:GotoPage(page, a:force)
+      if page != b:hexpair_page_index
+        return
+      endif
+    endif
+    if s:IsHexView()
+      call s:PagedGotoOffset(off)
+      call s:PagedHighlight()
+    else
+      call s:TextGotoOffset(off)
+    endif
+  catch /^hexpair:/
+    echohl ErrorMsg
+    echomsg v:exception
+    echohl None
+  endtry
+endfunction
+
+function! HexPairOpenFile(file, ...) abort
+  call call('s:Open', [a:file] + a:000)
+endfunction
+
+" ---------------------------------------------------------------------------
+" The buffer's three states
+" ---------------------------------------------------------------------------
+"
+" 1. PLAIN         an ordinary Vim buffer; hexpair has never touched it.
+" 2. HEX-PAGE      one page of the file as an 'xxd -g 1' dump with absolute
+"                  offsets, bracketed by the page banner.
+" 3. WINDOWED-TEXT the SAME page's raw bytes as text, with the same banner.
+"
+" :HexPairToggle moves PLAIN -> HEX-PAGE -> WINDOWED-TEXT -> HEX-PAGE -> ...
+" There is deliberately no way back to PLAIN: once a buffer holds one page
+" rather than the whole file, presenting it as the file again would be a
+" lie, and a plain :w would truncate the file down to that page. Close and
+" reopen the file to get back.
+"
+" b:hexpair_page_active marks states 2 and 3; b:hexpair_view says which.
+
+function! s:IsHexView() abort
+  return get(b:, 'hexpair_view', '') ==# 'hex'
+endfunction
+
+" Where this buffer's pages are read from. :HexPairOpen names a file
+" outright; :HexPairToggle has to work it out, because what a buffer holds
+" and what its file holds are not always the same thing:
+"
+"   - unmodified and backed by a readable file: the file is the truth, so
+"     pages come off disk. The buffer is re-read with ++bin first, since a
+"     buffer loaded without it has already had CRs stripped, a BOM removed
+"     and its content transcoded, none of which can be undone afterwards;
+"   - no file at all (an unnamed buffer, `cat x | vim -`): the only copy of
+"     the content is in memory, so it is spilled once into a private temp
+"     file and paged from there. There is nothing to write back to, and a
+"     write says so;
+"   - modified and backed by a file: the two disagree, and every way of
+"     resolving that silently loses something. Paging from disk would hide
+"     the edits; paging from memory would let a page-range write drop every
+"     edit outside the visible page. So this one is refused.
+"
+" Returns the cursor's byte offset in the content being paged, or -1 to
+" mean "work it out from the buffer afterwards".
+function! s:PageSource() abort
+  let name = expand('%')
+  if name !=# '' && filereadable(name)
+    if &l:modified
+      throw 'hexpair: the buffer has unwritten changes, so it and the file '
+            \ . 'on disk no longer agree; write them with :w first, or use '
+            \ . ':HexPairOpen to page the file as it stands on disk'
+    endif
+    let b:hexpair_page_file = fnamemodify(name, ':p')
+    let b:hexpair_page_spill = ''
+    if &l:binary
+      return s:BufOffset()
+    endif
+    " Capture the cursor byte offset BEFORE the reload, in file-byte
+    " terms: the reload changes the buffer content (BOM bytes and CRs
+    " materialize, fileencoding transcoding is undone) while the cursor
+    " keeps its old line/column coordinates, which would then point at a
+    " different byte.
+    let pos = s:PreReloadPos()
+    silent edit ++bin
+    return s:PostReloadOffset(pos)
+  endif
+
+  " A named file can be re-read with ++bin to undo what Vim did on the way
+  " in; piped input cannot - there is nothing to re-read. So if this buffer
+  " was not read in binary mode, its content may already be transcoded or
+  " have had its line endings folded, and no dump of it can put that back.
+  if !&l:binary
+    echohl WarningMsg
+    echomsg 'hexpair: this buffer was not read in binary mode, so Vim may'
+          \ 'already have transcoded it; the bytes shown are the buffer''s,'
+          \ 'not necessarily the input''s. Use `vim -b -` for binary input.'
+    echohl None
+  endif
+
+  let off = s:BufOffset()
+  let spill = tempname()
+  " writefile()'s binary mode is the exact inverse of readfile()'s: list
+  " items joined by NL with no trailing one, and a NL inside an item
+  " written as the NUL it stands for. A trailing empty item is therefore
+  " how a content that ends in a newline is expressed - and a buffer that
+  " holds no bytes at all must produce an empty file, not a lone newline.
+  let lines = s:ZeroBytes() ? [] : getline(1, '$') + (&l:eol ? [''] : [])
+  call writefile(lines, spill, 'b')
+  let b:hexpair_page_file = spill
+  let b:hexpair_page_spill = spill
+  return off
+endfunction
+
+" Turn the current buffer into a paged one. Both entry points converge
+" here, so nothing downstream can tell which of them a buffer came from.
+function! s:SetupPagedBuffer() abort
+  setlocal buftype=acwrite bufhidden=hide noswapfile
+  let b:hexpair_page_size = g:hexpair_page_size
+  let b:hexpair_page_bufname = bufname('%') ==# ''
+        \ ? '' : fnamemodify(bufname('%'), ':p')
+
+  augroup HexPairPagedBuffer
+    autocmd! * <buffer>
+    autocmd CursorMoved,CursorMovedI <buffer> call s:PagedHighlight()
+    autocmd BufWinLeave              <buffer> call s:PagedClearHighlight()
+    autocmd BufWriteCmd              <buffer> call s:Write()
+    autocmd BufReadCmd               <buffer> call s:Reread()
+    autocmd BufEnter                 <buffer> call s:PasteOn()
+    autocmd BufLeave                 <buffer> call s:PasteOff()
+    autocmd BufWipeout               <buffer> call s:DropSpill()
+  augroup END
+endfunction
+
+" The temp a spilled (unnamed) buffer is paged from belongs to that buffer
+" and nothing else, so it goes when the buffer does.
+function! s:DropSpill() abort
+  if get(b:, 'hexpair_page_spill', '') !=# ''
+    call delete(b:hexpair_page_spill)
+    let b:hexpair_page_spill = ''
+  endif
+endfunction
+
+" PLAIN -> HEX-PAGE.
+function! s:ToHex() abort
+  let s:xxd = s:ResolveXxd()
+  if s:xxd ==# ''
+    throw 'hexpair: xxd not found in PATH nor in $VIMRUNTIME'
+  endif
+  let sizeerr = HexPairPagedSizeError(g:hexpair_page_size, g:hexpair_bytes_per_line)
+  if !empty(sizeerr)
+    throw sizeerr
+  endif
+
+  let off = s:PageSource()
+  call s:SetupPagedBuffer()
+
+  " Start on the page holding the byte the cursor was on, not on page 1 -
+  " every mode transition in this plugin keeps the cursor's byte.
+  try
+    if !s:LoadPage(off / b:hexpair_page_size)
+      call s:AbandonSetup()
+      return
+    endif
+  catch
+    call s:AbandonSetup()
+    throw v:exception
+  endtry
+  call s:PagedGotoOffset(off)
+  call s:PagedHighlight()
+  redraw!
+endfunction
+
+" Undo s:SetupPagedBuffer() when the page never got loaded, so a buffer
+" is never left looking paged (acwrite, our BufWriteCmd) without the page
+" state a write would need.
+function! s:AbandonSetup() abort
+  augroup HexPairPagedBuffer
+    autocmd! * <buffer>
+  augroup END
+  call s:DropSpill()
+  setlocal buftype= bufhidden=
+  unlet! b:hexpair_page_file b:hexpair_page_size b:hexpair_page_bufname
+        \ b:hexpair_page_spill
+endfunction
+
+" ---------------------------------------------------------------------------
+" Windowed text view
+" ---------------------------------------------------------------------------
+"
+" The page's raw bytes as text. Two things make it more than a display
+" variant: it carries the same banner, so the buffer never quietly
+" pretends to be the whole file, and a :w from here goes through the same
+" page-range write - the buffer holds one page's worth of bytes, so a
+" literal Vim write would truncate the file down to it.
+"
+" Bytes survive the round trip through readfile()/writefile()'s binary
+" mode, which is exact in a way getline() alone is not: Vim stores a NUL
+" byte as a NL inside a line, and those two functions are inverses of each
+" other about that, about the split on newlines, and about a trailing one.
+
+" The banner cannot be recognized by its first character here the way it
+" can in a hex dump: a dump line always starts with a hex digit, but a
+" page of raw bytes may perfectly well start with a double quote. So the
+" exact banner text is remembered when the view is built, and only an
+" exact match at the top and bottom counts - anything else means the user
+" edited or deleted a banner line, and the write is refused rather than
+" guessing which bytes are content.
+function! s:TextBodyRange() abort
+  if line('$') < 2
+        \ || getline(1) !=# get(b:, 'hexpair_banner_top', "\<NUL>")
+        \ || getline('$') !=# get(b:, 'hexpair_banner_bottom', "\<NUL>")
+    throw 'hexpair: the page banner was edited or removed, so which lines '
+          \ . 'are content can no longer be told apart from which are the '
+          \ . 'banner; reload the page with :HexPairPageGoto! '
+          \ . (get(b:, 'hexpair_page_index', 0) + 1)
+  endif
+  return [2, line('$') - 1]
+endfunction
+
+" The page's bytes as the text view currently holds them.
+function! s:TextViewLines() abort
+  let [first, last] = s:TextBodyRange()
+  return last < first ? [] : getline(first, last)
+endfunction
+
+" Byte offset within the page of the cursor, and the reverse.
+function! s:TextByteOffset() abort
+  let [first, last] = s:TextBodyRange()
+  let lnum = line('.') < first ? first : (line('.') > last ? last : line('.'))
+  let off = 0
+  for l in range(first, lnum - 1)
+    let off += strlen(getline(l)) + 1
+  endfor
+  return b:hexpair_page_base + off + col('.') - 1
+endfunction
+
+function! s:TextGotoOffset(abs) abort
+  let [first, last] = s:TextBodyRange()
+  let rel = a:abs - b:hexpair_page_base
+  let acc = 0
+  for l in range(first, last)
+    let len = strlen(getline(l))
+    if rel <= acc + len
+      call cursor(l, rel - acc + 1)
+      return
+    endif
+    let acc += len + 1
+  endfor
+  call cursor(last, 1)
+endfunction
+
+" Replace the buffer with a:lines bracketed by the current page's banner,
+" without making it an undoable edit (see s:LoadPage() for why).
+function! s:SetViewLines(lines) abort
+  let save_ul = &l:undolevels
+  setlocal noreadonly modifiable
+  try
+    setlocal undolevels=-1
+    silent %delete _
+    call setline(1, [b:hexpair_banner_top] + a:lines + [b:hexpair_banner_bottom])
+  finally
+    let &l:undolevels = save_ul
+  endtry
+endfunction
+
+" HEX-PAGE -> WINDOWED-TEXT, carrying the page's bytes as they stand -
+" including edits made in the dump, which is why this converts the buffer
+" rather than re-reading the page from disk.
+function! s:ToText() abort
+  let scan = s:PagedScan(0)
+  if !empty(scan.err)
+    if has_key(scan.err, 'lnum')
+      call cursor(scan.err.lnum, scan.err.col)
+      call s:PagedHighlight()
+    endif
+    throw 'hexpair: ' . scan.err.msg . '; still in the hex view'
+  endif
+
+  let off = s:PagedByteOffset()
+  let modified = &l:modified
+  let hex = tempname()
+  let raw = tempname()
+  try
+    call writefile(scan.lines, hex)
+    call s:Run(printf('%s -r -p %s %s', s:xxd,
+          \ shellescape(hex), shellescape(raw)))
+    call s:PagedClearHighlight()
+    call s:SetViewLines(readfile(raw, 'b'))
+  finally
+    call delete(hex)
+    call delete(raw)
+  endtry
+
+  let b:hexpair_view = 'text'
+  " The bundled xxd ftplugin's editing defaults belong to a dump, not to
+  " raw bytes. Clearing 'filetype' fires no FileType event (there is no
+  " new filetype to fire for), so its undo has to be run by hand - the
+  " same thing the whole-file toggle used to do on its way out of hex
+  " mode. Going back to the hex view sets filetype=xxd, which does fire,
+  " and re-applies them.
+  setlocal filetype=
+  if exists('b:undo_ftplugin')
+    execute b:undo_ftplugin
+    unlet b:undo_ftplugin
+  endif
+  unlet! b:did_ftplugin
+  call s:ApplyBannerSyntax()
+  if !modified
+    setlocal nomodified
+  endif
+  call s:TextGotoOffset(off)
+  redraw!
+endfunction
+
+" WINDOWED-TEXT -> HEX-PAGE, the same way round.
+function! s:ToHexView() abort
+  let off = s:TextByteOffset()
+  let modified = &l:modified
+  let raw = tempname()
+  let dump = tempname()
+  try
+    call writefile(s:TextViewLines(), raw, 'b')
+    call s:CanonicalDump(raw, b:hexpair_page_base, dump)
+    call s:SetViewLines(readfile(dump))
+  finally
+    call delete(raw)
+    call delete(dump)
+  endtry
+
+  let b:hexpair_view = 'hex'
+  setlocal filetype=xxd
+  call s:ApplyBannerSyntax()
+  if !modified
+    setlocal nomodified
+  endif
+  call s:PagedGotoOffset(off)
+  call s:PagedHighlight()
+  redraw!
+endfunction
+
+function! s:Toggle() abort
+  try
+    if !get(b:, 'hexpair_page_active', 0)
+      call s:ToHex()
+    elseif s:IsHexView()
+      call s:ToText()
+    else
+      call s:ToHexView()
+    endif
+  catch /^hexpair:/
+    echohl ErrorMsg
+    echomsg v:exception
+    echohl None
+  endtry
+endfunction
+
+" ---------------------------------------------------------------------------
+" Refreshing the rendering
+" ---------------------------------------------------------------------------
+
+" Regenerate the offset and ASCII columns from the current hex payload,
+" without touching the file on disk: the same round trip a toggle to the
+" text view and back would perform, but without leaving the hex view.
+" 'modified' must come out exactly as it went in - no byte changes, only
+" the rendering of it.
+function! s:Refresh() abort
+  if !get(b:, 'hexpair_page_active', 0)
     echohl WarningMsg | echomsg 'hexpair: hex mode is not active' | echohl None
     return
   endif
-  let [n, hexstart, hexend, asciistart] = s:Layout()
-  let [idx, in_hex] = s:CursorByte()
-  let target = a:target ==# 'swap' ? (in_hex ? 'ascii' : 'hex') : a:target
-  if target ==# 'hex'
-    call cursor(line('.'), hexstart + idx * 3)
-  else
-    call cursor(line('.'), asciistart + idx)
+  if !s:IsHexView()
+    echohl WarningMsg
+    echomsg 'hexpair: the text view has no offset or ASCII columns to refresh'
+    echohl None
+    return
   endif
-  call s:Highlight()
+  try
+    let modified = &l:modified
+    call s:ToText()
+    call s:ToHexView()
+    if !modified
+      setlocal nomodified
+    endif
+  catch /^hexpair:/
+    echohl ErrorMsg
+    echomsg v:exception
+    echohl None
+  endtry
 endfunction
+
+" ---------------------------------------------------------------------------
+" Column navigation
+" ---------------------------------------------------------------------------
+
+
 
 " ---------------------------------------------------------------------------
 " Command and mappings
 " ---------------------------------------------------------------------------
 
 command! -bar HexPairToggle  call s:Toggle()
-command! -bar HexPairGoHex   call s:JumpTo('hex')
-command! -bar HexPairGoAscii call s:JumpTo('ascii')
-command! -bar HexPairSwap    call s:JumpTo('swap')
+command! -bar HexPairGoHex   call s:PagedJumpTo('hex')
+command! -bar HexPairGoAscii call s:PagedJumpTo('ascii')
+command! -bar HexPairSwap    call s:PagedJumpTo('swap')
 command! -bar HexPairRefresh call s:Refresh()
+
+command! -bar -nargs=+ -complete=file HexPairOpen call s:Open(<f-args>)
+command! -bar -bang HexPairPageNext call s:PageNext('<bang>' ==# '!')
+command! -bar -bang HexPairPagePrev call s:PagePrev('<bang>' ==# '!')
+command! -bar -bang -nargs=1 HexPairPageGoto call s:PageGoto(str2nr(<q-args>), '<bang>' ==# '!')
+command! -bar -bang -nargs=1 HexPairGoOffset
+      \ call s:GotoOffset(<q-args>, '<bang>' ==# '!')
+command! -bar HexPairPages call s:Pages()
+
+" No default key mappings are defined; map the <Plug> mappings (or the
+" commands directly) in your vimrc, e.g.:
+"   nmap <Leader>j <Plug>(HexPairPageNext)
+"   nmap <Leader>k <Plug>(HexPairPagePrev)
+"   nmap <Leader>g <Plug>(HexPairPageGoto)
+" Force variants (discard unsaved changes, like the ! commands) need no
+" <Plug> target for Next/Prev - map the bang command directly:
+"   nnoremap <silent> <Leader>J :HexPairPageNext!<CR>
+"   nnoremap <silent> <Leader>K :HexPairPagePrev!<CR>
+"   nmap <Leader>G <Plug>(HexPairPageGotoForce)
+nnoremap <silent> <Plug>(HexPairPageNext) :<C-U>HexPairPageNext<CR>
+nnoremap <silent> <Plug>(HexPairPagePrev) :<C-U>HexPairPagePrev<CR>
+nnoremap <silent> <Plug>(HexPairPageGoto) :<C-U>call <SID>PageGotoPrompt(0)<CR>
+nnoremap <silent> <Plug>(HexPairPageGotoForce) :<C-U>call <SID>PageGotoPrompt(1)<CR>
+nnoremap <silent> <Plug>(HexPairGoOffset) :<C-U>call <SID>GotoOffsetPrompt(0)<CR>
+nnoremap <silent> <Plug>(HexPairGoOffsetForce) :<C-U>call <SID>GotoOffsetPrompt(1)<CR>
+nnoremap <silent> <Plug>(HexPairPages) :<C-U>HexPairPages<CR>
 
 " No default key mappings are defined; map the <Plug> mappings (or the
 " commands directly) in your vimrc, e.g.:

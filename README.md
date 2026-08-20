@@ -45,16 +45,17 @@ code, releases and issue tracker.
   subtle underline (`HexPairActive`), the counterpart a prominent
   highlight (`HexPairMirror`) — so you always see at a glance which
   column you are in.
-- **Byte-exact cursor mapping.** Toggling between the normal view and
-  the hex view keeps the cursor on the *same byte* — for a multibyte
-  character, on its first byte in the file encoding. The mapping stays
+- **Byte-exact cursor mapping.** Every transition — into hex mode,
+  between the hex and text views, across a write, across a page turn —
+  keeps the cursor on the *same byte*, and entering hex mode opens on
+  the page that byte is on. The mapping stays
   exact for files with a BOM, CRLF or even mixed CRLF/LF line endings,
   and single-byte file encodings (`latin*`, `cp125x`, ...).
-- **Safe writing.** `:w` in hex mode transparently converts back to
-  binary before the write and regenerates the dump afterwards — the
-  file on disk always contains the real bytes, never the textual dump,
-  and the cursor stays on the byte it was on even when insertions
-  shifted all offsets.
+- **Safe writing, scoped to the page.** `:w` converts back to binary
+  and writes just the page you are looking at — the file on disk always
+  contains the real bytes, never the textual dump, and regions of the
+  file you never looked at cannot be clobbered. Overwriting values
+  patches in place at a cost independent of the file's size.
 - **Forgiving editing.** Only the HEX column matters: the offset and
   ASCII columns are stripped before the reverse conversion, so you can
   freely insert, delete or reorder lines — inserted lines need no
@@ -71,15 +72,19 @@ code, releases and issue tracker.
   file).
 - **Errors are refused, not guessed.** A non-hex character in the hex
   area, or an odd total number of hex digits, aborts `:w` and hex-mode
-  toggle-off with an error and the cursor parked on the offender — the
+  the switch to the text view with an error and the cursor parked on
+  the offender — the
   file and the dump keep their previous content. Reloading with `:e`
   while in hex mode regenerates the dump from the fresh file content
   and stays in hex mode instead of breaking the view.
-- **Paged large-file mode.** `:HexPairOpen` shows one configurable-size
-  page (default 1 MiB) of an arbitrarily large file at a time, with
-  absolute file offsets, without ever loading the whole file into a
-  buffer. Currently read-only (paging and navigation); writing is
-  planned. See [below](#paged-large-file-mode-read-only).
+- **Always paged, so file size stops mattering.** The hex view is always
+  one page (default 128 KiB) with absolute file offsets — a small file
+  simply has exactly one. `:HexPairOpen` opens a file of any size
+  instantly, reading only the page it shows and never loading the rest. `:w` writes the page back: overwriting values patches it
+  **in place**, so the rest of the file is never read or written
+  whatever its size, and inserting or deleting bytes rewrites the file
+  only after telling you the size change and asking. See
+  [below](#paged-large-file-mode).
 
 ## Installation
 
@@ -103,20 +108,30 @@ The plugin defines **no key mappings by default**. Add your own to
 `~/.vimrc`:
 
 ```vim
-nmap <Leader>h <Plug>(HexPairToggle)     " toggle hex view
-nmap <Leader>< <Plug>(HexPairGoHex)      " jump to the HEX column (same byte)
-nmap <Leader>> <Plug>(HexPairGoAscii)    " jump to the ASCII column (same byte)
-nmap <Leader>- <Plug>(HexPairSwap)       " jump to the opposite column
-nmap <Leader>r <Plug>(HexPairRefresh)    " regenerate offsets/ASCII, no write
-nmap <Leader>j <Plug>(HexPairPageNext)   " paged mode: next page
-nmap <Leader>k <Plug>(HexPairPagePrev)   " paged mode: previous page
-nmap <Leader>g <Plug>(HexPairPageGoto)   " paged mode: prompt for a page number
-" Uppercase variants: same, but discard unsaved changes without asking
-" (like the ! commands) - handy for skimming through a file read-only.
+" Views
+nmap <Leader>h <Plug>(HexPairToggle)        " hex page view <-> windowed text view
+nmap <Leader>< <Plug>(HexPairGoHex)         " cursor to the HEX column, same byte
+nmap <Leader>> <Plug>(HexPairGoAscii)       " cursor to the ASCII column, same byte
+nmap <Leader>- <Plug>(HexPairSwap)          " cursor to the opposite column
+nmap <Leader>r <Plug>(HexPairRefresh)       " regenerate offsets/ASCII, no write
+
+" Moving around the file
+nmap <Leader>j <Plug>(HexPairPageNext)      " next page
+nmap <Leader>k <Plug>(HexPairPagePrev)      " previous page
+nmap <Leader>g <Plug>(HexPairPageGoto)      " prompt for a page number
+nmap <Leader>b <Plug>(HexPairGoOffset)      " prompt for a byte offset (0x... ok)
+nmap <Leader>? <Plug>(HexPairPages)         " where am I: page X of Y, byte range
+
+" Uppercase variants: the same, but discard unwritten changes without
+" asking (like the ! commands) - handy for skimming through a file.
 nnoremap <silent> <Leader>J :HexPairPageNext!<CR>
 nnoremap <silent> <Leader>K :HexPairPagePrev!<CR>
 nmap <Leader>G <Plug>(HexPairPageGotoForce)
+nmap <Leader>B <Plug>(HexPairGoOffsetForce)
 ```
+
+`:HexPairOpen {file}` takes an argument, so it has no `<Plug>` target;
+it is meant for the command line or a shell wrapper (see below).
 
 `<Leader>` expands to the `mapleader` variable at the time a mapping is
 defined — backslash by default; put e.g. `let mapleader = ','` *before*
@@ -144,24 +159,62 @@ Open a file, preferably in binary mode:
 vim -b file.bin
 ```
 
-and toggle the hex view with your mapping or `:HexPairToggle`. To open
-a file directly in the hex view from the shell:
+and toggle the hex view with your mapping or `:HexPairToggle`. For a file
+too large to want Vim to read at all, skip the buffer entirely:
 
 ```sh
-vim -b -c 'HexPairToggle' file.bin
+vim -c 'HexPairOpen /var/lib/disk.img'
 ```
+
+A buffer hexpair has touched is in one of two views, and `:HexPairToggle`
+moves between them:
+
+| View | What you see |
+|---|---|
+| **Hex page** | the page as an xxd dump — offset, hex and ASCII columns — between two banner lines |
+| **Windowed text** | the same page's raw bytes as text, between the same banner lines |
+
+There is deliberately **no way back** to the plain buffer: once a buffer
+holds one page instead of the whole file, showing it as the file again
+would be a lie, and a plain `:w` would truncate the file down to that
+page. Close and reopen the file for the ordinary view.
 
 | Command | Description |
 |---|---|
-| `:HexPairToggle` | Toggle between the normal content and the hex dump view |
-| `:HexPairGoHex` | Move the cursor to the HEX column, staying on the same byte |
-| `:HexPairGoAscii` | Move the cursor to the ASCII column, staying on the same byte |
-| `:HexPairSwap` | Move the cursor to the opposite column, staying on the same byte |
-| `:HexPairRefresh` | Regenerate the offset and ASCII columns from the current hex payload, without writing to disk |
+| `:HexPairToggle` | Move between the hex page view and the windowed text view |
+| `:HexPairGoHex` / `:HexPairGoAscii` / `:HexPairSwap` | Move the cursor between the HEX and ASCII columns, staying on the same byte |
+| `:HexPairRefresh` | Regenerate the offset and ASCII columns from the current hex payload, without writing |
+| `:HexPairOpen[!] {file} [page]` | Open `{file}` paged, without loading it |
+| `:HexPairPageNext[!]` / `:HexPairPagePrev[!]` / `:HexPairPageGoto[!] {n}` | Turn pages (`!` discards unwritten changes) |
+| `:HexPairGoOffset[!] {byte}` | Jump to a byte offset, decimal or `0x`-prefixed, turning the page if needed |
+| `:HexPairPages` | Report page X of Y, the offsets covered and the file size |
 
 Editing rules (see `:help hexpair` for details): keep bytes in the hex
 area separated by at most one space — a run of two spaces marks the
 start of the (ignored) ASCII column — and always write full byte pairs.
+The banner lines are decoration and contribute no bytes; in the windowed
+text view they are matched by their exact text, so editing one refuses
+the write rather than guessing which lines are content.
+
+`:w` writes just the page you are looking at. If you only overwrote
+values, it is patched **in place** — the file keeps its length, every
+byte outside the page keeps its content, and the cost does not depend on
+the file's size. If you inserted or deleted bytes, no filesystem can
+splice them into the middle of a file, so hexpair tells you how the
+size will change and asks before rewriting it.
+
+Where the pages come from depends on what the buffer was:
+
+- **unmodified and backed by a file** — the usual case: pages are read
+  from the file;
+- **no file at all** (`cat data | vim -`) — the content is written once
+  to a private temporary file and paged from there. A plain `:w` has
+  nothing to write back to; `:w {file}` saves all of it and the view
+  then edits that file. Pipe binary data in with `vim -b -`, or Vim may
+  transcode it on the way in — hexpair warns when it does;
+- **modified and backed by a file** — refused, because the buffer and
+  the file disagree and every way of resolving that loses something
+  quietly. Write it first, or use `:HexPairOpen` to see what is on disk.
 
 ### Configuration
 
@@ -192,21 +245,19 @@ tweak individual settings, use `~/.vim/after/ftplugin/xxd.vim` (see
 Full documentation: `:help hexpair` after installation, or
 [doc/hexpair.txt](doc/hexpair.txt).
 
-## Paged large-file mode (read-only)
+## Pages
 
-For files too large to load into a Vim buffer, open one page at a time
-directly from the shell, without ever reading the rest of the file:
-
-```sh
-vim -c 'HexPairOpen bigfile.bin'
-```
+The hex view is always one page. A file smaller than a page has exactly
+one; a 400 GB one has as many as it needs, and only the page on screen
+is ever read.
 
 | Command | Description |
 |---|---|
-| `:HexPairOpen {file} [page]` | Open `{file}` in paged mode, showing `[page]` (1-based, default 1) |
-| `:HexPairPageNext[!]` / `:HexPairPagePrev[!]` | Show the next/previous page; refuses to discard unsaved changes without `!` |
-| `:HexPairPageGoto[!] {N}` | Jump directly to page `{N}` (1-based) |
-| `:HexPairPages` | Report the current page, total pages and the absolute byte range shown |
+| `:HexPairOpen[!] {file} [page]` | Open `{file}` paged at `[page]` (1-based, default 1) without loading it |
+| `:HexPairPageNext[!]` / `:HexPairPagePrev[!]` | Turn the page; refuses to discard unwritten changes without `!` |
+| `:HexPairPageGoto[!] {N}` | Jump to page `{N}` |
+| `:HexPairGoOffset[!] {byte}` | Jump to a byte offset, decimal or `0x`-prefixed |
+| `:HexPairPages` | Report the current page, total pages and the byte range shown |
 
 `<Plug>(HexPairPageGoto)` (mapping example above) prompts for a page
 number with `input()` instead of requiring a typed `:HexPairPageGoto
@@ -214,48 +265,34 @@ number with `input()` instead of requiring a typed `:HexPairPageGoto
 `<Plug>(HexPairPageGotoForce)` is the same prompt but discards unsaved
 changes without asking, like the `{N}` variant with `!`.
 
-Each page is bracketed by a leading/trailing banner line (`" hexpair:
-page 3/21  bytes ...`), purely decorative like the offset and ASCII
-columns elsewhere, given a comment-like appearance via the
-`HexPairPageBanner` highlight group.
+Each page is bracketed by a leading and trailing banner line (`" hexpair:
+page 3/21  bytes ...`), given a comment-like appearance via the
+`HexPairPageBanner` highlight group. The banner contributes no bytes: in
+the dump it is recognized by its leading double quote, and in the
+windowed text view — where a page of raw bytes may itself start with one
+— by matching the banner text exactly, so editing it refuses the write
+rather than guessing which lines are content.
 
-```vim
-" bytes per page (default 1 MiB); must be a positive multiple of
-" g:hexpair_bytes_per_line
-let g:hexpair_page_size = 1024 * 1024
-```
+A page is an ordinary Vim buffer, so its size is what everything costs:
+with 16 bytes per line, the default 128 KiB page is 8192 lines. Reading
+one takes hundredths of a second, writing one about a third. Since
+`:HexPairGoOffset` reaches any byte directly, raising the page size buys
+nothing but latency — see `:help hexpair-paged-size`.
 
-A shell wrapper, e.g. in `~/.bashrc`, for opening a file straight into
-paged mode without typing the `vim -c 'HexPairOpen ...'` incantation:
+`:w {file}` means "save the whole thing over there", not "save this
+page": it writes the entire content being paged, with the current page's
+edits in it, and leaves the original alone. For piped input that is the
+only way to save, and the view adopts the file afterwards.
 
-```sh
-vimhex() {
-    if [ $# -lt 1 ] || [ $# -gt 2 ]; then
-        echo "usage: vimhex FILE [PAGE]" >&2
-        return 1
-    fi
-    # HexPairOpenFile(), not `-c 'HexPairOpen ...'`: a name containing a
-    # space or a literal '$' does not fully round-trip through the Ex
-    # command's own argument parsing (see HexPairOpenFile() above), but
-    # passing it through the environment and calling the function form
-    # directly needs no escaping at all.
-    HEXPAIR_OPEN_FILE="$1" HEXPAIR_OPEN_PAGE="${2:-1}" \
-        vim -c 'call HexPairOpenFile($HEXPAIR_OPEN_FILE, $HEXPAIR_OPEN_PAGE)'
-}
-```
+A file that changed on disk since the page was read is refused rather
+than patched blindly. `g:hexpair_page_confirm = 0` answers the resize
+question automatically, for scripts.
 
-```sh
-vimhex bigfile.bin        # page 1
-vimhex bigfile.bin 3      # page 3
-```
-
-This mode is currently **read-only**: writing a paged buffer is
-planned but not yet implemented — `:w` fails with a clear error and
-changes nothing. It also requires a newer Vim than the rest of the
-plugin: 64-bit Numbers (`+num64`) and patch 8.2.4906+, checked at load
-time with a clear message if unmet (the base toggle mode above is
-unaffected and keeps its Vim 8.0 requirement). Details: `:help
-hexpair-paged`.
+Only a write that **changes** a page's length needs a newer Vim than the
+rest of the plugin: `+num64` and patch 8.2.4906+, for `readblob()`,
+checked when such a write is attempted and refusing just that write.
+Everything else runs on Vim 8.0 like the rest of the plugin. Details:
+`:help hexpair-paged`.
 
 ## Requirements
 
@@ -271,9 +308,8 @@ Bug reports and patches are welcome — see
 [CONTRIBUTING.md](CONTRIBUTING.md) for the repository layout, the test
 harness, the reproducible release packaging and the signing policy.
 Project notes for AI-assisted development live in
-[CLAUDE.md](CLAUDE.md), including the architecture and remaining
-implementation plan for the **paged large-file mode** (writing is not
-implemented yet).
+[CLAUDE.md](CLAUDE.md), including the architecture of the **paged
+large-file mode**.
 
 ## License
 

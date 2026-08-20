@@ -28,11 +28,9 @@ pack-release.cmd      - Windows wrapper around pack-release.py
 pack-release.py       - the packaging implementation (python3, stdlib
                         only); byte-identical tarball on every platform
                         by construction
-plugin/hexpair.vim    - the base plugin (whole-buffer toggle); header
+plugin/hexpair.vim    - the whole plugin, one script scope; header
                         carries Version: and Date: (single source of
                         truth, parsed by pack-release.py)
-plugin/hexpair_paged.vim - paged large-file mode; separate script scope
-                        from plugin/hexpair.vim on purpose (see below)
 ftplugin/xxd.vim      - dump-editing defaults (guarded by b:did_ftplugin,
                         reverted via b:undo_ftplugin)
 doc/hexpair.txt       - Vim help (:help hexpair)
@@ -65,6 +63,15 @@ Key function map:
   and filters through `xxd -r -p`. **Offsets and the ASCII column are
   purely decorative by design** — users may insert bare hex lines,
   reorder lines, leave stale offsets.
+- `s:ZeroBytes()` / `s:KeepEmpty()` — a buffer holding NO bytes must
+  never be handed to a filter: Vim serializes it as a single newline,
+  which xxd faithfully dumps as a `0a` the file never had. Zero bytes
+  has two representations (the state a 0-byte file is read into, where
+  `line2byte(1)` is -1, and one empty line with `noeol`); a buffer
+  holding a lone `0a` looks like neither, which is what makes the two
+  distinguishable at all, since by content both are one empty line.
+  Every `%!xxd` in this file is guarded by it, and `s:FromHex()`
+  re-applies `s:KeepEmpty()` after restoring the saved `'eol'`.
 - `s:ToHex()` / `s:FromHex()` — the toggle. On a non-binary buffer,
   ToHex re-reads the file with `:edit ++bin` (unmodified, file-backed
   buffers only; otherwise warn) — read-time conversions (BOM
@@ -162,7 +169,9 @@ binary fixtures with python.
 Every change ships with a test. When a field bug is diagnosed (the
 project history includes several: forced `noeol` hiding the final
 newline, layout desync on `g:hexpair_bytes_per_line` change, stale
-`FileOffsetNonBinary` predictions on mixed CRLF/LF, toggle-off
+`FileOffsetNonBinary` predictions on mixed CRLF/LF, a 0-byte file
+growing to one byte because `%!` serializes an empty buffer as a
+newline, toggle-off
 mirroring only the pre-hex-mode `'modified'` state and silently
 discarding an edit made purely in hex mode, `:HexPairOpen` renaming a
 scratch buffer to a real-looking path before validating the requested
@@ -215,15 +224,13 @@ remain the *fast entry point* that skips loading the whole file first
 — for a file already open normally, `:HexPairToggle` gets you to the
 same place, just after Vim already spent the memory to load it.
 
-Consequence: `plugin/hexpair_paged.vim` is absorbed back into
-`plugin/hexpair.vim` (single file, single script scope) as part of
-Stage 2 below — once hex mode is unconditionally page-aware, keeping
+Consequence, now done: `plugin/hexpair_paged.vim` was absorbed back
+into `plugin/hexpair.vim` (single file, single script scope) in Stage 2 — once hex mode is unconditionally page-aware, keeping
 two files would mean duplicating almost everything (`Layout`, strip,
 validate, highlight, cursor mapping), not just the one small
 `s:ResolveXxd()` helper Stage 1's split cost. `plugin/hexpair_paged.vim`
-is deleted; `pack-release.py`'s `FILES` and `CONTRIBUTING.md`'s repo
-layout table lose that entry. **This is a decision for Stage 2's own
-plan, not yet executed — noted here so Stage 2 doesn't rediscover it.**
+is gone, along with its entries in `pack-release.py`'s `FILES` and
+`CONTRIBUTING.md`'s repo layout table.
 
 ### Stages (renumbered; Stage 1 unchanged, Stages 2-3 replaced, Stage 4 new)
 
@@ -236,22 +243,32 @@ a large real file.
   Superseded by, not deleted before, Stage 2: its page-read/boundary/
   banner/highlight machinery is the foundation Stage 2 folds into the
   unified mode, largely unchanged in substance, moved and rewired.
-- **Stage 2 — unify into a single always-paged mode: PLANNED**, design
-  below. No *new* writing capability — `:w` still throws "not
-  implemented yet" the same way Stage 1's paged buffers already do,
-  now from every hex-mode buffer regardless of entry point, plus the
-  new windowed text-mode (below). Deliberately kept separate from
-  introducing real disk writes, so this large structural refactor
-  (merging two files, three buffer states, two population paths) can
-  be reviewed on its own.
-- **Stage 3 — same-length in-place patch write: PLANNED** (was "Stage
-  2" before this redesign; mechanism unchanged, see "Writing a page"
-  below — now applies uniformly to a write from hex-page-view *or*
-  windowed-text-view, since both reduce to "these N bytes replace the
-  file's `[base, base+len)` range").
-- **Stage 4 — length-changing splice write: PLANNED** (was "Stage 3").
+- **Stage 2 — unify into a single always-paged mode: IMPLEMENTED.**
+  `plugin/hexpair_paged.vim` is merged back into `plugin/hexpair.vim`,
+  `:HexPairToggle` is always paged and moves between the two views, and
+  the whole-file dump machinery is gone: `s:Layout`, `s:Highlight`,
+  `s:StripDumpLine`, `s:ValidateDump`, `s:ReverseDump`, `s:DumpOffset`,
+  `s:DumpPos`, `s:CursorByte`, `s:PreWrite`, `s:PostWrite`,
+  `s:PostReload` and `s:FromHex` all had `s:Paged*` counterparts, which
+  are now the only implementation, and `b:hexpair_active` collapses
+  into `b:hexpair_page_active`.
+- **Stage 3 — same-length in-place patch write: IMPLEMENTED.**
+  Mechanism exactly as "Writing a page" below describes, and driven
+  from both views: `s:Write()` gets the page's new bytes either by
+  stripping the dump or by taking the text view's lines as they are.
+- **Stage 4 — length-changing splice write: IMPLEMENTED**, likewise,
+  including the narrowed runtime version gate this redesign called for.
+
+Stages 3 and 4 were built before Stage 2 because the write path was
+what the feature was missing, and because it turned out to be
+independent of the unification: it works on "these N bytes replace the
+file's `[base, base+len)` range", which is true of a Hex-page-view
+buffer however it was populated - and, once Stage 2 landed, of a
+Windowed-text-view one too.
 
 ### The three buffer states and how a buffer moves between them
+(implemented; `s:IsHexView()`, `s:ToHex()`, `s:ToText()`, `s:ToHexView()`,
+`s:PageSource()`, `s:SetupPagedBuffer()`)
 
 1. **Plain** — an ordinary Vim buffer, hex mode never engaged.
    Completely untouched by hexpair; `:w` is 100% vanilla Vim. This is
@@ -399,27 +416,52 @@ detail.
   reaches 4 GiB (`fffffffc:` immediately followed by `100000000:` in
   the *same* dump), which the base plugin's `s:Layout()` (hardcoded
   `hexstart=11`) never has to consider since Vim buffers never
-  realistically approach 4 GiB. `s:PagedLayout()` instead *discovers*
-  `hexstart` per page (`s:HexDigitWidth(base) + 2`, cached as
-  `b:hexpair_page_hexstart`) and `HexPairPagedBounds()`/
-  `HexPairPagedWidthBoundaries()` (below) guarantee it is constant
-  across any one page by construction.
+  realistically approach 4 GiB. `s:PagedLineLayout(lnum)` reads the
+  width off **the line itself** — the offset column ends at the first
+  `:`, the rule the whole plugin already shares (invariant 1) — so a
+  page that straddles a widening simply carries both widths, each line
+  laid out correctly, and bare hex lines a user inserts (no offset
+  column at all) come out right for free. `s:PagedOffsetLayout(off)` is
+  the same thing for a caller that knows an offset but not yet the
+  line. `b:hexpair_page_hexstart` remains only as the page's *first*
+  line's value, for the initial cursor placement.
+
+  This replaced an earlier scheme that instead kept the width uniform
+  per page, by splitting the file into width-segments at every `16^8`,
+  `16^9`, … and clamping page boundaries to them
+  (`HexPairPagedWidthBoundaries()`, now gone). Both are correct; per
+  line wins because it lets pages stay **plain fixed-size slices**, so
+  `base = idx * size` holds everywhere, page numbering never shifts
+  when a file grows past a boundary, and the page holding a given byte
+  offset is a division — and because it is the only one of the two that
+  also handles a line with no offset column.
 - Pair highlighting, from the base plugin's `s:Highlight()` (see
   above), additionally skips banner lines entirely (see "Page banner").
+- `s:PagedScan(lnum)` — ONE walk over the page returning `err`
+  (validation), `lines` (stripped payload) and `bytes` (bytes before
+  `lnum`), which is what a write needs. It replaced three separate
+  walks; folding them cut a write on a 128 KiB page from 0.5 s to
+  0.32 s, and scales with the page size.
+- Loading a page happens with `'undolevels'` at **-1, buffer-locally**
+  (|clear-undo|), so the undo history never survives a page turn:
+  a single `u` afterwards would otherwise put the bytes of a different
+  part of the file into a buffer that claims to be this page, which a
+  write would then patch in at this page's offset. Buffer-local because
+  `'undolevels'` is global-local — setting only the global one leaves a
+  buffer that has its own value with its history intact. Undo of edits
+  made *within* the loaded page works normally.
 
 ### Page boundary arithmetic
 
 `HexPairPagedBounds(idx, size, total)` / `HexPairPagedTotalPages(size,
-total)` / `HexPairPagedWidthBoundaries(total)` are global, pure
-functions (no I/O, no buffer/window state) treating the file's byte
-range as a sequence of **width-uniform segments**, split at every
-`16^8`, `16^9`, ... boundary that falls inside it. Within a segment,
-pages are plain fixed-size slices of `g:hexpair_page_size`; only the
-segment containing a boundary ever produces a page shorter than that.
-Being pure and parameterized by a `total` the caller supplies (not
-read from a real file), these are directly testable against a
-fabricated multi-GiB `total` without needing an actual multi-GiB test
-fixture.
+total)` are global, pure functions (no I/O, no buffer/window state):
+page `idx` is simply `[idx * size, idx * size + size)`, clipped by
+`total`, and the page count is `total` divided by `size`, rounded up.
+Nothing about the file's content or xxd's formatting perturbs that —
+see the offset-width note above for why it does not have to. Being
+pure and parameterized by a `total` the caller supplies (not read from
+a real file), they are directly testable against a fabricated multi-GiB
+`total` without needing an actual multi-GiB test fixture.
 
 ### Page banner
 
@@ -442,10 +484,10 @@ whose
 **first** character is `"` is a full-line comment contributing zero
 bytes — never ambiguous with real `xxd` output (data lines always
 start with a hex digit) or a bare inserted hex line (never starts with
-`"` either). `s:PagedStripDumpLine()`/`s:PagedValidateDump()` (banner-
-aware counterparts of the base plugin's `s:StripDumpLine()`/
-`s:ValidateDump()` — keep the three in sync, extending invariant 1)
-skip banner lines *before* their normal payload logic runs, so banner
+`"` either). `s:PagedPayload()` (banner-aware counterpart of the base plugin's
+`s:StripDumpLine()` — extending invariant 1, and the one place the rule
+lives for this mode: the stripper, the validator and the cursor mapping
+all call it) skips banner lines *before* its normal payload logic runs, so banner
 text (which contains plain decimal digits and letters, e.g. "page",
 "bytes") can never leak into hex-payload parsing. Exposed as global
 `HexPairPagedStripLine()`/`HexPairPagedValidate()` purely for
@@ -538,24 +580,37 @@ above).
   `b:hexpair_n`'s snapshot of `g:hexpair_bytes_per_line` in the base
   plugin) so a later global change cannot desync an open page buffer.
 
-### Stage 1 gaps that Stage 2 should close, not just carry forward
+### Stage 1 gaps — CLOSED
 
-These were out of scope for Stage 1's approved plan, filed as known
-gaps rather than regressions — but under the "one mode" redesign they
-stop being optional follow-ups, since Hex-page-view is no longer a
-separate second-class mode:
+Both were closed without waiting for the unification, since they are
+missing behaviour rather than structure, and both needed only a
+hand-off across the two script scopes rather than a copy of the logic:
 
-- `:HexPairGoHex`/`:HexPairGoAscii`/`:HexPairSwap`, currently keyed on
-  `b:hexpair_active` (never set by a paged buffer, which uses
-  `b:hexpair_page_active`) — once there is one mode, one active flag,
-  these should just work on any Hex-page-view buffer.
-- `g:hexpair_paste` management (`s:PasteOn()`/`s:PasteOff()`) —
-  likewise should apply uniformly; presumably to Windowed-text-view
-  too, on the same reasoning as the ftplugin/banner/write-path
-  uniformity decided above (confirm with the maintainer if it's not
-  obvious once Stage 2 gets there).
+- `:HexPairGoHex`/`:HexPairGoAscii`/`:HexPairSwap` — `s:JumpTo()` in
+  the base plugin hands a buffer with `b:hexpair_page_active` over to
+  `HexPairPagedJumpTo()`, which does the same job against
+  `s:PagedLineLayout()` and skips banner lines.
+- `g:hexpair_paste` — `s:PasteOn()`/`s:PasteOff()` now accept either
+  mode's active flag, and are reachable from the paged script as
+  `HexPairPasteOn()`/`HexPairPasteOff()`, which its `BufEnter`/
+  `BufLeave` autocommands call. One implementation, one buffer-local
+  saved value, both modes.
 
-### Writing a page — two mechanisms, chosen by length (Stage 3/4, not yet implemented)
+### Writing a page — two mechanisms, chosen by length (Stages 3/4, IMPLEMENTED)
+
+`s:Write()` on `BufWriteCmd` is the entry point; every refusal is a
+`throw`, not an `echomsg` — Vim does not clear `'modified'` just
+because a `BufWriteCmd` ran, but a thrown error is a hard-to-miss
+`:write` failure rather than a message that scrolls past, and matches
+how a genuine write failure (disk full) surfaces. Around both
+mechanisms: `s:CheckWriteTarget()` refuses a `:w {other}` (the
+autocommand fires for those too, and the page would otherwise be
+patched into this view's own file), `s:PagedScan()` validates,
+`s:CheckFresh()` compares size and mtime against the read-time
+snapshot, and `s:ReloadAfterWrite()` re-reads from disk afterwards and
+puts the cursor back by absolute offset — clamping the page index to
+what is left, since a splice can change the page count, and falling
+back to `s:LoadEmpty()`'s lone banner if a shrink emptied the file.
 
 **Same length (the common case — value overwrites):** in-place patch
 via xxd's documented reverse-with-seek behaviour. Pipeline: strip the
@@ -583,16 +638,22 @@ Windowed-text-view once Stage 2 adds the latter — same underlying
 mechanism, but two different sources for "these are the page's new
 raw bytes" (strip a hex dump, vs. take the text buffer's bytes as-is).
 
-**Changed length (insert/delete):** splice in pure VimScript —
+**Changed length (insert/delete):** splice in pure VimScript
+(`s:Splice()`/`s:CopyRange()`, 8 MiB blocks) —
 `readblob(file, off, len)` block-copy loop (block size ~8 MiB, bounded
 memory) of head → temp, append the edited page's raw bytes, block-copy
 tail, then replace the original by block-copying back (not `rename()`:
 temp usually lives on a different filesystem, notably with `/mnt/c/...`
 paths under WSL). O(file size), therefore:
-- always tell the user the size delta and that the whole file must be
-  rewritten, and require an explicit confirmation (`confirm()`);
-- keep the temp as a recovery copy on failure; delete on success in
-  `try/finally`.
+- the size delta and the rewrite are stated and confirmed
+  (`HexPairPagedResizeMessage()` + `confirm()`; `g:hexpair_page_confirm`
+  = 0 answers yes automatically, which is also the only way the path is
+  testable — `confirm()`, like `input()`, cannot run under this
+  project's headless harness);
+- the temp is kept as a recovery copy **only** where it is one: a
+  failure while *building* it deletes it, since nothing has reached the
+  target yet, while a failure while *copying it back* keeps it and
+  reports its path.
 
 **Both paths:** before any write, compare `getfsize()`/`getftime()`
 against the read-time snapshot; refuse with a clear message if the
@@ -634,13 +695,52 @@ stdin or construct with `enew` + `setline()`) reaches Hex-page-view
 via the buffer-slicing path with no crash and no attempt to read a
 nonexistent file.
 
-Needed for Stage 3/4 (real writes): same-length patch touches only the
-edited range (compare full-file hashes outside the range) — from both
-Hex-page-view and Windowed-text-view; splice correctness for grow and
-shrink; staleness refusal (`getfsize()`/`getftime()` mismatch); the
-`try/finally` temp-file cleanup on both success and a simulated
-failure; the splice version gate's *runtime* (not load-time) failure
-message, still tested via the same parameterized-function pattern.
+Stages 3/4, done: the same-length patch leaves the head and the tail of
+the file bit-identical (hashed on both sides of the page) and does not
+change its length, on a full page, on the short last page, and across
+the 4 GiB offset-width change on a **sparse** fixture; splice
+correctness for grow and shrink, hashing the moved head and tail; the
+temp directory is empty again after a successful splice, while a splice
+whose copy back fails — simulated by making the target read-only,
+skipped when running as root — keeps the complete new content and
+leaves the original untouched; an invalid dump, a file changed on disk
+and a `:w {other}` are each refused with the file untouched; emptying
+the only page leaves a view saying so; and both the splice version gate
+and the resize prompt are tested through their parameterized message
+functions, since neither `has()` nor `confirm()` can be driven here.
+When Windowed-text-view lands, the same-length and splice paths need
+the same coverage from that side too.
+
+### What Stage 2 decided
+
+Three questions the redesign left open, and how they came out:
+
+- **The banner cannot be recognized by content in the text view.** In a
+  dump, a line starting with `"` is unambiguous — data lines start with
+  a hex digit. In a page of raw bytes, `0x22` is a perfectly ordinary
+  first byte, and the write path takes the buffer's bytes as they are.
+  So the exact banner text is kept in `b:hexpair_banner_top` /
+  `b:hexpair_banner_bottom` when a view is built, and only an exact
+  match on line 1 and line `$` counts (`s:TextBodyRange()`); anything
+  else refuses the write and says to reload the page. `s:IsBannerLine()`
+  still does the job in the dump, where it is not ambiguous.
+- **Exact bytes through a text buffer** go through `readfile(f, 'b')`
+  and `writefile(lines, f, 'b')`, which are inverses of each other about
+  the split on newlines, about a trailing one, and about Vim storing a
+  NUL byte as a NL *inside* a line — which is what `getline()` alone
+  cannot round-trip.
+- **`buftype`** is `acwrite` with a `BufWriteCmd` on *every* hex-mode
+  buffer, both entry points, both views. Not `BufWritePre`/`BufWritePost`:
+  those let Vim do the writing, and a buffer holding one page would be
+  written over the whole file.
+
+A fourth question the redesign did not raise: **a modified file-backed
+buffer**. The plan chose buffer-slicing partly so that `:HexPairToggle`
+would not discard unsaved edits by re-reading from disk — but slicing
+does not save them either, because a page-range write only ever writes
+the visible page, so every edit outside it is dropped at `:w` instead.
+Both ways lose data quietly, so this case is refused (`s:PageSource()`),
+naming the two ways out: write the buffer, or `:HexPairOpen` the file.
 
 ### Explicit non-goals (for now)
 
