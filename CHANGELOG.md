@@ -122,6 +122,16 @@ and this project adheres to
   size.
 
 ### Fixed
+- On Windows a plain `:w` was taken for a `:w {other file}` and went down
+  the save-as path, because the two spellings of the buffer's own path
+  reaching the check — `<amatch>`'s full path and `bufname()`'s short one
+  — differ there in their separators and in the case of the drive letter
+  without naming anything different. The visible symptom was a spurious
+  "changed on disk" refusal on the *second* write; the real danger was
+  that copying a file over itself truncates the source before a byte of
+  it has been read, which would have destroyed a multi-page file. Paths
+  are now compared as paths, and the save-as refuses a target that is
+  the file being paged.
 - `:HexPairGoHex`, `:HexPairGoAscii` and `:HexPairSwap` did nothing in
   a paged buffer, and `g:hexpair_paste` was not applied to one — both
   were keyed on the whole-file mode's active flag.

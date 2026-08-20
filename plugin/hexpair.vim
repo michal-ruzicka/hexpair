@@ -1002,13 +1002,55 @@ function! s:PatchInPlace(raw) abort
   endtry
 endfunction
 
+" Do two path strings name the same file? They cannot simply be compared:
+" they reach here from different places - <amatch> is the full path Vim
+" stored for the buffer, bufname() gives the short one - and on Windows two
+" spellings of one path differ in their separators and in the case of the
+" drive letter without naming anything different.
+"
+" Global, pure, and parameterized by the two things that differ between
+" platforms rather than reading them itself, so both branches are testable
+" wherever the suite happens to run. a:fnamecase is has('fname_case'), true
+" where case distinguishes file names; a:backslash says whether a backslash
+" is a path separator rather than an ordinary character in a name, which it
+" is on Windows and is not on Unix.
+function! HexPairPagedSamePath(a, b, fnamecase, backslash) abort
+  if a:a ==# a:b
+    return 1
+  endif
+  if a:a ==# '' || a:b ==# ''
+    return 0
+  endif
+  let [a, b] = [a:a, a:b]
+  if a:backslash
+    let a = substitute(a, '\\', '/', 'g')
+    let b = substitute(b, '\\', '/', 'g')
+  endif
+  return a:fnamecase ? a ==# b : a ==? b
+endfunction
+
+function! s:SamePath(a, b) abort
+  if a:a ==# '' || a:b ==# ''
+    return 0
+  endif
+  " simplify() takes './' and resolvable '..' out of the way; ':p' makes
+  " both absolute. '+shellslash' exists only where a backslash is a path
+  " separator rather than an ordinary character in a name.
+  return HexPairPagedSamePath(simplify(fnamemodify(a:a, ':p')),
+        \ simplify(fnamemodify(a:b, ':p')),
+        \ has('fname_case'), exists('+shellslash'))
+endfunction
+
 " ':w {other}' fires BufWriteCmd like any write, and means something
 " different from a plain ':w': not "patch this page into its own file" but
 " "save what I am looking at, as a whole, over there". Returns the target
-" for that, or '' for a plain write of the page.
+" for that, or '' for a plain write of the page - which is also what
+" naming this view's own file, spelled out longhand, means.
 function! s:WriteTarget() abort
   let target = expand('<amatch>')
-  if target ==# '' || target ==# get(b:, 'hexpair_page_bufname', target)
+  if target ==# ''
+        \ || s:SamePath(target, get(b:, 'hexpair_page_bufname', ''))
+        \ || s:SamePath(target, b:hexpair_page_file)
     return ''
   endif
   return target
@@ -1218,6 +1260,13 @@ endfunction
 " Vim itself refuses an existing target without a ! (E13) before this
 " autocommand ever runs, so there is no need to check for that here.
 function! s:WriteWholeTo(target) abort
+  " s:WriteTarget() sends a write naming this view's own file down the
+  " plain path, so this cannot normally happen - but copying a file over
+  " itself truncates the source before a byte of it has been read, so it
+  " is worth being certain about rather than merely confident.
+  if s:SamePath(a:target, b:hexpair_page_file)
+    throw printf('hexpair: refusing to copy %s over itself', a:target)
+  endif
   let msg = HexPairPagedGateMessage(s:SpliceSupported())
   if !empty(msg)
     throw substitute(msg, 'inserting or deleting bytes',

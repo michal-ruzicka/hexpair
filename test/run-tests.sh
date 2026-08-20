@@ -75,7 +75,7 @@ for name in ('ref1.bin', 'ref2.bin', 'ref3.bin', 'ref4.bin', 'ref5.bin'):
     open(os.path.join(w, name), 'wb').write(b'ABCDEFGH')
 # paged-mode fixture: 5000 bytes, byte i has value i % 256 - at 512
 # bytes/page that is 10 pages, the last one short (392 bytes)
-for name in ('paged21.bin', 'paged22.bin', 'paged23.bin', 'paged31.bin', 'paged32.bin', 'undo1.bin', 'layout1.bin', 'jump1.bin', 'paste1.bin', 'abandon1.bin', 'ulocal1.bin', 'src1.bin', 'off1.bin', 'multi.bin', 'multi2.bin', 'w1.bin', 'w2.bin', 'w3.bin', 'w4.bin', 'w5.bin', 'sp1.bin', 'sp2.bin', 'sp3.bin', 'sp4.bin'):
+for name in ('paged21.bin', 'paged22.bin', 'paged23.bin', 'paged31.bin', 'paged32.bin', 'undo1.bin', 'layout1.bin', 'jump1.bin', 'paste1.bin', 'abandon1.bin', 'ulocal1.bin', 'src1.bin', 'off1.bin', 'multi.bin', 'multi2.bin', 'same1.bin', 'w1.bin', 'w2.bin', 'w3.bin', 'w4.bin', 'w5.bin', 'sp1.bin', 'sp2.bin', 'sp3.bin', 'sp4.bin'):
     with open(os.path.join(w, name), 'wb') as f:
         f.write(bytes(i % 256 for i in range(5000)))
 # single-page fixture, so a shrinking write can empty the file entirely
@@ -1441,6 +1441,48 @@ check "a non-binary piped buffer is flagged, and still opens" "[1, 1, 1]" \
     "$(sed -n 1p "$WORK/tw7.out")"
 check "a binary one is not flagged"                          "[0, 1]" \
     "$(sed -n 2p "$WORK/tw7.out")"
+
+# --- Two spellings of one path are one path --------------------------------
+# A plain :w and a ':w {this view's own file}' must both patch the page.
+# Getting that wrong sends a plain write down the save-as path, which
+# copies the file over itself - and copying a file over itself truncates
+# the source before a byte of it has been read. On Windows the two
+# spellings differ in their separators and in the case of the drive letter
+# without naming anything different, which is exactly how that happened.
+cat > "$WORK/twp.vim" <<EOF
+source $PLUGIN
+let unix = [HexPairPagedSamePath('/a/b', '/a/b', 1, 0), HexPairPagedSamePath('/a/B', '/a/b', 1, 0), HexPairPagedSamePath('/a\b', '/a/b', 1, 0)]
+let win = [HexPairPagedSamePath('C:\dir\f.bin', 'c:/dir/f.bin', 0, 1), HexPairPagedSamePath('C:\dir\f.bin', 'C:\dir\g.bin', 0, 1)]
+let empty = [HexPairPagedSamePath('', '/a/b', 1, 0), HexPairPagedSamePath('/a/b', '', 1, 0)]
+call writefile([string(unix), string(win), string(empty)], '$WORK/twp.out')
+qa!
+EOF
+vim -es -u NONE -S "$WORK/twp.vim" < /dev/null
+check "on Unix, case and backslashes are part of the name" "[1, 0, 0]" \
+    "$(sed -n 1p "$WORK/twp.out")"
+check "on Windows, separators and case are not"            "[1, 0]" \
+    "$(sed -n 2p "$WORK/twp.out")"
+check "an empty path names nothing"                        "[0, 0]" \
+    "$(sed -n 3p "$WORK/twp.out")"
+
+# The same thing end to end: naming the file longhand must patch the page,
+# not copy the file over itself. A multi-page file, so a truncate-then-read
+# would destroy it rather than happen to work out.
+SAME_BEFORE=$(hash_range "$WORK/same1.bin" 1024 -1)
+cat > "$WORK/twp2.vim" <<EOF
+$(printf "$PAGEDW")
+HexPairOpen $WORK/same1.bin 2
+call setline(2, substitute(getline(2), '00 01', 'de ad', ''))
+execute 'write!' fnameescape('$WORK/./same1.bin')
+call writefile([string([&l:modified, b:hexpair_page_total])], '$WORK/twp2.out')
+qa!
+EOF
+vim -es -u NONE -S "$WORK/twp2.vim" < /dev/null
+check "writing to the same file spelled longhand patches the page" "[0, 5000]" \
+    "$(cat "$WORK/twp2.out")"
+check "the file is intact, not truncated" "5000" "$(file_size "$WORK/same1.bin")"
+check "the edit landed"    "00000200: de ad" "$(xxd -s 512 -l 2 -g 1 "$WORK/same1.bin" | cut -c1-15)"
+check "the rest is intact" "$SAME_BEFORE" "$(hash_range "$WORK/same1.bin" 1024 -1)"
 
 # ---------------------------------------------------------------------------
 if [ "$FAIL" -eq 0 ]; then
