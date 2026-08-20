@@ -166,6 +166,16 @@ too large to want Vim to read at all, skip the buffer entirely:
 vim -c 'HexPairOpen /var/lib/disk.img'
 ```
 
+A shell wrapper for the same, including piped input, is in
+`:help hexpair-vimhex`:
+
+```sh
+vimhex bigfile.bin              # the first page
+vimhex bigfile.bin 3            # page 3
+vimhex bigfile.bin @0x4a2000    # the page holding that byte
+cat bigfile.bin | vimhex -      # piped input
+```
+
 A buffer hexpair has touched is in one of two views, and `:HexPairToggle`
 moves between them:
 

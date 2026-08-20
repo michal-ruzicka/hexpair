@@ -544,31 +544,60 @@ g:hexpair_page_confirm  Whether a write that changed the page's length
                         answer yes automatically, e.g. in a script: >
                             let g:hexpair_page_confirm = 0
 <
-A shell wrapper for opening a file straight into paged mode, e.g. in
-~/.bashrc - HexPairOpenFile(), not `-c 'HexPairOpen ...'`, for the reason
-given at |HexPairOpenFile()| above: >
+                                                            *hexpair-vimhex*
+A shell wrapper for opening a file - or piped input - straight in the hex
+view, e.g. in ~/.bashrc: >
 
-    vimhex() {
+    vimhex()
+    {
         if [ $# -lt 1 ] || [ $# -gt 2 ]; then
-            echo "usage: vimhex FILE [PAGE]" >&2
+            echo "usage: vimhex FILE|- [PAGE|@BYTE]" >&2
             return 1
         fi
-        HEXPAIR_OPEN_FILE="$1" HEXPAIR_OPEN_PAGE="${2:-1}" \
-            vim -c 'call HexPairOpenFile($HEXPAIR_OPEN_FILE, $HEXPAIR_OPEN_PAGE)'
+
+        local where="${2:-1}" jump
+
+        case "$where" in
+            @*)
+                where="${where#@}"
+                jump='execute "HexPairGoOffset" $HEXPAIR_OPEN_WHERE'
+                ;;
+            *)
+                jump='execute "HexPairPageGoto" $HEXPAIR_OPEN_WHERE'
+                ;;
+        esac
+
+        if [ "$1" = "-" ]; then
+            HEXPAIR_OPEN_WHERE="$where" \
+                vim -b -c 'autocmd VimEnter * HexPairToggle' \
+                       -c "autocmd VimEnter * $jump" -
+            return
+        fi
+
+        HEXPAIR_OPEN_FILE="$1" HEXPAIR_OPEN_WHERE="$where" \
+            vim -c 'autocmd VimEnter * call HexPairOpenFile($HEXPAIR_OPEN_FILE)' \
+                -c "autocmd VimEnter * $jump"
     }
 <
-    vimhex bigfile.bin        " page 1
-    vimhex bigfile.bin 3      " page 3
+    vimhex bigfile.bin              " the first page
+    vimhex bigfile.bin 3            " page 3
+    vimhex bigfile.bin @0x4a2000    " the page holding that byte
+    cat bigfile.bin | vimhex -      " piped input
+    dd if=/dev/sda bs=1M count=64 | vimhex - @1024
 <
-The offset column is not a fixed width: `xxd` widens it past 8 hex
-digits once an offset reaches 4 GiB, which a page could only straddle
-right at that boundary (and again at 64 GiB, and so on) - hexpair clamps
-page boundaries so this can never happen WITHIN a single page, shortening
-the one page that would otherwise straddle it.
+Three things in it are not incidental:
 
-Not yet available on a paged buffer: |:HexPairGoHex|, |:HexPairGoAscii|,
-|:HexPairSwap| and |g:hexpair_paste| management, all specific to
-|hexpair-usage|'s whole-buffer mode.
+- HexPairOpenFile(), not `-c 'HexPairOpen ...'`, for the reason given at
+  |HexPairOpenFile()| above: a name with a space or a literal '$' does
+  not survive the Ex command's own argument parsing, but the environment
+  and a function call need no escaping at all.
+- Everything runs from a |VimEnter| autocommand, because that is the only
+  point that is after the content has arrived in BOTH cases: a plain -c
+  runs after a named file has been read, but BEFORE standard input has.
+- `-b` for the piped case.  Without it Vim may transcode the input on
+  the way in, and unlike a named file there is nothing to re-read with
+  ++bin afterwards (|hexpair-page-source|).  Save piped input with
+  `:w {file}`; a plain |:w| has no file to write back to.
 
 ==============================================================================
 9. Limitations                                           *hexpair-limitations*
