@@ -300,11 +300,11 @@ A file that changed on disk since the page was read is refused rather
 than patched blindly. `g:hexpair_page_confirm = 0` answers the resize
 question automatically, for scripts.
 
-Only a write that **changes** a page's length needs a newer Vim than the
-rest of the plugin: `+num64` and patch 8.2.4906+, for `readblob()`,
-checked when such a write is attempted and refusing just that write.
-Everything else runs on Vim 8.0 like the rest of the plugin. Details:
-`:help hexpair-paged`.
+Only a write that **shortens** a file, and `:w {file}`, need a newer Vim
+than the rest of the plugin: `+num64` and patch 8.2.4906+, for
+`readblob()`, checked when such a write is attempted and refusing just
+that write. Viewing, navigating, same-length writes and inserts run on
+Vim 8.0 with nothing but `xxd`. Details: `:help hexpair-paged`.
 
 ## Requirements
 

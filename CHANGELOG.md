@@ -44,6 +44,17 @@ and this project adheres to
   a byte of content.
 
 ### Added
+- **Inserting bytes no longer rewrites the file.** Bytes cannot be
+  spliced into the middle of a file, but they do not have to be: only
+  what follows them has to move. The tail is now shifted right in place
+  with `xxd` and the page patched in, so the head of the file is never
+  even read — and appending to the last page moves nothing at all. It
+  needs temporary space the size of the tail rather than of the file,
+  and, using only `xxd`, runs on the Vim 8.0 baseline. Deleting bytes
+  still writes the file afresh: moving the tail left is the same
+  operation, but nothing in Vim or `xxd` can then shorten the file. The
+  confirmation says which of the two it is about to do and how many
+  bytes that writes.
 - A **Visual selection** is mirrored in the other column, the way the
   byte under the cursor already was: select hex digits and the text they
   are is highlighted, select text and the bytes it is are highlighted.

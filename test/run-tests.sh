@@ -75,7 +75,7 @@ for name in ('ref1.bin', 'ref2.bin', 'ref3.bin', 'ref4.bin', 'ref5.bin'):
     open(os.path.join(w, name), 'wb').write(b'ABCDEFGH')
 # paged-mode fixture: 5000 bytes, byte i has value i % 256 - at 512
 # bytes/page that is 10 pages, the last one short (392 bytes)
-for name in ('paged21.bin', 'paged22.bin', 'paged23.bin', 'paged31.bin', 'paged32.bin', 'undo1.bin', 'layout1.bin', 'jump1.bin', 'paste1.bin', 'abandon1.bin', 'ulocal1.bin', 'src1.bin', 'off1.bin', 'multi.bin', 'multi2.bin', 'same1.bin', 'vis1.bin', 'w1.bin', 'w2.bin', 'w3.bin', 'w4.bin', 'w5.bin', 'sp1.bin', 'sp2.bin', 'sp3.bin', 'sp4.bin'):
+for name in ('paged21.bin', 'paged22.bin', 'paged23.bin', 'paged31.bin', 'paged32.bin', 'undo1.bin', 'layout1.bin', 'jump1.bin', 'paste1.bin', 'abandon1.bin', 'ulocal1.bin', 'src1.bin', 'off1.bin', 'multi.bin', 'multi2.bin', 'same1.bin', 'vis1.bin', 'ip1.bin', 'ip2.bin', 'ip3.bin', 'w1.bin', 'w2.bin', 'w3.bin', 'w4.bin', 'w5.bin', 'sp1.bin', 'sp2.bin', 'sp3.bin', 'sp4.bin'):
     with open(os.path.join(w, name), 'wb') as f:
         f.write(bytes(i % 256 for i in range(5000)))
 # single-page fixture, so a shrinking write can empty the file entirely
@@ -1097,15 +1097,18 @@ check "the emptied file really is empty"  "0" "$(file_size "$WORK/sp5.bin")"
 # tested on its own, like the version-gate and page-size messages.
 cat > "$WORK/ts3f.vim" <<EOF
 source $PLUGIN
-call writefile(split(HexPairPagedResizeMessage(-16, 5000), "\n"), '$WORK/ts3f.out')
+call writefile(split(HexPairPagedResizeMessage(-16, 5000, 5000), "\n") + split(HexPairPagedResizeMessage(3, 5000, 900), "\n"), '$WORK/ts3f.out')
 qa!
 EOF
 vim -es -u NONE -S "$WORK/ts3f.vim" < /dev/null
 check "the resize prompt names the delta" \
     "hexpair: this page changed length by -16 bytes." "$(sed -n 1p "$WORK/ts3f.out")"
-check "the resize prompt names both sizes" \
-    "Inserting or deleting bytes cannot be done in place, so the whole file has to be rewritten (5000 -> 4984 bytes)." \
+check "shortening says the file is rewritten" \
+    "Shortening a file means writing it afresh, so all 5000 of its bytes are rewritten (5000 -> 4984 bytes)." \
     "$(sed -n 2p "$WORK/ts3f.out")"
+check "growing says only what moves is written" \
+    "Everything after this page has to move, so 900 of the file's 5000 bytes are rewritten; the rest is not touched (5000 -> 5003 bytes)." \
+    "$(sed -n 5p "$WORK/ts3f.out")"
 
 # --- The help file must produce tags ---------------------------------------
 # :helptags aborts on the FIRST duplicate tag and writes none at all, so
@@ -1520,6 +1523,65 @@ check "linewise takes the whole line's bytes" "[[2, 60, 16]]" \
     "$(sed -n 4p "$WORK/tv1.out")"
 check "a banner line contributes nothing"     "[[2, 60, 2]]" \
     "$(sed -n 5p "$WORK/tv1.out")"
+
+# --- Inserting bytes moves only what is after them --------------------------
+# The head of the file is not read, let alone written: the tail is shifted
+# right in place with xxd and the page patched in. Asserted by hashing the
+# head, the moved tail, and the file's new length.
+IP1_HEAD=$(hash_range "$WORK/ip1.bin" 0 2048)
+IP1_TAIL=$(hash_range "$WORK/ip1.bin" 2560 -1)
+cat > "$WORK/tip1.vim" <<EOF
+$(printf "$PAGEDW")
+HexPairOpen $WORK/ip1.bin 5
+call append(1, 'aa bb cc')
+write
+call writefile([string([&l:modified, b:hexpair_page_total]), getline(2)], '$WORK/tip1.out')
+qa!
+EOF
+vim -es -u NONE -S "$WORK/tip1.vim" < /dev/null
+check "an insert grows the file, in place" "[0, 5003]" "$(sed -n 1p "$WORK/tip1.out")"
+check "the inserted bytes open the page" \
+    "00000800: aa bb cc 00 01 02 03 04 05 06 07 08 09 0a 0b 0c  ................" \
+    "$(sed -n 2p "$WORK/tip1.out")"
+check "the file really grew"                "5003"      "$(file_size "$WORK/ip1.bin")"
+check "everything before the page is byte-identical" "$IP1_HEAD" \
+    "$(hash_range "$WORK/ip1.bin" 0 2048)"
+check "everything after it moved intact"    "$IP1_TAIL" \
+    "$(hash_range "$WORK/ip1.bin" 2563 -1)"
+
+# --- Appending to the last page touches nothing else ------------------------
+# The tail is empty there, so there is nothing to move at all: xxd writes
+# the longer page straight past the old end of the file.
+IP2_HEAD=$(hash_range "$WORK/ip2.bin" 0 4608)
+cat > "$WORK/tip2.vim" <<EOF
+$(printf "$PAGEDW")
+HexPairOpen $WORK/ip2.bin 10
+call append(line('\$') - 1, 'de ad be ef')
+write
+call writefile([string([&l:modified, b:hexpair_page_total, b:hexpair_page_len])], '$WORK/tip2.out')
+qa!
+EOF
+vim -es -u NONE -S "$WORK/tip2.vim" < /dev/null
+check "appending to the last page" "[0, 5004, 396]" "$(cat "$WORK/tip2.out")"
+check "the rest of the file is untouched" "$IP2_HEAD" \
+    "$(hash_range "$WORK/ip2.bin" 0 4608)"
+check "the appended bytes are at the end" \
+    "00001388: de ad be ef" "$(xxd -s 5000 -l 4 -g 1 "$WORK/ip2.bin" | cut -c1-21)"
+
+# --- A shrink still rewrites, and says so -----------------------------------
+# Nothing in Vim or xxd can shorten a file except by writing it afresh.
+IP3_HEAD=$(hash_range "$WORK/ip3.bin" 0 2048)
+cat > "$WORK/tip3.vim" <<EOF
+$(printf "$PAGEDW")
+HexPairOpen $WORK/ip3.bin 5
+2delete _
+write
+call writefile([string([&l:modified, b:hexpair_page_total])], '$WORK/tip3.out')
+qa!
+EOF
+vim -es -u NONE -S "$WORK/tip3.vim" < /dev/null
+check "a delete shrinks the file"        "[0, 4984]" "$(cat "$WORK/tip3.out")"
+check "its head survives the rewrite"    "$IP3_HEAD" "$(hash_range "$WORK/ip3.bin" 0 2048)"
 
 # ---------------------------------------------------------------------------
 if [ "$FAIL" -eq 0 ]; then

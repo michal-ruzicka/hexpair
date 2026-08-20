@@ -256,8 +256,10 @@ a large real file.
   Mechanism exactly as "Writing a page" below describes, and driven
   from both views: `s:Write()` gets the page's new bytes either by
   stripping the dump or by taking the text view's lines as they are.
-- **Stage 4 — length-changing splice write: IMPLEMENTED**, likewise,
-  including the narrowed runtime version gate this redesign called for.
+- **Stage 4 — length-changing write: IMPLEMENTED**, likewise, including
+  the narrowed runtime version gate this redesign called for. Went
+  further than the plan: an insert does not rewrite the file at all any
+  more, only what follows it (see "Writing a page" below).
 
 Stages 3 and 4 were built before Stage 2 because the write path was
 what the feature was missing, and because it turned out to be
@@ -638,7 +640,31 @@ Windowed-text-view once Stage 2 adds the latter — same underlying
 mechanism, but two different sources for "these are the page's new
 raw bytes" (strip a hex dump, vs. take the text buffer's bytes as-is).
 
-**Changed length (insert/delete):** splice in pure VimScript
+**Grew (insert): IN PLACE, tail only.** Bytes cannot be spliced into the
+middle of a file, but only what FOLLOWS an insertion has to move — what
+precedes it is never even read. `s:GrowInPlace()` shifts the tail right
+from the END backwards (so a block is never written over one that has
+not moved yet) and then patches the page in; appending to the last page
+moves nothing at all. Two xxd calls do it, so this path needs nothing
+newer than the base plugin's Vim:
+
+    xxd -s O -l L -p FILE HEX     read a byte range out as plain hex
+    xxd -r -p -s O HEX FILE       write it back at any offset, in place
+
+Verified before being relied on: a multi-line plain dump lands
+contiguously, neither call ever truncates the target, and writing past
+the end extends the file. The tail is copied out first — while it is
+moving that copy is the only intact one of those bytes, and writing it
+first also makes a full disk fail before anything has been touched.
+`s:TailShiftIsCheaper()` picks between this and the splice: moving the
+tail costs about 8× its size, rewriting the file about 4× its own, so
+the shift wins while the tail is under half the file — which is also
+exactly when its recovery copy is the smaller of the two.
+
+**Shrank (delete): still a full rewrite.** Moving the tail left is the
+same operation, but the file would then still be its old length with
+stale bytes at the end, and nothing in Vim or xxd can shorten a file
+except by writing it afresh. Splice in pure VimScript
 (`s:Splice()`/`s:CopyRange()`, 8 MiB blocks) —
 `readblob(file, off, len)` block-copy loop (block size ~8 MiB, bounded
 memory) of head → temp, append the edited page's raw bytes, block-copy

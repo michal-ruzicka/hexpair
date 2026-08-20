@@ -1180,20 +1180,131 @@ endfunction
 
 " Global and pure, like the gate and page-size messages: the interactive
 " confirm() around it cannot run under this project's headless harness,
-" so the text it asks is testable on its own.
-function! HexPairPagedResizeMessage(delta, total) abort
-  return printf("hexpair: this page changed length by %+d bytes.\n"
-        \ . 'Inserting or deleting bytes cannot be done in place, so the '
-        \ . "whole file has to be rewritten (%d -> %d bytes).\nContinue?",
-        \ a:delta, a:total, a:total + a:delta)
+" so the text it asks is testable on its own. a:moved is how many of the
+" file's bytes have to be written - the tail alone when the file can grow
+" in place, all of them when it has to be rewritten.
+function! HexPairPagedResizeMessage(delta, total, moved) abort
+  let head = printf("hexpair: this page changed length by %+d bytes.\n", a:delta)
+  if a:moved >= a:total
+    return head . printf('Shortening a file means writing it afresh, so all '
+          \ . "%d of its bytes are rewritten (%d -> %d bytes).\nContinue?",
+          \ a:total, a:total, a:total + a:delta)
+  endif
+  return head . printf('Everything after this page has to move, so %d of the '
+        \ . "file's %d bytes are rewritten; the rest is not touched "
+        \ . "(%d -> %d bytes).\nContinue?",
+        \ a:moved, a:total, a:total, a:total + a:delta)
 endfunction
 
 function! s:ConfirmResize(newlen) abort
   if !g:hexpair_page_confirm
     return 1
   endif
-  return confirm(HexPairPagedResizeMessage(a:newlen - b:hexpair_page_len,
-        \ b:hexpair_page_total), "&Rewrite the file\n&Cancel", 2, 'Question') == 1
+  let inplace = a:newlen > b:hexpair_page_len && s:TailShiftIsCheaper()
+  let msg = HexPairPagedResizeMessage(a:newlen - b:hexpair_page_len,
+        \ b:hexpair_page_total, inplace ? s:TailSize() : b:hexpair_page_total)
+  return confirm(msg, "&Write it\n&Cancel", 2, 'Question') == 1
+endfunction
+
+" ---------------------------------------------------------------------------
+" Inserting bytes without rewriting the file
+" ---------------------------------------------------------------------------
+"
+" Bytes cannot be spliced into the middle of a file - but they do not have
+" to be, to insert some. Everything AFTER the insertion point has to move;
+" everything before it does not, and need not even be read. So a page that
+" grew is written by moving the tail right, in place, and then patching the
+" page's new bytes in.
+"
+" Two xxd invocations are all that takes, so this path needs nothing newer
+" than the Vim the rest of the plugin does:
+"   xxd -s O -l L -p FILE HEX     read a byte range out as plain hex
+"   xxd -r -p -s O HEX FILE       write it back at any offset, in place,
+"                                 extending the file if that is past its end
+" Both verified, including that a multi-line plain dump lands contiguously
+" and that neither ever truncates the target.
+"
+" Shortening a file cannot be done this way. Moving the tail left is the
+" same operation, but the file is then still its old length with stale
+" bytes at the end, and nothing in Vim or xxd can shorten a file except
+" writing it afresh - which is what s:Splice() does.
+
+" Move [a:from, a:from + a:len) of the paged file to a:to, in place.
+function! s:MoveRange(from, len, to, hex) abort
+  call s:Run(printf('%s -s %d -l %d -p %s %s', s:xxd, a:from, a:len,
+        \ shellescape(b:hexpair_page_file), shellescape(a:hex)))
+  call s:Run(printf('%s -r -p -s %d %s %s', s:xxd, a:to,
+        \ shellescape(a:hex), shellescape(b:hexpair_page_file)))
+endfunction
+
+" Is moving the tail cheaper than rewriting the whole file? Moving it costs
+" about eight times its size in reads and writes - out as hex, back as
+" bytes, plus the copy kept for recovery - while rewriting the file costs
+" about four times its own. So the shift wins while the tail is under half
+" the file, which is also exactly when the recovery copy is the smaller of
+" the two.
+function! s:TailShiftIsCheaper() abort
+  let tailsize = b:hexpair_page_total - b:hexpair_page_base
+        \ - b:hexpair_page_len
+  return tailsize * 2 <= b:hexpair_page_total
+endfunction
+
+function! s:TailSize() abort
+  return b:hexpair_page_total - b:hexpair_page_base - b:hexpair_page_len
+endfunction
+
+" Grow the file in place: move the tail right by the difference, working
+" from the END backwards so a block is never written over one that has not
+" moved yet, then patch the page's new bytes in.
+"
+" The tail is copied out first. While it is being moved that copy is the
+" only intact one of those bytes, and a failure part way through - a full
+" disk being the likely one, since the file is growing - would otherwise
+" leave them half moved with nothing to go back to. Writing it first also
+" means running out of room fails before anything has been touched.
+function! s:GrowInPlace(raw, newlen) abort
+  let base = b:hexpair_page_base
+  let tail = base + b:hexpair_page_len
+  let size = s:TailSize()
+  let delta = a:newlen - b:hexpair_page_len
+
+  let hex = tempname()
+  let backup = tempname()
+  let done = 0
+  try
+    if size > 0
+      call s:Run(printf('%s -s %d -l %d -p %s %s', s:xxd, tail, size,
+            \ shellescape(b:hexpair_page_file), shellescape(hex)))
+      call s:Run(printf('%s -r -p %s %s', s:xxd,
+            \ shellescape(hex), shellescape(backup)))
+    endif
+
+    while done < size
+      let chunk = size - done
+      if chunk > s:blocksize
+        let chunk = s:blocksize
+      endif
+      let from = tail + size - done - chunk
+      call s:MoveRange(from, chunk, from + delta, hex)
+      let done += chunk
+    endwhile
+
+    call s:PatchInPlace(a:raw)
+    let done = -1
+  finally
+    call delete(hex)
+    if done < 0 || size == 0
+      call delete(backup)
+    else
+      echohl ErrorMsg
+      echomsg printf('hexpair: moving the tail of %s failed part way '
+            \ . 'through; the %d bytes it held from offset %d are kept in '
+            \ . '%s - put them back with: xxd -r -p -s %d <(xxd -p %s) %s',
+            \ b:hexpair_page_file, size, tail, backup, tail,
+            \ backup, b:hexpair_page_file)
+      echohl None
+    endif
+  endtry
 endfunction
 
 " Changed length: splice the file. Head, edited page and tail are
@@ -1431,11 +1542,13 @@ function! s:Write() abort
     let newlen = getfsize(raw)
     if newlen == b:hexpair_page_len
       call s:PatchInPlace(raw)
-    elseif s:ConfirmResize(newlen)
-      call s:Splice(raw, newlen)
-    else
+    elseif !s:ConfirmResize(newlen)
       echomsg 'hexpair: cancelled; nothing was written'
       return
+    elseif newlen > b:hexpair_page_len && s:TailShiftIsCheaper()
+      call s:GrowInPlace(raw, newlen)
+    else
+      call s:Splice(raw, newlen)
     endif
   finally
     call delete(raw)

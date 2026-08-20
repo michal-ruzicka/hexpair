@@ -373,12 +373,13 @@ page it shows, so a file of any size opens instantly.
 
 |:w| writes the page back - see |hexpair-paged-write| below.
 
-Only a write that CHANGES a page's length needs a Vim newer than the
-plugin's usual baseline: patch 8.2.4906 with a 64-bit Number type
+Only a write that SHORTENS a file, and `:w {file}`, need a Vim newer than
+the plugin's usual baseline: patch 8.2.4906 with a 64-bit Number type
 (+num64, standard on modern builds), for readblob().  It is checked when
-such a write is attempted and refuses just that write; everything else -
-viewing pages, navigating them, and writes that keep the page's length -
-runs on Vim 8.0 like the rest of the plugin.
+such a write is attempted and refuses just that write.  Everything else -
+viewing pages, navigating them, writes that keep a page's length, and
+writes that lengthen one - runs on Vim 8.0 like the rest of the plugin,
+needing nothing but `xxd`.
 
 Open a file directly in paged mode, without loading it as a normal
 buffer first - straight from the command line: >
@@ -501,15 +502,27 @@ WRITING A PAGE                                        *hexpair-paged-write*
   ever being read or written.  The cost is proportional to the page, not
   to the file, so it is the same on a 4 KiB file and a 400 GiB one.
 
-- The page CHANGED LENGTH - you inserted or deleted bytes.  No
-  filesystem can splice bytes into the middle of a file, so the whole
-  file has to be rewritten: head, edited page and tail are copied
-  through a temporary file, which then replaces the original.  hexpair
-  says by how much the file will change and asks first
-  (|g:hexpair_page_confirm| turns the question off), and it needs
+- The page GREW - you inserted bytes.  Bytes cannot be spliced into the
+  middle of a file, but they do not have to be: everything AFTER the
+  insertion point has to move, and everything before it does not, and is
+  not even read.  So the tail is moved right IN PLACE and the page
+  patched in.  Appending to the last page moves nothing at all.  The
+  temporary space needed is the size of the tail, not of the file.
+  (When the tail is more than half the file, moving it would cost more
+  than rewriting it, so the case below is used instead.)
+
+- The page SHRANK - you deleted bytes.  Moving the tail left is the same
+  operation, but the file would then still be its old length with stale
+  bytes at the end, and nothing in Vim or `xxd` can shorten a file
+  except by writing it afresh.  So head, edited page and tail are copied
+  through a temporary file, which then replaces the original; that needs
   temporary space the size of the whole file.  If the copy back fails
   part way through, the temporary file holds the complete new content
   and its path is reported instead of being deleted.
+
+Either way hexpair says by how much the file will change, and how much of
+it has to be written, and asks for confirmation first
+(|g:hexpair_page_confirm| turns the question off).
 
 Before either, the dump is validated exactly as in |hexpair-writing|,
 and the file's size and modification time are compared with what they
@@ -525,9 +538,9 @@ paged from piped input this is the only way to save at all, and the view
 adopts {file} afterwards, so a later plain |:w| patches pages into it -
 the same way Vim's own `:w {file}` gives an unnamed buffer a name.
 
-Because it copies the whole file, `:w {file}` needs the same Vim as a
-length-changing write (|hexpair-paged|), and Vim's own refusal to
-overwrite an existing file without a ! applies as usual.
+Because it copies the whole file, `:w {file}` needs readblob() -
+|hexpair-paged|'s Vim requirement - and Vim's own refusal to overwrite an
+existing file without a ! applies as usual.
 
 After a successful write the page is re-read from disk and the cursor
 returns to the byte it was on, even when a splice moved every byte
