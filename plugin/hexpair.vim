@@ -1190,10 +1190,10 @@ function! HexPairPagedResizeMessage(delta, total, moved) abort
           \ . "%d of its bytes are rewritten (%d -> %d bytes).\nContinue?",
           \ a:total, a:total, a:total + a:delta)
   endif
-  return head . printf('Everything after this page has to move, so %d of the '
-        \ . "file's %d bytes are rewritten; the rest is not touched "
-        \ . "(%d -> %d bytes).\nContinue?",
-        \ a:moved, a:total, a:total, a:total + a:delta)
+  return head . printf('Everything after this page has to move, so %d of '
+        \ . "the file's %d bytes are rewritten in place - the rest is not "
+        \ . "touched, and no second copy of it is made (%d -> %d bytes)."
+        \ . "\nContinue?", a:moved, a:total, a:total, a:total + a:delta)
 endfunction
 
 function! s:ConfirmResize(newlen) abort
@@ -1253,55 +1253,66 @@ function! s:TailSize() abort
   return b:hexpair_page_total - b:hexpair_page_base - b:hexpair_page_len
 endfunction
 
+" Make room at the end before anything is moved into it: the file is
+" extended by exactly the number of bytes being inserted. Doing that first
+" means a full disk - the likely failure when a file is growing - fails
+" here, before a byte of the tail has been touched.
+function! s:ExtendBy(delta) abort
+  let hex = tempname()
+  try
+    call writefile([repeat('00', a:delta)], hex)
+    call s:Run(printf('%s -r -p -s %d %s %s', s:xxd, b:hexpair_page_total,
+          \ shellescape(hex), shellescape(b:hexpair_page_file)))
+  finally
+    call delete(hex)
+  endtry
+endfunction
+
 " Grow the file in place: move the tail right by the difference, working
-" from the END backwards so a block is never written over one that has not
-" moved yet, then patch the page's new bytes in.
+" from the END backwards, then patch the page's new bytes in.
 "
-" The tail is copied out first. While it is being moved that copy is the
-" only intact one of those bytes, and a failure part way through - a full
-" disk being the likely one, since the file is growing - would otherwise
-" leave them half moved with nothing to go back to. Writing it first also
-" means running out of room fails before anything has been touched.
+" Backwards is what makes this safe without a copy of the tail. Each step
+" reads a block and writes it further along, into space that either lies
+" past the old end of the file or holds bytes an earlier step has already
+" moved - so a byte is never overwritten before it has been copied. A
+" failure part way through leaves a file whose tail is half moved, but not
+" one that has lost anything.
+"
+" Keeping a copy would need room for the whole tail, which is precisely
+" what this path exists to avoid: the temporary space it uses is one
+" block's worth of hex, whatever the size of the file.
 function! s:GrowInPlace(raw, newlen) abort
   let base = b:hexpair_page_base
   let tail = base + b:hexpair_page_len
   let size = s:TailSize()
   let delta = a:newlen - b:hexpair_page_len
 
-  let hex = tempname()
-  let backup = tempname()
-  let done = 0
-  try
-    if size > 0
-      call s:Run(printf('%s -s %d -l %d -p %s %s', s:xxd, tail, size,
-            \ shellescape(b:hexpair_page_file), shellescape(hex)))
-      call s:Run(printf('%s -r -p %s %s', s:xxd,
-            \ shellescape(hex), shellescape(backup)))
-    endif
+  call s:ExtendBy(delta)
 
-    while done < size
-      let chunk = size - done
+  let hex = tempname()
+  let moved = 0
+  try
+    while moved < size
+      let chunk = size - moved
       if chunk > s:blocksize
         let chunk = s:blocksize
       endif
-      let from = tail + size - done - chunk
+      let from = tail + size - moved - chunk
       call s:MoveRange(from, chunk, from + delta, hex)
-      let done += chunk
+      let moved += chunk
     endwhile
-
     call s:PatchInPlace(a:raw)
-    let done = -1
+    let moved = -1
   finally
     call delete(hex)
-    if done < 0 || size == 0
-      call delete(backup)
-    else
+    if moved >= 0
       echohl ErrorMsg
-      echomsg printf('hexpair: moving the tail of %s failed part way '
-            \ . 'through; the %d bytes it held from offset %d are kept in '
-            \ . '%s - put them back with: xxd -r -p -s %d <(xxd -p %s) %s',
-            \ b:hexpair_page_file, size, tail, backup, tail,
-            \ backup, b:hexpair_page_file)
+      echomsg printf('hexpair: %s was left with its tail half moved - the '
+            \ . 'last %d bytes are %d further along, the %d before them are '
+            \ . 'not. Nothing was lost: to finish it by hand, move the %d '
+            \ . 'bytes at offset %d forward by %d, working from the end.',
+            \ b:hexpair_page_file, moved, delta, size - moved,
+            \ size - moved, tail, delta)
       echohl None
     endif
   endtry

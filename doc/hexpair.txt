@@ -507,7 +507,10 @@ WRITING A PAGE                                        *hexpair-paged-write*
   insertion point has to move, and everything before it does not, and is
   not even read.  So the tail is moved right IN PLACE and the page
   patched in.  Appending to the last page moves nothing at all.  The
-  temporary space needed is the size of the tail, not of the file.
+  temporary space needed is one block's worth of hex - a few tens of MB -
+  whatever the size of the file; the tail is moved from the end backwards,
+  so a byte is never overwritten before it has been copied, and no second
+  copy of it is kept.
   (When the tail is more than half the file, moving it would cost more
   than rewriting it, so the case below is used instead.)
 
@@ -516,7 +519,8 @@ WRITING A PAGE                                        *hexpair-paged-write*
   bytes at the end, and nothing in Vim or `xxd` can shorten a file
   except by writing it afresh.  So head, edited page and tail are copied
   through a temporary file, which then replaces the original; that needs
-  temporary space the size of the whole file.  If the copy back fails
+  temporary space the size of the whole file, and is the only operation
+  that does.  If the copy back fails
   part way through, the temporary file holds the complete new content
   and its path is reported instead of being deleted.
 

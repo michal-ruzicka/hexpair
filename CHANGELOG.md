@@ -50,7 +50,10 @@ and this project adheres to
   with `xxd` and the page patched in, so the head of the file is never
   even read — and appending to the last page moves nothing at all. It
   needs temporary space the size of the tail rather than of the file,
-  and, using only `xxd`, runs on the Vim 8.0 baseline. Deleting bytes
+  and, using only `xxd`, runs on the Vim 8.0 baseline. The temporary
+  space it needs is one block's worth of hex whatever the file's size,
+  because the tail is moved from the end backwards — a byte is never
+  overwritten before it has been copied, so no second copy is kept. Deleting bytes
   still writes the file afresh: moving the tail left is the same
   operation, but nothing in Vim or `xxd` can then shorten the file. The
   confirmation says which of the two it is about to do and how many

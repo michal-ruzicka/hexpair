@@ -1107,7 +1107,7 @@ check "shortening says the file is rewritten" \
     "Shortening a file means writing it afresh, so all 5000 of its bytes are rewritten (5000 -> 4984 bytes)." \
     "$(sed -n 2p "$WORK/ts3f.out")"
 check "growing says only what moves is written" \
-    "Everything after this page has to move, so 900 of the file's 5000 bytes are rewritten; the rest is not touched (5000 -> 5003 bytes)." \
+    "Everything after this page has to move, so 900 of the file's 5000 bytes are rewritten in place - the rest is not touched, and no second copy of it is made (5000 -> 5003 bytes)." \
     "$(sed -n 5p "$WORK/ts3f.out")"
 
 # --- The help file must produce tags ---------------------------------------
