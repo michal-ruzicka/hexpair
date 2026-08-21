@@ -385,8 +385,7 @@ living.
 Stage 1's existing mechanism, unchanged by this redesign — one of the
 two population paths from "two population paths" above; the other
 (buffer-slicing, for `:HexPairToggle` on an already-existing buffer)
-is new territory for Stage 2 and not yet designed in this level of
-detail.
+was designed and built in Stage 2 - see "What Stage 2 decided".
 
 - `xxd -s <offset> -l <len> -g 1 -c <n> <file>` into a **scratch
   buffer** (`buftype=acwrite`, `bufhidden=hide`, `noswapfile`,
@@ -507,10 +506,8 @@ following the `HexPairActive`/`HexPairMirror` precedent.
 
 ### Commands
 
-Unified by Stage 2 (not yet done — Stage 1's commands below currently
-only work on an `:HexPairOpen`-created buffer): once merged,
-`:HexPairPageNext`/`Prev`/`Goto`/`Pages` work on *any* Hex-page-view
-buffer, however it was reached — `:HexPairToggle` or `:HexPairOpen`
+Unified by Stage 2: `:HexPairPageNext`/`Prev`/`Goto`/`Pages` work on
+*any* Hex-page-view buffer, however it was reached — `:HexPairToggle` or `:HexPairOpen`
 produce indistinguishable buffer state (see "two population paths"
 above).
 
@@ -707,19 +704,17 @@ is pure), and banner-aware stripping/validation (including that banner
 text containing letters and slashes is never mistaken for an invalid
 hex character).
 
-Needed for Stage 2 (unification, no new writing): `:HexPairToggle` on
-a small already-loaded file lands on Hex-page-view with exactly one
-page and today's pre-paging byte-for-byte behaviour, plus a `1/1`
-banner; on a multi-page file it starts on the page containing the
-cursor's byte offset, not always page 1; toggling Hex-page-view →
-Windowed-text-view → Hex-page-view round-trips the cursor byte exactly
-(same invariant as the existing base-plugin toggle) and shows the
-banner in both directions; a `:w` attempt from either view still
-throws the same "not implemented yet" it does today; an unnamed/piped
-buffer (`vim -` equivalent in the test harness — feed content via
-stdin or construct with `enew` + `setline()`) reaches Hex-page-view
-via the buffer-slicing path with no crash and no attempt to read a
-nonexistent file.
+Stage 2, done: `:HexPairToggle` on a small already-loaded file lands
+on Hex-page-view with exactly one page and the pre-paging byte-for-byte
+behaviour, plus a `1/1` banner; on a multi-page file it starts on the
+page containing the cursor's byte offset, not always page 1; toggling
+Hex-page-view → Windowed-text-view → Hex-page-view round-trips the
+cursor byte exactly (same invariant as the base-plugin toggle) and
+shows the banner in both directions; an unnamed/piped buffer (`vim -`
+equivalent in the test harness — feed content via stdin or construct
+with `enew` + `setline()`) reaches Hex-page-view via the
+buffer-slicing path with no crash and no attempt to read a nonexistent
+file.
 
 Stages 3/4, done: the same-length patch leaves the head and the tail of
 the file bit-identical (hashed on both sides of the page) and does not
@@ -734,8 +729,12 @@ and a `:w {other}` are each refused with the file untouched; emptying
 the only page leaves a view saying so; and both the splice version gate
 and the resize prompt are tested through their parameterized message
 functions, since neither `has()` nor `confirm()` can be driven here.
-When Windowed-text-view lands, the same-length and splice paths need
-the same coverage from that side too.
+The same paths are covered from Windowed-text-view too, because that
+view sources the page's bytes differently (a `readfile`/`writefile`
+binary round trip instead of stripping a dump): an unedited write
+changes nothing, a same-length edit patches only the page and leaves
+the rest of it byte-identical, a growing edit moves the tail, and an
+edited banner refuses the write.
 
 ### What Stage 2 decided
 
