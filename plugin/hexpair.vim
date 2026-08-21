@@ -2141,6 +2141,248 @@ function! s:Selection() abort
 endfunction
 
 " ---------------------------------------------------------------------------
+" Data inspector
+" ---------------------------------------------------------------------------
+"
+" The bytes at the cursor read as the numbers they could be: 8, 16, 32 and
+" 64 bits wide, unsigned and signed, little- and big-endian, plus the two
+" IEEE 754 floats. What every hex editor calls a data inspector, and what
+" a hex dump on its own cannot tell you.
+"
+" The bytes come from THIS PAGE as the buffer holds it - edits included -
+" and stop at its end, so near the boundary there may be fewer than eight
+" and the wider rows say so rather than reaching into a page that is not
+" on screen.
+
+" Bytes from the cursor onward, at most a:count of them, as a list of
+" values. In the hex view they are read out of the payload digits, line by
+" line for as long as more are needed; in the text view they are the
+" buffer's own bytes, taken through writefile(..., 'b'), which is the one
+" way to get them out of a Vim string exactly (a NUL is held as a NL
+" inside a line, and only that round trip puts it back).
+function! s:InspectBytes(count) abort
+  let out = []
+  if s:IsHexView()
+    if s:IsBannerLine(getline('.'))
+      return []
+    endif
+    let lnum = line('.')
+    let digits = strpart(s:PagedLineDigits(getline(lnum)),
+          \ s:PagedLineIndexAt(lnum, col('.')) * 2)
+    while strlen(digits) < a:count * 2 && lnum < line('$')
+      let lnum += 1
+      let digits .= s:PagedLineDigits(getline(lnum))
+    endwhile
+    let i = 0
+    while i + 1 < strlen(digits) && len(out) < a:count
+      call add(out, str2nr(strpart(digits, i, 2), 16))
+      let i += 2
+    endwhile
+    return out
+  endif
+
+  " Text view: cut the lines the bytes fall on out of the buffer, write
+  " just those, and let xxd say what they are.
+  let [first, last] = s:TextBodyRange()
+  let lnum = line('.') < first ? first : (line('.') > last ? last : line('.'))
+  let lines = [strpart(getline(lnum), col('.') - 1)]
+  " A line break is a byte too, so each further line adds one plus its
+  " own length; a:count of them is always enough.
+  let extra = lnum
+  while extra < last && strlen(join(lines, ' ')) < a:count
+    let extra += 1
+    call add(lines, getline(extra))
+  endwhile
+  let raw = tempname()
+  try
+    call writefile(lines, raw, 'b')
+    let hex = substitute(s:Run(printf('%s -p -l %d %s', s:xxd, a:count,
+          \ shellescape(raw))), '[^0-9a-fA-F]', '', 'g')
+  finally
+    call delete(raw)
+  endtry
+  let i = 0
+  while i + 1 < strlen(hex)
+    call add(out, str2nr(strpart(hex, i, 2), 16))
+    let i += 2
+  endwhile
+  return out
+endfunction
+
+" The hex digits of one dump line's payload, without the spaces.
+function! s:PagedLineDigits(line) abort
+  return substitute(s:PagedPayload(a:line), '[^0-9a-fA-F]', '', 'g')
+endfunction
+
+" The bit pattern of a:bytes, most significant first, as a Number. For
+" eight bytes this is already the signed 64-bit value: the arithmetic
+" wraps exactly as two's complement does, which is why the unsigned form
+" of that width goes through HexPairPagedU64Text().
+function! s:PatternOf(bytes) abort
+  let v = 0
+  for b in a:bytes
+    let v = v * 256 + b
+  endfor
+  return v
+endfunction
+
+" a - b for two non-negative decimal strings with a >= b. Pure, and the
+" only way to print the unsigned value of a 64-bit pattern whose top bit
+" is set: Vim's Number is signed, so 2^64 + n has to be done in decimal.
+function! HexPairPagedDecSub(a, b) abort
+  let b = repeat('0', strlen(a:a) - strlen(a:b)) . a:b
+  let out = ''
+  let borrow = 0
+  let i = strlen(a:a) - 1
+  while i >= 0
+    let d = str2nr(a:a[i]) - str2nr(b[i]) - borrow
+    let borrow = d < 0 ? 1 : 0
+    let out = (d < 0 ? d + 10 : d) . out
+    let i -= 1
+  endwhile
+  return substitute(out, '^0\+\ze\d', '', '')
+endfunction
+
+" The unsigned decimal of a 64-bit pattern held in a signed Number.
+function! HexPairPagedU64Text(n) abort
+  return a:n >= 0 ? string(a:n)
+        \ : HexPairPagedDecSub('18446744073709551616', string(a:n)[1:])
+endfunction
+
+" IEEE 754 from a:bytes, most significant first: four bytes are a
+" binary32, eight a binary64. Done on the bytes rather than on a bit
+" pattern in a Number so nothing depends on how wide a Number is, and
+" with the mantissa carried as a Float, which holds 53 bits exactly - one
+" more than a binary64 needs.
+function! HexPairPagedIeeeText(bytes) abort
+  let w = len(a:bytes)
+  if w != 4 && w != 8
+    return '-'
+  endif
+  if !has('float')
+    return '(needs +float)'
+  endif
+  let expbits  = w == 4 ? 8 : 11
+  let mantbits = w == 4 ? 23 : 52
+  let bias     = w == 4 ? 127 : 1023
+  let maxexp   = w == 4 ? 255 : 2047
+  let sign     = a:bytes[0] >= 128 ? -1.0 : 1.0
+  " The exponent straddles the first two bytes: seven bits are left in
+  " byte 0 once the sign is off it, and the rest comes off the top of
+  " byte 1.
+  let inbyte1 = expbits - 7
+  let exp = (a:bytes[0] % 128) * float2nr(pow(2, inbyte1))
+        \ + a:bytes[1] / float2nr(pow(2, 8 - inbyte1))
+  let mant = (a:bytes[1] % float2nr(pow(2, 8 - inbyte1))) * 1.0
+  for b in a:bytes[2:]
+    let mant = mant * 256.0 + b
+  endfor
+  if exp == maxexp
+    return mant != 0.0 ? 'nan' : (sign < 0 ? '-inf' : 'inf')
+  endif
+  let frac = mant / pow(2, mantbits)
+  let value = exp == 0
+        \ ? sign * frac * pow(2, 1 - bias)
+        \ : sign * (1.0 + frac) * pow(2, exp - bias)
+  return printf('%g', value)
+endfunction
+
+" A byte as eight bits. printf() has no %b on the Vim this plugin
+" supports, so the bits are spelled out.
+function! HexPairPagedBinaryText(byte) abort
+  let out = ''
+  let bit = 128
+  while bit > 0
+    let out .= a:byte / bit % 2
+    let bit = bit / 2
+  endwhile
+  return out
+endfunction
+
+" One cell of the table: the unsigned value, and the signed one after it
+" when the two differ - which they do exactly when the top bit is set.
+function! s:IntCell(bytes) abort
+  let w = len(a:bytes)
+  let pattern = s:PatternOf(a:bytes)
+  if w >= 8
+    let unsigned = HexPairPagedU64Text(pattern)
+    let signed = string(pattern)
+  else
+    let half = float2nr(pow(2, w * 8 - 1))
+    let unsigned = string(pattern)
+    let signed = string(pattern >= half ? pattern - half * 2 : pattern)
+  endif
+  return unsigned ==# signed ? unsigned : unsigned . ' / ' . signed
+endfunction
+
+" The whole report, as lines. Pure: it is handed the bytes and where they
+" are, so every conversion in it is testable without a buffer.
+function! HexPairPagedInspectLines(bytes, at, total) abort
+  if empty(a:bytes)
+    return ['hexpair: no byte here to read']
+  endif
+  let hex = []
+  for b in a:bytes
+    call add(hex, printf('%02x', b))
+  endfor
+  let head = printf('hexpair: byte %d (0x%x) of %d: %s',
+        \ a:at, a:at, a:total, join(hex, ' '))
+  let byte = a:bytes[0]
+  let out = [head]
+  call add(out, printf('  8-bit    %-26s  char %s  bin %s  oct 0%o',
+        \ s:IntCell(a:bytes[0:0]),
+        \ byte >= 0x20 && byte < 0x7f ? "'" . nr2char(byte) . "'" : ' - ',
+        \ HexPairPagedBinaryText(byte), byte))
+  call add(out, printf('  %-8s %-26s  %s', '', 'little-endian', 'big-endian'))
+  " Widths beyond 32 bits need a Vim whose Number is 64 bits wide; the
+  " rows are left out rather than shown wrong where it is not.
+  for w in has('num64') ? [2, 4, 8] : [2]
+    let name = printf('%d-bit', w * 8)
+    if len(a:bytes) < w
+      call add(out, printf('  %-8s %-26s  %s', name,
+            \ printf('(only %d byte%s left on this page)', len(a:bytes),
+            \        len(a:bytes) == 1 ? '' : 's'), ''))
+      continue
+    endif
+    let be = a:bytes[0 : w - 1]
+    let le = reverse(copy(be))
+    call add(out, printf('  %-8s %-26s  %s', name, s:IntCell(le), s:IntCell(be)))
+  endfor
+  for w in [4, 8]
+    let name = w == 4 ? 'float32' : 'float64'
+    if len(a:bytes) < w
+      continue
+    endif
+    let be = a:bytes[0 : w - 1]
+    let le = reverse(copy(be))
+    call add(out, printf('  %-8s %-26s  %s', name,
+          \ HexPairPagedIeeeText(le), HexPairPagedIeeeText(be)))
+  endfor
+  if !has('num64')
+    call add(out, '  (32- and 64-bit values need a Vim with +num64)')
+  endif
+  " The columns are padded to line up; a row whose right-hand cell is
+  " empty must not carry that padding into the message area.
+  return map(out, "substitute(v:val, '\\s\\+$', '', '')")
+endfunction
+
+function! s:Inspect() abort
+  if !s:RequirePaged()
+    return
+  endif
+  if b:hexpair_page_len <= 0
+    echo 'hexpair: this page holds no bytes'
+    return
+  endif
+  let bytes = s:InspectBytes(8)
+  let at = empty(bytes) ? 0 :
+        \ (s:IsHexView() ? s:PagedByteOffset() : s:TextByteOffset()) + 1
+  for line in HexPairPagedInspectLines(bytes, at, b:hexpair_page_total)
+    echo line
+  endfor
+endfunction
+
+" ---------------------------------------------------------------------------
 " Statusline
 " ---------------------------------------------------------------------------
 
@@ -2730,6 +2972,7 @@ command! -bar -bang -nargs=1 HexPairGoOffset
       \ call s:GotoOffset(<q-args>, '<bang>' ==# '!')
 command! -bar HexPairPages call s:Pages()
 command! -bar HexPairSelection call s:Selection()
+command! -bar HexPairInspect call s:Inspect()
 
 " No default key mappings are defined; map the <Plug> mappings (or the
 " commands directly) in your vimrc, e.g.:
@@ -2753,6 +2996,7 @@ nnoremap <silent> <Plug>(HexPairPages) :<C-U>HexPairPages<CR>
 " mode the one made last.
 xnoremap <silent> <Plug>(HexPairSelection) :<C-U>HexPairSelection<CR>
 nnoremap <silent> <Plug>(HexPairSelection) :<C-U>HexPairSelection<CR>
+nnoremap <silent> <Plug>(HexPairInspect) :<C-U>HexPairInspect<CR>
 
 " No default key mappings are defined; map the <Plug> mappings (or the
 " commands directly) in your vimrc, e.g.:

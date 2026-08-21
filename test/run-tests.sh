@@ -153,6 +153,13 @@ for name in ('paged21.bin', 'paged22.bin', 'paged23.bin', 'paged31.bin', 'paged3
 for name in ('scan1.bin', 'scan2.bin'):
     with open(os.path.join(w, name), 'wb') as f:
         f.write(bytes((i * 7) % 256 for i in range(100000)))
+# data-inspector fixture: a little-endian double and float at known
+# offsets, so the conversions can be checked against python's packing
+import struct
+_insp = bytearray(bytes(i % 256 for i in range(512)))
+_insp[0:8] = struct.pack('<d', 1234.5678)
+_insp[8:12] = struct.pack('<f', -3.25)
+open(os.path.join(w, 'insp1.bin'), 'wb').write(bytes(_insp))
 # same-second tampering fixture
 open(os.path.join(w, 'digest1.bin'), 'wb').write(bytes(i % 256 for i in range(5000)))
 # page-goto fixture
@@ -2175,6 +2182,82 @@ check "and the edit is still there to be saved elsewhere" "1" \
     "$(sed -n 3p "$WORK/tdig.out")"
 check "the other writer's bytes are still on disk" "ffffffff" \
     "$("$HEXPAIR_XXD" -s 600 -l 4 -p "$WORK/digest1.bin")"
+
+# ===========================================================================
+# The data inspector
+# ===========================================================================
+# Every conversion in it is a pure function of the bytes, so they are
+# checked against values whose bit patterns are known exactly - a double
+# packed by python, a float, the specials - and then the command itself is
+# driven over a real page, from both views.
+cat > "$WORK/tins.vim" <<EOF
+$(printf "$HEX")
+let out = []
+call add(out, HexPairPagedBinaryText(173) . ' ' . HexPairPagedBinaryText(0) . ' ' . HexPairPagedBinaryText(255))
+call add(out, HexPairPagedU64Text(-1) . ' ' . HexPairPagedU64Text(0) . ' ' . HexPairPagedU64Text(-1068498944))
+call add(out, HexPairPagedDecSub('1000', '1') . ' ' . HexPairPagedDecSub('100', '100'))
+call add(out, HexPairPagedIeeeText([0x40,0x93,0x4a,0x45,0x6d,0x5c,0xfa,0xad]) . ' ' . HexPairPagedIeeeText([0xc0,0x50,0x00,0x00]))
+call add(out, HexPairPagedIeeeText([0x7f,0x80,0,0]) . ' ' . HexPairPagedIeeeText([0xff,0x80,0,0]) . ' ' . HexPairPagedIeeeText([0x7f,0xc0,0,0]) . ' ' . HexPairPagedIeeeText([0,0,0,0]) . ' ' . HexPairPagedIeeeText([0,0,0,1]))
+HexPairOpen $WORK/insp1.bin 1
+HexPairGoOffset 66
+redir => m1
+silent HexPairInspect
+redir END
+let hexview = filter(split(m1, "\n"), 'v:val !~# "^\$"')
+call extend(out, hexview)
+HexPairGoOffset 512
+redir => m2
+silent HexPairInspect
+redir END
+call add(out, filter(split(m2, "\n"), 'v:val =~# "16-bit"')[0])
+HexPairGoOffset 1
+HexPairToggle
+redir => m3
+silent HexPairInspect
+redir END
+let textview = filter(split(m3, "\n"), 'v:val !~# "^\$"')
+HexPairToggle
+HexPairGoOffset 1
+redir => m4
+silent HexPairInspect
+redir END
+call add(out, string(textview ==# filter(split(m4, "\n"), 'v:val !~# "^\$"')))
+normal! 1G
+redir => m5
+silent HexPairInspect
+redir END
+call add(out, filter(split(m5, "\n"), 'v:val !~# "^\$"')[0])
+call writefile(out, '$WORK/tins.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tins.vim" < /dev/null
+check "a byte in binary" "10101101 00000000 11111111" "$(sed -n 1p "$WORK/tins.out")"
+# Vim's Number is signed, so the unsigned form of a 64-bit pattern whose
+# top bit is set has to be done in decimal.
+check "an unsigned 64-bit pattern" "18446744073709551615 0 18446744072641052672" \
+    "$(sed -n 2p "$WORK/tins.out")"
+check "decimal subtraction, including down to zero" "999 0" "$(sed -n 3p "$WORK/tins.out")"
+check "IEEE 754 from the bytes python packed" "1234.5678 -3.25" "$(sed -n 4p "$WORK/tins.out")"
+check "and the ends of the range" "inf -inf nan 0.0 1.401298e-45" \
+    "$(sed -n 5p "$WORK/tins.out")"
+check "the inspector reads the bytes at the cursor" \
+    "hexpair: byte 66 (0x42) of 512: 41 42 43 44 45 46 47 48" \
+    "$(sed -n 6p "$WORK/tins.out")"
+check "one byte, as a character and as bits" \
+    "  8-bit    65                          char 'A'  bin 01000001  oct 0101" \
+    "$(sed -n 7p "$WORK/tins.out")"
+check "the widths, both ways round" \
+    "  16-bit   16961                       16706" "$(sed -n 9p "$WORK/tins.out")"
+check "including the 64-bit one" \
+    "  64-bit   5208208757389214273         4702394921427289928" \
+    "$(sed -n 11p "$WORK/tins.out")"
+check "and the floats" \
+    "  float32  781.035217                  12.141422" "$(sed -n 12p "$WORK/tins.out")"
+check "a width that does not fit in what is left of the page says so" \
+    "  16-bit   (only 1 byte left on this page)" "$(sed -n 14p "$WORK/tins.out")"
+check "both views read the same bytes" "1" "$(sed -n 15p "$WORK/tins.out")"
+check "and a banner line has nothing to read" "hexpair: no byte here to read" \
+    "$(sed -n 16p "$WORK/tins.out")"
 
 # ---------------------------------------------------------------------------
 if [ "$FAIL" -eq 0 ]; then
