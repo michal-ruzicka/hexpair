@@ -7,15 +7,47 @@
 # python3 (fixture generation only — dash's printf does not expand \x
 # escapes, so binary fixtures must not be generated with printf).
 #
+# Runs on Windows too, under Git Bash with a native Vim on PATH; see the
+# path and interpreter notes below for the two things that differ there.
+#
 # Exit status: 0 when all tests pass, 1 otherwise.
 # ===========================================================================
 set -u
 
 cd "$(dirname "$0")"
+
+# Python is python3 everywhere except Windows, where the installers name it
+# python - and where a `python3` that merely opens the Microsoft Store is a
+# common decoy, so the candidate has to actually run before it is believed.
+PY=
+for candidate in python3 python; do
+    if command -v "$candidate" >/dev/null 2>&1 \
+        && "$candidate" -c 'raise SystemExit(0)' >/dev/null 2>&1; then
+        PY=$candidate
+        break
+    fi
+done
+if [ -z "$PY" ]; then
+    echo "run-tests.sh: no working python3 (or python) on PATH" >&2
+    exit 1
+fi
+
 ROOT=$(cd .. && pwd)
 PLUGIN=../plugin/hexpair.vim
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
+
+# A native Vim on Windows cannot follow an MSYS path like /tmp/xxx. Git Bash
+# rewrites such paths in the arguments it passes to a native program, but not
+# inside the generated .vim scripts, which Vim opens itself - so every path
+# this suite writes into one has to be in the drive-letter form to begin
+# with. cygpath -m gives that with forward slashes, which keeps them usable
+# as 'runtimepath' entries and as arguments to the MSYS tools here.
+if command -v cygpath >/dev/null 2>&1; then
+    ROOT=$(cygpath -m "$ROOT")
+    WORK=$(cygpath -m "$WORK")
+fi
+
 FAIL=0
 
 check() { # name expected actual
@@ -35,11 +67,11 @@ check() { # name expected actual
 # instead), and the suite is meant to need nothing beyond vim, xxd and
 # python3.
 file_size() { # file
-    python3 -c 'import os,sys; print(os.path.getsize(sys.argv[1]))' "$1"
+    "$PY" -c 'import os,sys; print(os.path.getsize(sys.argv[1]))' "$1"
 }
 
 hash_range() { # file offset length (-1 = to the end of the file)
-    python3 - "$1" "$2" "$3" <<'PYHASH'
+    "$PY" - "$1" "$2" "$3" <<'PYHASH'
 import hashlib, sys
 name, off, length = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
 with open(name, 'rb') as f:
@@ -49,7 +81,7 @@ PYHASH
 }
 
 # --- Fixtures --------------------------------------------------------------
-python3 - "$WORK" <<'EOF'
+"$PY" - "$WORK" <<'EOF'
 import sys, os
 w = sys.argv[1]
 # 100 uniform text lines -> 2900 bytes; known byte at offset 1422
@@ -1049,12 +1081,22 @@ check "a successful splice leaves no temp files behind" "[0, 0, 0]" \
 # --- A splice that cannot replace the file keeps the recovery copy ----------
 # Making the target read-only makes the copy back fail after the temp
 # already holds the complete new content - the one case where the temp is
-# deliberately NOT deleted. (Skipped when running as root, which ignores
-# the permission bits.)
+# deliberately NOT deleted.
+#
+# Whether that works at all depends on the environment rather than on this
+# suite: root ignores the permission bits, and so do some filesystems and
+# some Windows setups. Rather than guess from the platform, take a
+# throwaway file away from ourselves and see whether we can still write to
+# it; the test only means anything where the answer is no.
 SP4_ALL=$(hash_range "$WORK/sp4.bin" 0 -1)
-if [ "$(id -u)" = "0" ]; then
-    echo "ok   - (skipped as root) a failed splice keeps a recovery copy"
-    echo "ok   - (skipped as root) a failed splice leaves the file alone"
+echo x > "$WORK/roprobe"
+chmod 444 "$WORK/roprobe"
+probe_writable=0
+(echo x >> "$WORK/roprobe") 2>/dev/null && probe_writable=1
+chmod 644 "$WORK/roprobe"
+if [ "$probe_writable" = 1 ]; then
+    echo "ok   - (skipped: read-only is not enforced here) a failed splice keeps a recovery copy"
+    echo "ok   - (skipped: read-only is not enforced here) a failed splice leaves the file alone"
 else
     chmod 444 "$WORK/sp4.bin"
     cat > "$WORK/ts3d.vim" <<EOF
