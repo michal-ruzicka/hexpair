@@ -1147,6 +1147,7 @@ probe_writable=0
 (echo x >> "$WORK/roprobe") 2>/dev/null && probe_writable=1
 chmod 644 "$WORK/roprobe"
 if [ "$probe_writable" = 1 ]; then
+    echo "ok   - (skipped: read-only is not enforced here) a page of a file this user cannot write is read-only"
     echo "ok   - (skipped: read-only is not enforced here) a failed splice keeps a recovery copy"
     echo "ok   - (skipped: read-only is not enforced here) a failed splice leaves the file alone"
 else
@@ -1155,20 +1156,30 @@ else
 $(printf "$PAGEDW")
 let dir = fnamemodify(tempname(), ':h')
 HexPairOpen $WORK/sp4.bin 2
+let ro = &l:readonly
 call append(1, 'aa bb cc')
-let failed = ''
+let refused = ''
 try
   write
+catch
+  let refused = 'refused'
+endtry
+let temps = len(glob(dir . '/*', 0, 1))
+let failed = ''
+try
+  write!
 catch
   let failed = 'failed'
 endtry
 let kept = filter(glob(dir . '/*', 0, 1), 'getfsize(v:val) == 5003')
-call writefile([string([failed, len(kept), &l:modified])], '$WORK/ts3d.out')
+call writefile([string([ro, refused, temps]), string([failed, len(kept), &l:modified])], '$WORK/ts3d.out')
 qa!
 EOF
     "$HEXPAIR_VIM" -es -u NONE -S "$WORK/ts3d.vim" < /dev/null
+    check "a page of a file this user cannot write is read-only" \
+        "[1, 'refused', 0]" "$(sed -n 1p "$WORK/ts3d.out")"
     check "a failed splice keeps a recovery copy" "['failed', 1, 1]" \
-        "$(cat "$WORK/ts3d.out")"
+        "$(sed -n 2p "$WORK/ts3d.out")"
     check "a failed splice leaves the file alone" "$SP4_ALL" \
         "$(hash_range "$WORK/sp4.bin" 0 -1)"
     chmod 644 "$WORK/sp4.bin"
@@ -1506,8 +1517,8 @@ source $PLUGIN
 let want = ['(HexPairToggle)', '(HexPairGoHex)', '(HexPairGoAscii)', '(HexPairSwap)', '(HexPairRefresh)', '(HexPairPageNext)', '(HexPairPagePrev)', '(HexPairPageGoto)', '(HexPairPageGotoForce)', '(HexPairGoOffset)', '(HexPairGoOffsetForce)', '(HexPairPages)']
 let listed = execute('nmap')
 let missing = filter(copy(want), 'stridx(listed, "<Plug>" . v:val) < 0')
-let parsed = [HexPairPagedParseOffsetInput(''), HexPairPagedParseOffsetInput('1234'), HexPairPagedParseOffsetInput('0x10'), HexPairPagedParseOffsetInput('zz')]
-call writefile([string(missing), string(parsed[0]), string(parsed[1]), string(parsed[2]), parsed[3].msg], '$WORK/tk1.out')
+let parsed = [HexPairPagedParseOffsetInput(''), HexPairPagedParseOffsetInput('1234'), HexPairPagedParseOffsetInput('0x10'), HexPairPagedParseOffsetInput('zz'), HexPairPagedParseOffsetInput('ff')]
+call writefile([string(missing), string(parsed[0]), string(parsed[1]), string(parsed[2]), parsed[3].msg, parsed[4].msg], '$WORK/tk1.out')
 qa!
 EOF
 "$HEXPAIR_VIM" -es -u NONE -S "$WORK/tk1.vim" < /dev/null
@@ -1518,6 +1529,12 @@ check "byte 0x10 parses to offset 15"     "{'offset': 15}"   "$(sed -n 4p "$WORK
 check "a non-position is reported" \
     "hexpair: not a byte position: 'zz' (decimal, or 0x for hex; byte 1 is the first)" \
     "$(sed -n 5p "$WORK/tk1.out")"
+# A bare "ff" reads as hex to a person and as the decimal 0 to str2nr(),
+# so it is refused as a position rather than reported as "positions start
+# at 1", which is a complaint about the wrong thing.
+check "hex without the 0x is not a position either" \
+    "hexpair: not a byte position: 'ff' (decimal, or 0x for hex; byte 1 is the first)" \
+    "$(sed -n 6p "$WORK/tk1.out")"
 
 # --- Piped input that Vim may already have transcoded is flagged -----------
 # A named file can be re-read with ++bin; piped input cannot, so if the

@@ -451,10 +451,12 @@ HexPairOpenFile({file} [, {page}])
                         banner can be typed straight back in.  (The dump's
                         own offset column is `xxd`'s native 0-based
                         address and is left alone - the same split the
-                        banner already makes.)  Refuses to leave a page
-                        with unwritten changes without !, like the other
-                        navigation commands, and leaves you in whichever
-                        view you were in.
+                        banner already makes.)  A hex number needs the
+                        0x on it: a bare "ff" is not a byte position, and
+                        says so.  Refuses to leave a page with unwritten
+                        changes without !, like the other navigation
+                        commands, and leaves you in whichever view you
+                        were in.
 
 As with |hexpair-usage|, no key mappings are defined by default; e.g.: >
 
@@ -629,6 +631,10 @@ itself so they survive being copied out of it:
 ==============================================================================
 9. Limitations                                           *hexpair-limitations*
 
+- A page of a file this user cannot write opens |'readonly'|, so |:w|
+  refuses it (E45) rather than converting the page and finding out from
+  xxd.  |:w!| overrides that, as everywhere else in Vim, and then fails
+  the way the file system makes it fail.
 - The column arithmetic assumes the dump format produced by
   `xxd -g 1 -c N` (one-byte groups).  Do not re-filter the buffer with a
   different xxd invocation while hex mode is active.

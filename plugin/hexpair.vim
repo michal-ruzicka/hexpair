@@ -927,6 +927,12 @@ function! s:LoadPage(pageidx) abort
   setlocal filetype=xxd
   call s:ApplyBannerSyntax()
   setlocal nomodified
+  " A file this user cannot write is shown read-only, so :w says so at
+  " once (E45) instead of at the end of an editing session, through a
+  " failure from xxd naming a temp file. ':w!' still reaches the write
+  " path, which checks again and refuses in hexpair's own words.
+  let &l:readonly = get(b:, 'hexpair_page_spill', '') ==# ''
+        \ && !filewritable(b:hexpair_page_file)
   let b:hexpair_page_active = 1
   let b:hexpair_view = 'hex'
   call s:PasteOn()
@@ -1928,7 +1934,10 @@ function! HexPairPagedParseOffsetInput(text) abort
   if empty(a:text)
     return {}
   endif
-  if a:text !~# '^\%(0[xX]\)\=\x\+$'
+  " Decimal, or hex with the 0x on it: a bare "ff" is not read as either,
+  " because str2nr() would take it for the decimal 0 and the complaint
+  " ("byte positions start at 1") would be about the wrong thing.
+  if a:text !~# '^\%(0[xX]\x\+\|\d\+\)$'
     return {'msg': printf('hexpair: not a byte position: %s '
           \ . '(decimal, or 0x for hex; byte 1 is the first)', string(a:text))}
   endif
