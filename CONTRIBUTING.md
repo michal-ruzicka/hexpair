@@ -22,8 +22,10 @@ reports and patches are welcome via the project's
 |---|---|
 | `.github/` | GitHub Actions CI workflow (`workflows/build.yml`) |
 | `dist/` | Packaged release tarballs (gitignored) |
-| `plugin/hexpair.vim` | The plugin itself; its header carries `Version:` and `Date:` — the single source of truth parsed by the packaging scripts |
+| `plugin/hexpair.vim` | The base plugin (whole-buffer toggle); its header carries `Version:` and `Date:` — the single source of truth parsed by the packaging scripts |
+| `ftplugin/xxd.vim` | Dump-editing defaults for `filetype=xxd`, bundled with the plugin |
 | `doc/hexpair.txt` | Vim help documentation (`:help hexpair`) |
+| `hexpair.bashrc` | The `vimhex` shell wrapper, to be sourced from `~/.bashrc`; bundled in every release tarball |
 | `test/` | Headless regression tests (`run-tests.sh`, see *Testing*) |
 | `.gitattributes` | Line-ending normalization rules |
 | `.gitignore` | Excludes `build/` and `dist/` from version control |
@@ -99,8 +101,26 @@ claim.
 ## CI
 
 The GitHub Actions workflow (`.github/workflows/build.yml`) runs on
-every push and pull request. It executes the test suite and both
-packaging scripts, and compares the resulting hashes. Releases are
+every push and pull request. It executes the test suite on Linux and on
+Windows — the same `test/run-tests.sh`, under Git Bash against the Vim
+project's own Windows build, because Windows is the platform the
+portability rules exist for — then both packaging scripts, and compares
+the resulting hashes.
+
+That Vim is pinned by version *and* SHA-256 (`VIM_VERSION` /
+`VIM_SHA256` in the workflow), downloaded from the
+`vim/vim-win32-installer` releases rather than installed by a package
+manager: the same discipline the rest of the project's dependencies get.
+Bump the two together, in their own commit.
+
+The suite runs whatever `$HEXPAIR_VIM` and `$HEXPAIR_XXD` name, falling
+back to `vim` and `xxd` on `PATH` — which is how the Windows job pins the
+binaries under test, and how you can point the suite at one particular
+Vim locally. On Windows it must be a native build: an MSYS one (Git for
+Windows ships one, first on `PATH` in any Git Bash step) understands
+POSIX paths and would pass the suite without testing anything the
+portability rules are about, so the job checks for `MS-Windows` in
+`--version` and fails if it is missing. Releases are
 **not** published from CI — artifacts are signed locally and uploaded
 to GitHub Releases by hand (see *Release Process* below).
 
@@ -172,10 +192,29 @@ Releases are built and signed locally; no private key ever leaves the
 developer's machine.
 
 1. On a feature branch, bump `Version:` and `Date:` in the header of
-   `plugin/hexpair.vim` and add a `## [X.Y.Z] – YYYY-MM-DD` entry to
+   `plugin/hexpair.vim` and finish the `## [X.Y.Z] – YYYY-MM-DD` entry in
    `CHANGELOG.md`. Versions follow
    [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
    (`MAJOR.MINOR.PATCH`).
+
+   Before bumping, read the release as a stranger would. A changelog
+   entry written over a long cycle describes the cycle, not the release,
+   and the last time this was checked it contradicted itself four ways —
+   so it is worth going through:
+
+   - **Does the entry describe the release, or its history?** Nothing may
+     announce a feature as unfinished that a later bullet then finishes,
+     or credit a file that no release ever contained. One section per
+     type; `Fixed` splits into what was in the previous release and what
+     was found and fixed within this cycle.
+   - **Is every runtime message still true?** They outlive the behaviour
+     they describe. Grep the strings the plugin can print and read them
+     against what the code now does.
+   - **Is every code path tested from every entry point it has?** Two
+     views reach the same write path by different routes; a test that
+     only drives one of them covers half of it.
+   - **Do `CLAUDE.md` and the help still speak in the future tense** about
+     anything that now ships?
 2. Open a PR, get it reviewed (CI must be green, including the
    cross-platform reproducibility check), and merge into `main`.
 3. On `main`, tag and push:

@@ -13,18 +13,34 @@ CONTENTS                                                    *hexpair-contents*
     4. Configuration ............... |hexpair-configuration|
     5. Filetype plugin ............. |hexpair-ftplugin|
     6. Writing in hex mode ......... |hexpair-writing|
-    7. Limitations ................. |hexpair-limitations|
+    7. Refreshing the dump ......... |hexpair-refresh|
+    8. Paged large-file mode ....... |hexpair-paged|
+    9. Limitations ................. |hexpair-limitations|
 
 ==============================================================================
 1. Introduction                                         *hexpair-introduction*
 
-hexpair toggles the current buffer between its normal representation and an
-xxd hex dump with 'filetype' set to xxd (standard syntax highlighting).
+hexpair turns the current buffer into a hex view of ONE PAGE of its content
+- an xxd dump with 'filetype' set to xxd (standard syntax highlighting) and
+ABSOLUTE file offsets, bracketed by a banner saying which page it is.  A
+file smaller than a page simply has exactly one.  |:HexPairOpen| does the
+same for a file that is not loaded at all, reading only the page it shows,
+so a file of any size opens instantly.
 
 While hex mode is active, the byte under the cursor is highlighted in BOTH
 columns of the dump: placing the cursor on a hex byte highlights the
 corresponding ASCII character, and placing it on an ASCII character
 highlights the corresponding pair of hex digits.
+
+                                                        *hexpair-visual*
+The same holds for a |Visual| selection: Vim highlights what you selected,
+and hexpair highlights the same BYTES on the other side of the dump, so a
+run of hex digits shows which text it is and a run of text shows which
+bytes it is.  Characterwise, linewise and blockwise selections all work,
+and a selection spanning several lines is mirrored line by line.  Only the
+part on screen is mirrored - what is scrolled away cannot be looked at
+anyway, and it keeps the work per cursor movement the same however much of
+a page is selected.  Banner lines contribute nothing, as everywhere else.
 
 Requires the `xxd` utility, which ships with Vim.  It is looked up on
 $PATH first and then in the Vim runtime directory ($VIMRUNTIME), so on
@@ -40,18 +56,53 @@ Preferably open the file in binary mode: >
 <
 If the file was opened WITHOUT -b, the plugin re-reads it with `:edit ++bin`
 on the first toggle to obtain the exact on-disk bytes (read-time conversions
-such as CR stripping for fileformat=dos cannot be undone otherwise).  This
-requires an unmodified buffer backed by a readable file; for modified or
-unnamed buffers the plugin falls back to dumping the in-memory content and
-prints a warning.  After a ++bin reload the buffer stays in binary mode even
-when hex mode is toggled off.
+such as CR stripping for fileformat=dos cannot be undone otherwise).
+
+                                                        *hexpair-states*
+A buffer hexpair has touched is in one of two views, and |:HexPairToggle|
+moves between them:
+
+HEX PAGE VIEW     the page as an xxd dump: offset column, hex column,
+                  ASCII column, between the two banner lines.
+WINDOWED TEXT     the same page's raw bytes as text, between the same two
+                  banner lines.  Useful for reading strings, or for
+                  pasting bytes in as text.
+
+There is deliberately NO way back to the plain buffer.  Once a buffer holds
+one page instead of the whole file, showing it as the file again would be a
+lie, and a plain |:w| would truncate the file down to that page.  Close and
+reopen the file if you want the ordinary view back.
+
+                                                        *hexpair-page-source*
+Where the pages come from depends on what the buffer was when hex mode was
+entered:
+
+- UNMODIFIED AND BACKED BY A FILE - the usual case.  The file is the
+  truth, so pages are read from it.
+- NO FILE AT ALL, e.g. `cat data | vim -`.  The only copy of the content
+  is in memory, so it is written once to a private temporary file and
+  paged from there.  A plain |:w| has nothing to write back to and says
+  so; `:w {file}` saves all of it and the view then goes on editing that
+  file (see |hexpair-paged-write|).
+  Pipe binary data in with `vim -b -`: without -b Vim may transcode it
+  or fold its line endings on the way in, and unlike a named file there
+  is nothing to re-read with ++bin afterwards.  hexpair warns when it
+  pages a buffer that was not read in binary mode.
+- MODIFIED AND BACKED BY A FILE.  The buffer and the file disagree, and
+  hexpair refuses rather than choose for you: paging the file would hide
+  your edits, and paging the buffer would let a page-range write drop
+  every edit outside the visible page.  Write the buffer first, or use
+  |:HexPairOpen| to look at what is on disk.
 
 Only the HEX column matters when converting back: the offset column and the
 ASCII column are stripped before the reverse conversion and are therefore
 purely decorative.  This means you can freely insert, delete or reorder
 lines while editing - inserted lines need no offset and no ASCII part, just
-hex pairs.  After |:w| the dump is regenerated, so offsets and the ASCII
-column become correct again automatically.
+hex pairs.  After |:w| the page is re-read, so offsets and the ASCII column
+become correct again automatically.  The banner lines contribute no bytes:
+in the dump they are recognized by their leading double quote, and in the
+windowed text view - where a page of raw bytes may itself start with one -
+by matching the banner text exactly.
 
 Editing rules:
 - keep bytes in the hex area separated by at most ONE space; a run of two
@@ -110,21 +161,54 @@ The jump commands clamp to a sensible target: from the offset column they
 land on the first byte of the line, from beyond the ASCII column on the
 last byte, and on a short last line on its last existing byte.
 
+:HexPairRefresh         Regenerate the offset and ASCII columns from the
+                        current hex payload, without writing to disk; see
+                        |hexpair-refresh|, where the command is described
+                        in full.
+
 ==============================================================================
 3. Mappings                                                 *hexpair-mappings*
 
                                                         *<Plug>(HexPairToggle)*
-           *<Plug>(HexPairGoHex)* *<Plug>(HexPairGoAscii)* *<Plug>(HexPairSwap)*
+ *<Plug>(HexPairGoHex)* *<Plug>(HexPairGoAscii)* *<Plug>(HexPairSwap)*
+                                                       *<Plug>(HexPairRefresh)*
+                            *<Plug>(HexPairGoOffset)* *<Plug>(HexPairGoOffsetForce)*
+                                                          *<Plug>(HexPairPages)*
 The plugin defines NO key mappings by default; it only provides the
-commands above and <Plug> mappings.  Choose your own keys in your vimrc,
-e.g.: >
+commands above and <Plug> mappings.  Choose your own keys in your vimrc.
+Every command that takes no argument has a target; the whole set, on a
+<Leader> prefix: >
 
+    " Views
     nmap <Leader>h <Plug>(HexPairToggle)
     nmap <Leader>< <Plug>(HexPairGoHex)
     nmap <Leader>> <Plug>(HexPairGoAscii)
     nmap <Leader>- <Plug>(HexPairSwap)
+    nmap <Leader>r <Plug>(HexPairRefresh)
+
+    " Moving around the file
+    nmap <Leader>j <Plug>(HexPairPageNext)
+    nmap <Leader>k <Plug>(HexPairPagePrev)
+    nmap <Leader>g <Plug>(HexPairPageGoto)
+    nmap <Leader>b <Plug>(HexPairGoOffset)
+    nmap <Leader>? <Plug>(HexPairPages)
+
+    " The same, discarding unwritten changes without asking - as the !
+    " commands do; handy for reading through a file rather than editing it
+    nnoremap <silent> <Leader>J :HexPairPageNext!<CR>
+    nnoremap <silent> <Leader>K :HexPairPagePrev!<CR>
+    nmap <Leader>G <Plug>(HexPairPageGotoForce)
+    nmap <Leader>B <Plug>(HexPairGoOffsetForce)
 <
-or map the commands directly: >
+|:HexPairOpen| takes a file name, so it has no <Plug> target - it is for
+the command line or a shell wrapper (see |hexpair-paged| for one).
+
+|<Plug>(HexPairPageGoto)| and |<Plug>(HexPairGoOffset)| prompt with
+|input()| for the number a bare <Plug> target cannot carry: press the
+key, type a page number or a byte offset (decimal, or 0x-prefixed for
+the offset), Enter.  An empty answer cancels.
+
+Or map the commands directly: >
 
     nnoremap <silent> <Leader>h :HexPairToggle<CR>
 <
@@ -232,17 +316,317 @@ the hex buffer - see |g:hexpair_paste|.
 ==============================================================================
 6. Writing in hex mode                                       *hexpair-writing*
 
-Writing with |:w| while hex mode is active is safe.  The buffer is
-transparently converted back to binary (xxd -r) before the write and
-re-converted to the dump afterwards, so the file on disk always contains the
-real binary content, never the textual dump.
+Writing with |:w| while hex mode is active writes just the page you are
+looking at, from either view - see |hexpair-paged-write| for the two
+mechanisms and what each costs.  The file on disk always receives real
+binary content, never the textual dump.
 
-Before the conversion the dump is validated (see the editing rules in
-|hexpair-usage|): an invalid dump aborts the write with an error and both
-the file on disk and the dump in the buffer keep their previous content.
+Before anything is written the page is validated (see the editing rules in
+|hexpair-usage|): an invalid page aborts the write with an error, and both
+the file on disk and the buffer keep their previous content.  So does a
+banner line that was edited or removed in the windowed text view, where it
+is what tells content and decoration apart.
+
+The 'modified' flag reflects whether the buffer actually differs from
+what is on disk, independently in each direction: entering hex mode with
+unsaved changes already pending keeps the buffer marked modified, and
+editing the dump (even if it was clean when hex mode was entered) marks
+it modified when you toggle back - so |:q| without |:w| still warns, and
+plain |:q| still refuses, exactly as it would in the normal view.
 
 ==============================================================================
-7. Limitations                                           *hexpair-limitations*
+7. Refreshing the dump                                        *hexpair-refresh*
+
+Because the 'modified' flag correctly survives editing the dump without
+writing (|hexpair-writing|), edits can accumulate across several
+|:HexPairToggle| round trips without ever touching disk - and until the
+next |:w|, the offset and ASCII columns of a bare or edited line stay
+exactly as typed, not regenerated.
+
+                                                            *:HexPairRefresh*
+:HexPairRefresh         Regenerate the offset and ASCII columns from the
+                        current hex payload, without writing to disk: the
+                        same round trip a |:HexPairToggle| off followed by
+                        on would perform, but staying in hex mode and
+                        without the intervening write.  The cursor stays on
+                        the same byte.
+
+The dump is validated first, exactly as for |:w| (|hexpair-writing|): an
+invalid dump refuses the refresh with an error, cursor parked on the
+offender, and the dump keeps its previous (unrefreshed) content.
+
+The 'modified' flag is unaffected by a refresh: a buffer that already
+differed from disk still does afterwards, and one that did not still does
+not - only the rendering changes, never a byte of the underlying content.
+
+==============================================================================
+8. Paged large-file mode                                       *hexpair-paged*
+
+Hex mode is always paged (|hexpair-states|); this section is about the
+page machinery itself and about |:HexPairOpen|, the entry point that
+never loads the file at all.
+
+|:HexPairOpen| exists because |:HexPairToggle| needs a buffer, and getting
+one means Vim reading the whole file first - which for a file too large to
+load is exactly what you are trying to avoid.  :HexPairOpen reads only the
+page it shows, so a file of any size opens instantly.
+
+|:w| writes the page back - see |hexpair-paged-write| below.
+
+Only a write that SHORTENS a file, and `:w {file}`, need a Vim newer than
+the plugin's usual baseline: patch 8.2.4906 with a 64-bit Number type
+(+num64, standard on modern builds), for readblob().  It is checked when
+such a write is attempted and refuses just that write.  Everything else -
+viewing pages, navigating them, writes that keep a page's length, and
+writes that lengthen one - runs on Vim 8.0 like the rest of the plugin,
+needing nothing but `xxd`.
+
+Open a file directly in paged mode, without loading it as a normal
+buffer first - straight from the command line: >
+
+    vim -c 'HexPairOpen bigfile.bin'
+<
+or from within Vim:
+
+                                                               *:HexPairOpen*
+:HexPairOpen {file} [page]
+                        Open {file} in paged mode, showing [page] (1-based,
+                        default 1).  Does not read the rest of the file.  An
+                        out-of-range or non-numeric [page] reports an error
+                        and leaves the current buffer completely untouched -
+                        nothing is created.
+
+                                                          *HexPairOpenFile()*
+HexPairOpenFile({file} [, {page}])
+                        Function form of |:HexPairOpen|, for scripts,
+                        mappings or shell wrappers that build the filename
+                        programmatically (e.g. from an environment variable)
+                        instead of typing it on the Ex command line.
+                        Prefer this over constructing a |:HexPairOpen|
+                        command-line string yourself when the name may
+                        contain spaces or a literal "$" - :HexPairOpen's
+                        `-nargs=+` argument parsing does not fully
+                        round-trip fnameescape()'s escaping of such
+                        characters, but a direct function call needs no
+                        escaping at all: >
+                            call HexPairOpenFile($MY_FILE)
+<
+          *:HexPairPageNext* *:HexPairPagePrev*
+     *<Plug>(HexPairPageNext)* *<Plug>(HexPairPagePrev)*
+:HexPairPageNext[!]     Show the next page.
+:HexPairPagePrev[!]     Show the previous page.
+                        Refuse to discard unsaved changes to the current
+                        page without !.
+
+                          *:HexPairPageGoto* *<Plug>(HexPairPageGoto)*
+                                              *<Plug>(HexPairPageGotoForce)*
+:HexPairPageGoto[!] {N} Jump directly to page {N} (1-based).  Refuses to
+                        discard unsaved changes without !, same as above.
+                        <Plug>(HexPairPageGoto) is the mapping equivalent:
+                        it prompts for the number with |input()| instead of
+                        needing a typed {N}.  <Plug>(HexPairPageGotoForce)
+                        is the same prompt but discards unsaved changes
+                        without asking, like the {N} variant with !.
+
+                                                              *:HexPairPages*
+:HexPairPages           Report the current page number, the total page
+                        count, the absolute byte range shown and the byte
+                        the cursor is on, e.g. "page 3 of 21, offsets
+                        2097153-3145728 of total 45678901 bytes
+                        (bigfile.bin); cursor on byte 0x2fefe1
+                        (3141601)".  The first half is what the page
+                        banner shows (below), useful once the banner has
+                        scrolled out of view; the second is a position in
+                        exactly the form |:HexPairGoOffset| and vimhex's
+                        @BYTE take, so where you are can be written down
+                        and gone back to.
+
+                                                        *:HexPairGoOffset*
+:HexPairGoOffset[!] {byte}
+                        Jump straight to a byte, decimal or 0x-prefixed,
+                        turning the page it falls on if needed.  The
+                        position is 1-BASED: byte 1 is the file's first
+                        byte, the same numbering the page banner and
+                        |:HexPairPages| use, so a number read off the
+                        banner can be typed straight back in.  (The dump's
+                        own offset column is `xxd`'s native 0-based
+                        address and is left alone - the same split the
+                        banner already makes.)  Refuses to leave a page
+                        with unwritten changes without !, like the other
+                        navigation commands, and leaves you in whichever
+                        view you were in.
+
+As with |hexpair-usage|, no key mappings are defined by default; e.g.: >
+
+    nmap <Leader>j <Plug>(HexPairPageNext)
+    nmap <Leader>k <Plug>(HexPairPagePrev)
+    nmap <Leader>g <Plug>(HexPairPageGoto)
+<
+Uppercase variants that discard unsaved changes without asking (like the
+! commands) - Next/Prev need no <Plug> target for this, map the bang
+command directly: >
+
+    nnoremap <silent> <Leader>J :HexPairPageNext!<CR>
+    nnoremap <silent> <Leader>K :HexPairPagePrev!<CR>
+    nmap <Leader>G <Plug>(HexPairPageGotoForce)
+<
+Each page is bracketed by a leading and trailing banner line, e.g.: >
+
+    " hexpair: page 3/21  bytes 2097153-3145728 of 45678901  bigfile.bin
+    00200000: 41 42 43 44 45 46 47 48 ...                    ABCDEFGH...
+    ...
+    003fffff: ...
+    " hexpair: end of page 3/21
+<
+The banner's and |:HexPairPages|' byte range is 1-based and inclusive
+(byte 1 is the file's first byte, so the LAST page's range always ends
+exactly at the total) - unlike the hex dump's own offset column (e.g.
+"00200000:" above), which is `xxd`'s native 0-based hex address and is
+left alone.
+
+A banner line - recognized as any line whose FIRST character is a double
+quote - is purely decorative, exactly like the offset and ASCII columns
+in the base mode (|hexpair-usage|): it is skipped entirely by cursor and
+highlighting logic and contributes no bytes, so it can never be confused
+with hex payload even though it contains ordinary decimal digits and
+letters.  It is given a comment-like appearance via the |HexPairPageBanner|
+highlight group (linked to |hl-Comment| by default - `xxd`'s bundled
+syntax file defines no comment group of its own to reuse).
+
+                                                    *HexPairPageBanner*
+HexPairPageBanner       Highlight for the page banner lines.  Links to
+                        Comment by default.
+
+WRITING A PAGE                                        *hexpair-paged-write*
+
+|:w| on a paged buffer writes just that page, by one of two mechanisms:
+
+- The page still has the same LENGTH - you overwrote values, which is
+  the common case.  The page is then patched IN PLACE: the file keeps
+  its length and every byte outside the page keeps its content, without
+  ever being read or written.  The cost is proportional to the page, not
+  to the file, so it is the same on a 4 KiB file and a 400 GiB one.
+
+- The page GREW - you inserted bytes.  Bytes cannot be spliced into the
+  middle of a file, but they do not have to be: everything AFTER the
+  insertion point has to move, and everything before it does not, and is
+  not even read.  So the tail is moved right IN PLACE and the page
+  patched in.  Appending to the last page moves nothing at all.  The
+  temporary space needed is one block's worth of hex - a few tens of MB -
+  whatever the size of the file; the tail is moved from the end backwards,
+  so a byte is never overwritten before it has been copied, and no second
+  copy of it is kept.
+  (When the tail is more than half the file, moving it would cost more
+  than rewriting it, so the case below is used instead.)
+
+- The page SHRANK - you deleted bytes.  Moving the tail left is the same
+  operation, but the file would then still be its old length with stale
+  bytes at the end, and nothing in Vim or `xxd` can shorten a file
+  except by writing it afresh.  So head, edited page and tail are copied
+  through a temporary file, which then replaces the original; that needs
+  temporary space the size of the whole file, and is the only operation
+  that does.  If the copy back fails part way through, the temporary
+  file holds the complete new content and its path is reported instead
+  of being deleted.
+
+Either change of LENGTH - the second case and the third - says by how much
+the file will change, and how much of it has to be written, and asks for
+confirmation first (|g:hexpair_page_confirm| turns the question off).  The
+first case, the same-length patch, does not ask: it writes only the page.
+
+Before any of them, the dump is validated exactly as in |hexpair-writing|,
+and the file's size and modification time are compared with what they
+were when the page was read.  A file that changed on disk meanwhile is
+refused rather than patched at offsets that may no longer mean anything;
+reload it with |:HexPairPageGoto|! and redo the edit.
+
+`:w {file}` means something different from a plain |:w|: not "patch this
+page into its own file" but "save what I am looking at, as a whole, over
+there".  It writes the ENTIRE content being paged, with this page's edits
+in it, to {file}; the original is left exactly as it was.  For a view
+paged from piped input this is the only way to save at all, and the view
+adopts {file} afterwards, so a later plain |:w| patches pages into it -
+the same way Vim's own `:w {file}` gives an unnamed buffer a name.
+
+Because it copies the whole file, `:w {file}` needs readblob() -
+|hexpair-paged|'s Vim requirement - and Vim's own refusal to overwrite an
+existing file without a ! applies as usual.
+
+After a successful write the page is re-read from disk and the cursor
+returns to the byte it was on, even when a splice moved every byte
+behind it.  A shrinking write that empties the file entirely leaves a
+view saying so, since there is then no page to show.
+
+                                                     *g:hexpair_page_size*
+g:hexpair_page_size     Bytes per page.  Default: 128 KiB (128 * 1024).
+                        Must be a positive multiple of
+                        |g:hexpair_bytes_per_line|; set it small (e.g. 512)
+                        to work with small test files.  Changing it takes
+                        effect on the next |:HexPairOpen| - an already-open
+                        page keeps the size it was opened with. >
+                            let g:hexpair_page_size = 4 * 1024 * 1024
+<
+                        A page is an ordinary Vim buffer, so everything
+                        costs what that many lines cost: 128 KiB is 8192
+                        lines, which loads in hundredths of a second and
+                        writes in about a third of one, while 4 MiB takes
+                        about ten seconds to write.  Since
+                        |:HexPairPageGoto| reaches any page directly, a
+                        larger page buys nothing but that wait.
+
+                                                  *g:hexpair_page_confirm*
+g:hexpair_page_confirm  Whether a write that changed the page's length
+                        says what it will cost and asks first.  What it
+                        costs differs: inserting bytes moves only what
+                        follows them, deleting them rewrites the file
+                        (see |hexpair-paged-write|).  A write that kept
+                        the length patches just the page and never asks.
+                        Default: 1.  Set to 0 to answer yes
+                        automatically, e.g. in a script: >
+                            let g:hexpair_page_confirm = 0
+<
+                                                            *hexpair-vimhex*
+A shell wrapper for opening a file - or piped input - straight in the hex
+view ships with the plugin as hexpair.bashrc, next to this help file.
+Source it from ~/.bashrc: >
+
+    source ~/.vim/pack/plugins/start/hexpair/hexpair.bashrc
+<
+and it defines: >
+
+    vimhex FILE          the first page
+    vimhex FILE PAGE     that page, 1-based
+    vimhex FILE @BYTE    the page holding that byte, cursor on it;
+                         decimal or 0x-prefixed, and 1-based, so a
+                         position |:HexPairPages| reported can be typed
+                         straight back in
+    vimhex - [...]       read from standard input instead of a file
+
+    vimhex bigfile.bin
+    vimhex bigfile.bin 3
+    vimhex bigfile.bin @0x4a2000
+    cat bigfile.bin | vimhex -
+    dd if=/dev/sda bs=1M count=64 | vimhex - @1024
+<
+Set $VIMHEX_VIM to use a particular Vim.
+
+Three things in it are not incidental, and are commented in the file
+itself so they survive being copied out of it:
+
+- HexPairOpenFile(), not `-c 'HexPairOpen ...'`, for the reason given at
+  |HexPairOpenFile()| above: a name with a space or a literal '$' does
+  not survive the Ex command's own argument parsing, but the environment
+  and a function call need no escaping at all.
+- Everything runs from a |VimEnter| autocommand, because that is the only
+  point that is after the content has arrived in BOTH cases: a plain -c
+  runs after a named file has been read, but BEFORE standard input has.
+- `-b` for the piped case.  Without it Vim may transcode the input on
+  the way in, and unlike a named file there is nothing to re-read with
+  ++bin afterwards (|hexpair-page-source|).  Save piped input with
+  `:w {file}`; a plain |:w| has no file to write back to.
+
+==============================================================================
+9. Limitations                                           *hexpair-limitations*
 
 - The column arithmetic assumes the dump format produced by
   `xxd -g 1 -c N` (one-byte groups).  Do not re-filter the buffer with a

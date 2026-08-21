@@ -1,9 +1,10 @@
 name: Build
 
 # Runs on every push (all branches) and on every pull request.
-# Purpose: run the regression suite and prove that the release
-# packaging is reproducible across platforms (identical SHA-256 from
-# the POSIX and the Windows packaging scripts).
+# Purpose: run the regression suite on both platforms the plugin claims
+# to support, and prove that the release packaging is reproducible
+# across them (identical SHA-256 from the POSIX and the Windows
+# packaging scripts).
 # Releases are NOT published here — artifacts are signed locally and
 # uploaded to GitHub Releases by hand (see CONTRIBUTING.md).
 on:
@@ -24,6 +25,7 @@ concurrency:
 jobs:
   test-and-pack-linux:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - name: Install Vim
@@ -41,10 +43,61 @@ jobs:
             dist/*.tar
             linux.sha256
 
-  pack-windows:
+  test-and-pack-windows:
     runs-on: windows-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      # Windows is the platform the plugin's portability rules exist for -
+      # xxd.exe from $VIMRUNTIME instead of a POSIX toolchain - so it is
+      # the one where running the suite is worth the install time.
+      #
+      # The Vim project's own Windows zip, pinned to a version and checked
+      # against its SHA-256, rather than a package manager: it extracts to
+      # a path this step can compute, carries the xxd.exe the suite calls
+      # beside vim.exe, and cannot change under us. Bump VIM_VERSION and
+      # VIM_SHA256 together, in their own commit.
+      - name: Install Vim
+        shell: pwsh
+        env:
+          VIM_VERSION: 9.2.0992
+          VIM_SHA256: a41e9fc94a50649bae88a43c54902a3e61c560c649e16ab821ce9fb9cf365c7b
+        run: |
+          $ProgressPreference = 'SilentlyContinue'
+          $url = "https://github.com/vim/vim-win32-installer/releases/download/v$env:VIM_VERSION/gvim_${env:VIM_VERSION}_x64.zip"
+          $zip = Join-Path $env:RUNNER_TEMP 'vim.zip'
+          Invoke-WebRequest -Uri $url -OutFile $zip
+          $got = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
+          if ($got -ne $env:VIM_SHA256) { throw "$url has sha256 $got, expected $env:VIM_SHA256" }
+          tar -xf $zip -C $env:RUNNER_TEMP
+          $short = 'vim' + ($env:VIM_VERSION -replace '^(\d+)\.(\d+).*', '$1$2')
+          $dir = Join-Path $env:RUNNER_TEMP (Join-Path 'vim' $short)
+          foreach ($exe in 'vim.exe', 'xxd.exe') {
+            if (-not (Test-Path (Join-Path $dir $exe))) { throw "$exe is not in $dir" }
+          }
+          Write-Host "Vim and xxd: $dir"
+          # Name them for the suite instead of relying on PATH order: a
+          # Git Bash step puts Git's own MSYS Vim first no matter what is
+          # prepended here, and that one understands POSIX paths - it would
+          # pass the suite while proving nothing about native Windows.
+          $fwd = $dir -replace '\\', '/'
+          Add-Content -Path $env:GITHUB_ENV -Value "HEXPAIR_VIM=$fwd/vim.exe"
+          Add-Content -Path $env:GITHUB_ENV -Value "HEXPAIR_XXD=$fwd/xxd.exe"
+      # Git Bash, so the one suite runs on both platforms; it converts its
+      # own paths to the drive-letter form that a native Vim understands.
+      # The MS-Windows check is the point of the job: an MSYS Vim would
+      # pass every test and mean nothing, so fail loudly rather than
+      # quietly test the wrong binary.
+      - name: Run the regression suite
+        shell: bash
+        timeout-minutes: 15
+        run: |
+          "$HEXPAIR_VIM" --version | head -2
+          "$HEXPAIR_VIM" --version | grep -q 'MS-Windows' || {
+            echo "$HEXPAIR_VIM is not a native Windows Vim - refusing to pretend this tested Windows" >&2
+            exit 1
+          }
+          test/run-tests.sh
       - name: Package the release tarball
         shell: cmd
         run: pack-release.cmd
@@ -59,7 +112,7 @@ jobs:
             windows.sha256
 
   reproducibility-check:
-    needs: [test-and-pack-linux, pack-windows]
+    needs: [test-and-pack-linux, test-and-pack-windows]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
