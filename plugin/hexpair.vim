@@ -1063,11 +1063,14 @@ function! s:HasOffsetOption() abort
   let probe = tempname()
   let out   = tempname()
   try
-    call writefile(0z00, probe, 'b')
+    " One byte, written without a Blob literal: Blobs are Vim 8.1.0735,
+    " and everything this probe serves - the same-length patch write -
+    " otherwise runs on the 8.0 baseline the rest of the plugin does.
+    call writefile(['A'], probe, 'b')
     call s:Run(printf('%s -g 1 -c 16 -o 16 %s %s',
           \ s:xxd, shellescape(probe), shellescape(out)))
     let lines = readfile(out)
-    let s:has_o = !empty(lines) && lines[0] =~# '^00000010:'
+    let s:has_o = !empty(lines) && lines[0] =~# '^00000010: 41'
   catch
     let s:has_o = 0
   finally
@@ -1197,7 +1200,7 @@ endfunction
 " cannot truncate a file except by writing it.
 function! s:CopyRange(src, off, len, dst, truncate) abort
   if a:truncate && a:len == 0
-    call writefile(0z, a:dst, 'b')
+    call writefile([], a:dst, 'b')
     return
   endif
   let done = 0

@@ -618,7 +618,7 @@ HexPairOpen $WORK/paged21.bin 3
 redir => msg
 silent HexPairPages
 redir END
-call writefile([trim(msg)], '$WORK/t24.out')
+call writefile([substitute(msg, '^\_s*\|\_s*\$', '', 'g')], '$WORK/t24.out')
 qa!
 EOF
 "$HEXPAIR_VIM" -es -u NONE -S "$WORK/t24.vim"
