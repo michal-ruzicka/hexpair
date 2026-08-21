@@ -166,6 +166,15 @@ line endings, encodings) — `printf` in dash does not expand `\x`
 escapes, which has silently neutered tests before; always generate
 binary fixtures with python.
 
+The suite runs on Windows in CI too, under Git Bash against a
+Chocolatey-installed Vim, so it must stay POSIX-sh and portable: no
+GNU-only tools, `$PY` rather than a hardcoded `python3` (Windows names it
+`python`, and a `python3` that only opens the Microsoft Store is a common
+decoy), and every path written into a generated `.vim` script must go
+through the `cygpath -m` conversion at the top - Git Bash rewrites paths
+in the arguments it hands a native program, but not inside a file that
+Vim opens itself.
+
 Every change ships with a test. When a field bug is diagnosed (the
 project history includes several: forced `noeol` hiding the final
 newline, layout desync on `g:hexpair_bytes_per_line` change, stale
