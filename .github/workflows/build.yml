@@ -25,6 +25,7 @@ concurrency:
 jobs:
   test-and-pack-linux:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - name: Install Vim
@@ -44,32 +45,48 @@ jobs:
 
   test-and-pack-windows:
     runs-on: windows-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       # Windows is the platform the plugin's portability rules exist for -
       # xxd.exe from $VIMRUNTIME instead of a POSIX toolchain - so it is
       # the one where running the suite is worth the install time.
+      #
+      # The Vim project's own Windows zip, pinned to a version and checked
+      # against its SHA-256, rather than a package manager: it extracts to
+      # a path this step can compute, carries the xxd.exe the suite calls
+      # beside vim.exe, and cannot change under us. Bump VIM_VERSION and
+      # VIM_SHA256 together, in their own commit.
       - name: Install Vim
-        run: choco install vim --no-progress -y
-      # The suite calls xxd directly, and Chocolatey's shims cover Vim's
-      # own binaries rather than the whole install directory. Find the
-      # pair instead of hardcoding a version-numbered path, and fail
-      # loudly if the layout is not what is expected.
-      - name: Put Vim and its xxd on PATH
         shell: pwsh
+        env:
+          VIM_VERSION: 9.2.0992
+          VIM_SHA256: a41e9fc94a50649bae88a43c54902a3e61c560c649e16ab821ce9fb9cf365c7b
         run: |
-          $roots = @('C:\Program Files\Vim', 'C:\Program Files (x86)\Vim', 'C:\tools\vim')
-          $vim = Get-ChildItem -Path $roots -Filter vim.exe -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
-          if (-not $vim) { throw 'vim.exe not found after "choco install vim"' }
-          $dir = Split-Path $vim.FullName
-          if (-not (Test-Path (Join-Path $dir 'xxd.exe'))) { throw "no xxd.exe beside $($vim.FullName)" }
+          $ProgressPreference = 'SilentlyContinue'
+          $url = "https://github.com/vim/vim-win32-installer/releases/download/v$env:VIM_VERSION/gvim_${env:VIM_VERSION}_x64.zip"
+          $zip = Join-Path $env:RUNNER_TEMP 'vim.zip'
+          Invoke-WebRequest -Uri $url -OutFile $zip
+          $got = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
+          if ($got -ne $env:VIM_SHA256) { throw "$url has sha256 $got, expected $env:VIM_SHA256" }
+          tar -xf $zip -C $env:RUNNER_TEMP
+          $short = 'vim' + ($env:VIM_VERSION -replace '^(\d+)\.(\d+).*', '$1$2')
+          $dir = Join-Path $env:RUNNER_TEMP (Join-Path 'vim' $short)
+          foreach ($exe in 'vim.exe', 'xxd.exe') {
+            if (-not (Test-Path (Join-Path $dir $exe))) { throw "$exe is not in $dir" }
+          }
           Write-Host "Vim and xxd: $dir"
           Add-Content -Path $env:GITHUB_PATH -Value $dir
       # Git Bash, so the one suite runs on both platforms; it converts its
       # own paths to the drive-letter form that a native Vim understands.
+      # Report which vim answered: Git for Windows puts an MSYS one on
+      # PATH, and testing that instead would prove nothing about native
+      # Windows. GITHUB_PATH prepends, so the one installed above wins.
       - name: Run the regression suite
         shell: bash
+        timeout-minutes: 15
         run: |
+          command -v vim xxd
           vim --version | head -1
           test/run-tests.sh
       - name: Package the release tarball

@@ -102,10 +102,16 @@ claim.
 
 The GitHub Actions workflow (`.github/workflows/build.yml`) runs on
 every push and pull request. It executes the test suite on Linux and on
-Windows — the same `test/run-tests.sh`, under Git Bash against a
-Chocolatey-installed Vim, because Windows is the platform the
+Windows — the same `test/run-tests.sh`, under Git Bash against the Vim
+project's own Windows build, because Windows is the platform the
 portability rules exist for — then both packaging scripts, and compares
-the resulting hashes. Releases are
+the resulting hashes.
+
+That Vim is pinned by version *and* SHA-256 (`VIM_VERSION` /
+`VIM_SHA256` in the workflow), downloaded from the
+`vim/vim-win32-installer` releases rather than installed by a package
+manager: the same discipline the rest of the project's dependencies get.
+Bump the two together, in their own commit. Releases are
 **not** published from CI — artifacts are signed locally and uploaded
 to GitHub Releases by hand (see *Release Process* below).
 
