@@ -15,6 +15,16 @@ identically on Linux, native Windows (Vim/gVim with `xxd.exe` from
 `$VIMRUNTIME`) and WSL. This is the main differentiator against
 alternatives such as rootkiter/vim-hexedit.
 
+**The name is `hexpair`, and stays.** It was weighed against `vimhex`
+and kept: `vimhex` is one letter from `ImHex` in speech and in a search
+box, it is already the name of the shell function in `hexpair.bashrc`
+(so `:help vimhex` and `$ vimhex` would be two subjects with one name),
+and it names the category every alternative belongs to rather than the
+one thing this plugin does that they do not — pairing hex and text, in
+both columns of a dump line and between the two views of a page. The
+namespace is free either way; that was checked, and is not the point.
+Renaming would touch ~1200 occurrences and 30 public names.
+
 ## Repo layout
 
 ```
@@ -172,27 +182,58 @@ must be said, not inferred from `PATH`**: a Git Bash step puts Git's own
 MSYS Vim first whatever is prepended, and that one understands POSIX
 paths, so it passes every test while proving nothing about native
 Windows - `$HEXPAIR_VIM` and `$HEXPAIR_XXD` name the binaries, and the
-job refuses a Vim whose `--version` does not say `MS-Windows`. The suite
-must also stay POSIX-sh and portable: no
-GNU-only tools, `$PY` rather than a hardcoded `python3` (Windows names it
-`python`, and a `python3` that only opens the Microsoft Store is a common
-decoy), and every path written into a generated `.vim` script must go
-through the `cygpath -m` conversion at the top - Git Bash rewrites paths
-in the arguments it hands a native program, but not inside a file that
-Vim opens itself.
+job refuses a Vim whose `--version` does not say `MS-Windows`. Three more
+constraints follow from running there, each of which a change made only
+on Linux could break without any local run noticing:
 
-Every change ships with a test. When a field bug is diagnosed (the
-project history includes several: forced `noeol` hiding the final
-newline, layout desync on `g:hexpair_bytes_per_line` change, stale
-`FileOffsetNonBinary` predictions on mixed CRLF/LF, a 0-byte file
-growing to one byte because `%!` serializes an empty buffer as a
-newline, toggle-off
-mirroring only the pre-hex-mode `'modified'` state and silently
-discarding an edit made purely in hex mode, `:HexPairOpen` renaming a
-scratch buffer to a real-looking path before validating the requested
-page, the page banner's 0-based-inclusive byte range reading as
-truncated on the last page), first reproduce it as a failing test,
-then fix.
+- **Stay POSIX-sh and portable**: no GNU-only tools, `$PY` rather than a
+  hardcoded `python3` (Windows names it `python`, and a `python3` that
+  only opens the Microsoft Store is a common decoy, so the candidate has
+  to run before it is believed).
+- **Every path written into a generated `.vim` script** goes through the
+  `cygpath -m` conversion at the top: Git Bash rewrites paths in the
+  arguments it hands a native program, but not inside a file that Vim
+  opens itself. The suite then has Vim re-spell both roots with
+  `fnamemodify(':p')` — the same call the plugin stores paths with, so
+  the two agree by construction. Without it, MSYS maps `/tmp` to
+  `%TEMP%`, which can be the 8.3 form, and every banner assertion fails
+  on `C:/Users/RUNNER~1/...` versus `C:/Users/runneradmin/...`, two
+  names for one directory.
+- **`tempname()`'s directory is not private on Windows.** On Unix it is
+  a per-session directory, empty until Vim puts something there; on
+  Windows the names land straight in the shared `%TEMP%`. A test about
+  temp hygiene must measure what a write *added*, never what the
+  directory holds.
+
+The general rule behind two of those, and worth applying to the next
+one: **assert against the value the code will actually use, not one the
+harness constructed to look like it.**
+
+Every change ships with a test. When a field bug is diagnosed, first
+reproduce it as a failing test, then fix. **None of the bugs below may
+come back**; each names the test that would catch it.
+
+| Bug | Guard |
+|---|---|
+| Forced `'noeol'` hid the file's final newline | "final newline in dump" |
+| Layout desynced when `g:hexpair_bytes_per_line` changed mid-session | "n=23 dump position" / "n=23 cursor byte" |
+| Stale `FileOffsetNonBinary` predictions on mixed CRLF/LF | the non-binary reload position tests |
+| A 0-byte file grew to one byte: `%!` serializes an empty buffer as a newline | "an empty file stays empty" + the lone-`0a` counter-case |
+| Toggle-off mirrored only the pre-hex-mode `'modified'` state, so `:q` discarded an edit made purely in hex mode | "an edit in the hex view survives into the text view, still modified" |
+| `:HexPairOpen` renamed a scratch buffer to a real-looking path before validating the page | "out-of-range page number leaves the buffer untouched" |
+| The banner's 0-based-inclusive range read as truncated on the last page | the banner assertions |
+| `'compatible'` drops backslash continuations in a plugin file | the gate-message test asserts a continuation-built string in full |
+| Undo reached across a page boundary | "undo stops at the page boundary" |
+| …and would have survived a buffer-local `'undolevels'` | "a buffer-local 'undolevels' is restored, history still cleared" |
+| Paged `hexstart` was one column short: the highlight covered a space, the cursor sat beside the byte | "hexstart is the first hex digit" — read off a real page line, not restated as a constant |
+| A duplicate `*:HexPairRefresh*` tag aborted `:helptags`, leaving the plugin with no `:help` at all | "helptags accepts the help file" |
+| A page read that silently produced nothing would be patched into the file | "a full page is two banner lines plus its dump lines" |
+| `:w {other}` patched the page into the view's own file | "':w other' leaves the buffer and its own file alone" |
+| `<amatch>` is absolute, `bufname()` relative — comparing them as strings refuses every write | same test |
+| A splice failing while *building* the temp left it behind | "a successful splice leaves no temp files behind" |
+| Opening a page could abandon a modified buffer | "opening a page refuses to abandon a modified buffer" |
+| A plain `:w` took the save-as path on Windows, where one file has more than one spelling. Save-as truncates its target before reading the source, so this would have destroyed a multi-page file | "on Windows, separators and case are not" + "writing to the same file spelled longhand patches the page" |
+| Growing a page in place needed three times the tail in temporary space — it copied the whole tail aside before moving it | "an insert grows the file, in place, and leaves no temp behind" + the cost table in `README.md` |
 
 **Gotcha for any new `plugin/*.vim` file**: `vim -es -u NONE` (this
 suite's harness, with no vimrc) starts in `'compatible'` mode, whose
@@ -784,8 +825,10 @@ naming the two ways out: write the buffer, or `:HexPairOpen` the file.
 
 ### Explicit non-goals (for now)
 
-- No attempt at insert/delete without a full-file rewrite (filesystems
-  cannot splice in place).
+- No way to make a file SHORTER without rewriting it. Inserting bytes
+  moves only the tail, in place; deleting them cannot, because nothing
+  in Vim or `xxd` can truncate. (This line used to say the same about
+  inserts, and stopped being true.)
 - No memory-mapped or streaming views; one page = one buffer.
 - utf-16 position mapping stays approximate for the whole-buffer byte
   offset math the base plugin already does; a page boundary splitting
@@ -796,3 +839,18 @@ naming the two ways out: write the buffer, or `:HexPairOpen` the file.
   state once a buffer has engaged hex mode at all — close and reopen
   Vim for that (the maintainer's explicit call, to avoid maintaining a
   second, rarely-exercised code path just for reverting).
+
+### Accepted risks — decided, not overlooked
+
+- **Staleness detection is size plus mtime**, all a portable Vim can
+  see. A change made within the same second as the page was read *and*
+  of exactly the same size slips through. Documented in the help.
+- **A length-changing write is not atomic.** The temp is copied back
+  over the original rather than renamed onto it, so the target keeps
+  its inode, owner and permissions — and because the temp usually lives
+  on another filesystem, notably for `/mnt/c/...` under WSL. If that
+  copy is interrupted the file is incomplete, and the temp, kept in
+  exactly that case, is the recovery copy whose path is reported.
+- **The cursor across a `++bin` reload** is exact for single-byte
+  encodings and for any encoding where 0x0a separates lines; binary
+  data opened *without* `-b` still maps approximately.

@@ -1619,13 +1619,16 @@ IP1_TAIL=$(hash_range "$WORK/ip1.bin" 2560 -1)
 cat > "$WORK/tip1.vim" <<EOF
 $(printf "$PAGEDW")
 HexPairOpen $WORK/ip1.bin 5
+let dir = fnamemodify(tempname(), ':h')
+let before = len(glob(dir . '/*', 0, 1))
 call append(1, 'aa bb cc')
 write
-call writefile([string([&l:modified, b:hexpair_page_total]), getline(2)], '$WORK/tip1.out')
+call writefile([string([&l:modified, b:hexpair_page_total, len(glob(dir . '/*', 0, 1)) - before]), getline(2)], '$WORK/tip1.out')
 qa!
 EOF
 "$HEXPAIR_VIM" -es -u NONE -S "$WORK/tip1.vim" < /dev/null
-check "an insert grows the file, in place" "[0, 5003]" "$(sed -n 1p "$WORK/tip1.out")"
+check "an insert grows the file, in place, and leaves no temp behind" \
+    "[0, 5003, 0]" "$(sed -n 1p "$WORK/tip1.out")"
 check "the inserted bytes open the page" \
     "00000800: aa bb cc 00 01 02 03 04 05 06 07 08 09 0a 0b 0c  ................" \
     "$(sed -n 2p "$WORK/tip1.out")"
