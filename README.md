@@ -222,7 +222,7 @@ page. Close and reopen the file for the ordinary view.
 | `:HexPairToggle` | Move between the hex page view and the windowed text view |
 | `:HexPairGoHex` / `:HexPairGoAscii` / `:HexPairSwap` | Move the cursor between the HEX and ASCII columns, staying on the same byte |
 | `:HexPairRefresh` | Regenerate the offset and ASCII columns from the current hex payload, without writing |
-| `:HexPairOpen[!] {file} [page]` | Open `{file}` paged, without loading it |
+| `:HexPairOpen {file} [page]` | Open `{file}` paged, without loading it |
 | `:HexPairPageNext[!]` / `:HexPairPagePrev[!]` / `:HexPairPageGoto[!] {n}` | Turn pages (`!` discards unwritten changes) |
 | `:HexPairGoOffset[!] {byte}` | Jump to a byte, decimal or `0x`-prefixed, turning the page if needed; 1-based, like the banner |
 | `:HexPairPages` | Report page X of Y, the offsets covered, the file size and the byte under the cursor |
@@ -302,7 +302,7 @@ is ever read.
 
 | Command | Description |
 |---|---|
-| `:HexPairOpen[!] {file} [page]` | Open `{file}` paged at `[page]` (1-based, default 1) without loading it |
+| `:HexPairOpen {file} [page]` | Open `{file}` paged at `[page]` (1-based, default 1) without loading it |
 | `:HexPairPageNext[!]` / `:HexPairPagePrev[!]` | Turn the page; refuses to discard unwritten changes without `!` |
 | `:HexPairPageGoto[!] {N}` | Jump to page `{N}` |
 | `:HexPairGoOffset[!] {byte}` | Jump to a byte, decimal or `0x`-prefixed; 1-based, like the banner |
@@ -369,8 +369,14 @@ exist to avoid — they read only the page they show.
 
 ## Requirements
 
-- Vim 8+ (native packages; the plugin itself uses lambda expressions,
-  so Vim 8.0+ is required even for manual installation).
+- Vim 8.0 with patch 8.0.0794 (`count()` over a string), which every
+  Vim 8.0 point release since 2017 has. Native packages need Vim 8
+  anyway; a manual installation needs the patch level. Shortening a
+  file, `:w {file}`, and inserting bytes with more than half the file
+  after them additionally need patch 8.2.4906 and `+num64`, checked at
+  the moment such a write is attempted - see
+  [above](#pages). The baseline is tested: the suite runs against a
+  Vim 8.0.0000 build, where everything but those three works.
 - The `xxd` utility, which ships with Vim. It is looked up on `PATH`
   first and then in the Vim runtime directory (`$VIMRUNTIME`), so on
   Windows the bundled `xxd.exe` is found even when it is not on `PATH`.

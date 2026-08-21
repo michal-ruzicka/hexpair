@@ -153,6 +153,8 @@ for name in ('paged21.bin', 'paged22.bin', 'paged23.bin', 'paged31.bin', 'paged3
 for name in ('scan1.bin', 'scan2.bin'):
     with open(os.path.join(w, name), 'wb') as f:
         f.write(bytes((i * 7) % 256 for i in range(100000)))
+# cursor-byte fixture
+open(os.path.join(w, 'cbo1.bin'), 'wb').write(bytes(i % 256 for i in range(5000)))
 # trace fixture
 open(os.path.join(w, 'dbg1.bin'), 'wb').write(bytes(i % 256 for i in range(5000)))
 # and a 32-byte one, for the lines a scan must not be thrown by
@@ -1911,9 +1913,39 @@ qa!
 EOF
 "$HEXPAIR_VIM" -es -u NONE -S "$WORK/tdbg.vim" < /dev/null
 check "the trace says both directions of the mapping" \
-    "[1, 'hexpair: byte 599 -> hex view line 7, column 32', 'hexpair: hex view line 7, column 32 -> byte 599 (page base 512, 80 bytes above the line)']" \
+    "[1, 'hexpair: byte 599 -> hex view line 7, column 32', 'hexpair: hex view line 7, column 32 -> byte 599 (page base 512, unedited page)']" \
     "$(sed -n 1p "$WORK/tdbg.out")"
 check "and nothing at all when it is off" "[]" "$(sed -n 2p "$WORK/tdbg.out")"
+
+# --- Both ways of counting the cursor's byte agree ------------------------
+# An unedited page is canonical, so where the cursor's byte is follows from
+# the layout and the page is not walked at all. The moment it is edited it
+# has to be counted from what is actually on the lines. Same buffer, both
+# paths - the difference is 'modified' alone, so they must answer the same.
+cat > "$WORK/tcbo.vim" <<EOF
+$(printf "$HEX")
+HexPairOpen $WORK/cbo1.bin 3
+let fast = []
+let slow = []
+for pos in [[2, 11], [2, 12], [2, 14], [5, 30], [5, 58], [5, 61], [5, 63], [33, 11]]
+  call cursor(pos[0], pos[1])
+  setlocal nomodified
+  call add(fast, HexPairPagedByteOffset())
+  setlocal modified
+  call add(slow, HexPairPagedByteOffset())
+endfor
+setlocal nomodified
+call writefile([string(fast), string(slow)], '$WORK/tcbo.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tcbo.vim" < /dev/null
+check "the canonical byte and the counted byte are the same byte" \
+    "$(sed -n 1p "$WORK/tcbo.out")" "$(sed -n 2p "$WORK/tcbo.out")"
+# The gap between the columns (5, 58) is the odd one out: the cursor is
+# past the line's last hex digit, so both paths report the byte AFTER the
+# line's - the same answer either way, which is what this is here to pin.
+check "and it is the byte the layout says" \
+    "[1024, 1024, 1025, 1078, 1088, 1073, 1075, 1520]" "$(sed -n 1p "$WORK/tcbo.out")"
 
 # ---------------------------------------------------------------------------
 if [ "$FAIL" -eq 0 ]; then

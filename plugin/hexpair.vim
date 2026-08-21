@@ -1040,6 +1040,25 @@ function! s:PagedByteOffset() abort
   if s:IsBannerLine(getline('.'))
     return b:hexpair_page_base
   endif
+  " On a page nobody has edited, what is above the cursor's line needs no
+  " counting: the page is exactly what xxd produced, so dump line k holds
+  " bytes k * n .. and the walk can be skipped entirely. That is what
+  " keeps a write and |:HexPairPages| off a second pass over the page -
+  " the cursor byte is reported after every write, and on the default
+  " page size counting it costs as much as the write itself.
+  "
+  " The WITHIN-line part goes through the same s:PagedCursorLineIndex()
+  " either way, so the two paths cannot drift apart in how they read a
+  " line - only in how they count the lines above it, which is arithmetic
+  " exactly while the page is canonical.
+  if !&l:modified
+    let off = b:hexpair_page_base
+          \ + (line('.') - 2) * b:hexpair_n + s:PagedCursorLineIndex()
+    call s:Debug('hex view line %d, column %d -> byte %d '
+          \ . '(page base %d, unedited page)',
+          \ line('.'), col('.'), off, b:hexpair_page_base)
+    return off
+  endif
   let scan = s:PagedScan(line('.'))
   let off = b:hexpair_page_base + scan.bytes + s:PagedCursorLineIndex()
   call s:Debug('hex view line %d, column %d -> byte %d (page base %d, '

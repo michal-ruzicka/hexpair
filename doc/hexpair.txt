@@ -631,19 +631,25 @@ itself so they survive being copied out of it:
 - The column arithmetic assumes the dump format produced by
   `xxd -g 1 -c N` (one-byte groups).  Do not re-filter the buffer with a
   different xxd invocation while hex mode is active.
-- Undo history crosses the conversion boundary: an |u| in hex mode can undo
-  the conversion itself.  Toggle back with |:HexPairToggle| instead; if it
-  happens, use |:redo| to return to the dump.  The dump validation limits
-  the damage: content that no longer looks like valid hex is refused by
-  both |:w| and toggle-off instead of being converted.
-- The plugin operates on the whole buffer; very large files may be slow to
-  convert.
-- Cursor mapping from the dump to the normal view is byte-exact for any
-  byte the cursor can rest on in a text buffer.  A 0a byte acting as the
-  line separator is the exception: the cursor cannot rest on it, so it
-  clamps to the last byte of the line and a subsequent toggle lands there
-  instead.  If the buffer was reloaded with ++bin and the file needed
-  fileencoding transcoding, the position carried over the reload is a
-  best-effort line/column match.
+- Undo does not cross a page boundary or a change of view, and is not
+  meant to: turning a page, toggling between the hex and the text view and
+  |:HexPairRefresh| each replace the whole buffer with |clear-undo| in
+  effect, so |u| afterwards does nothing rather than putting bytes of a
+  different page - or of the other rendering - into a buffer that claims
+  to be this one, which a |:w| would then patch into the file at this
+  page's offset.  Undo of edits made within one view of one page works
+  normally.  What protects an edit you have not written yet is the refusal
+  to turn a page or open another one while the buffer is |'modified'|,
+  which is what the |:HexPairPageNext!| bang overrides.
+- Cursor mapping is byte-exact for any byte the cursor can rest on.  A 0a
+  byte acting as a line separator in the text view is the exception: the
+  cursor cannot rest on it, so it clamps to the last byte of the line and
+  a subsequent toggle lands there instead.  If the buffer was reloaded
+  with ++bin and the file needed fileencoding transcoding, the position
+  carried over the reload is a best-effort line/column match.
+- A page is an ordinary Vim buffer, so it costs what that many lines cost,
+  and a write costs a pass over them: about a fifth of a second for the
+  default 128 KiB page, in proportion for a larger one
+  (|hexpair-paged-size|).  The size of the FILE never enters into it.
 
 vim:tw=78:ts=8:ft=help:norl:
