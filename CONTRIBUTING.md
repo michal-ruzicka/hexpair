@@ -111,7 +111,16 @@ That Vim is pinned by version *and* SHA-256 (`VIM_VERSION` /
 `VIM_SHA256` in the workflow), downloaded from the
 `vim/vim-win32-installer` releases rather than installed by a package
 manager: the same discipline the rest of the project's dependencies get.
-Bump the two together, in their own commit. Releases are
+Bump the two together, in their own commit.
+
+The suite runs whatever `$HEXPAIR_VIM` and `$HEXPAIR_XXD` name, falling
+back to `vim` and `xxd` on `PATH` — which is how the Windows job pins the
+binaries under test, and how you can point the suite at one particular
+Vim locally. On Windows it must be a native build: an MSYS one (Git for
+Windows ships one, first on `PATH` in any Git Bash step) understands
+POSIX paths and would pass the suite without testing anything the
+portability rules are about, so the job checks for `MS-Windows` in
+`--version` and fails if it is missing. Releases are
 **not** published from CI — artifacts are signed locally and uploaded
 to GitHub Releases by hand (see *Release Process* below).
 

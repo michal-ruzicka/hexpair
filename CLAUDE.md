@@ -167,8 +167,13 @@ escapes, which has silently neutered tests before; always generate
 binary fixtures with python.
 
 The suite runs on Windows in CI too, under Git Bash against a pinned,
-SHA-256-checked Vim from `vim/vim-win32-installer`, so it must stay
-POSIX-sh and portable: no
+SHA-256-checked Vim from `vim/vim-win32-installer`. **Which Vim that is
+must be said, not inferred from `PATH`**: a Git Bash step puts Git's own
+MSYS Vim first whatever is prepended, and that one understands POSIX
+paths, so it passes every test while proving nothing about native
+Windows - `$HEXPAIR_VIM` and `$HEXPAIR_XXD` name the binaries, and the
+job refuses a Vim whose `--version` does not say `MS-Windows`. The suite
+must also stay POSIX-sh and portable: no
 GNU-only tools, `$PY` rather than a hardcoded `python3` (Windows names it
 `python`, and a `python3` that only opens the Microsoft Store is a common
 decoy), and every path written into a generated `.vim` script must go

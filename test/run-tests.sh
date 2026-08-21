@@ -2,7 +2,7 @@
 # ===========================================================================
 # Headless regression suite for the hexpair Vim plugin.
 #
-# Runs Vim in silent Ex mode (vim -es -u NONE) against generated binary
+# Runs Vim in silent Ex mode ("$HEXPAIR_VIM" -es -u NONE) against generated binary
 # fixtures and asserts byte-exact behaviour. Requires: vim (with xxd),
 # python3 (fixture generation only — dash's printf does not expand \x
 # escapes, so binary fixtures must not be generated with printf).
@@ -32,6 +32,15 @@ if [ -z "$PY" ]; then
     exit 1
 fi
 
+# The Vim and the xxd under test. Overridable because PATH order is not a
+# reliable way to say which one that is: in a Git Bash step on Windows,
+# Git's own MSYS Vim comes first whatever else was added, and testing that
+# one proves nothing about native Windows - it understands POSIX paths,
+# which is exactly what this suite exists not to rely on. Not named VIM:
+# that variable tells Vim where its runtime lives.
+HEXPAIR_VIM=${HEXPAIR_VIM:-vim}
+HEXPAIR_XXD=${HEXPAIR_XXD:-xxd}
+
 ROOT=$(cd .. && pwd)
 PLUGIN=../plugin/hexpair.vim
 WORK=$(mktemp -d)
@@ -49,6 +58,14 @@ if command -v cygpath >/dev/null 2>&1; then
 fi
 
 FAIL=0
+
+# Same, for an expected string carrying a path: Windows spells the
+# separator the other way round - fnamemodify(':p') returns backslashes
+# there - which says nothing about whether the plugin found the right
+# file. Fold both spellings; everything else stays exact.
+check_path() { # name expected actual
+    check "$1" "$(printf '%s' "$2" | tr '\\' '/')" "$(printf '%s' "$3" | tr '\\' '/')"
+}
 
 check() { # name expected actual
     if [ "$2" = "$3" ]; then
@@ -148,7 +165,7 @@ let back = [b:hexpair_view, line('.'), col('.'), strpart(getline('.'), col('.') 
 call writefile([string(hex), string(text), string(back)], '$WORK/t1.out')
 qa!
 EOF
-vim -es -b -u NONE "$WORK/pos.bin" -S "$WORK/t1.vim" < /dev/null
+"$HEXPAIR_VIM" -es -b -u NONE "$WORK/pos.bin" -S "$WORK/t1.vim" < /dev/null
 check "hex mode opens on the cursor's page, on its byte" \
     "[2, 26, 53, '69', 1422]" "$(sed -n 1p "$WORK/t1.out")"
 check "the text view keeps the byte"  "['text', 16, 2]" "$(sed -n 2p "$WORK/t1.out")"
@@ -161,8 +178,8 @@ HexPairToggle
 call writefile([getline(1), getline(2), getline('\$'), string(line('\$'))], '$WORK/t2.out')
 qa!
 EOF
-vim -es -b -u NONE "$WORK/eol.bin" -S "$WORK/t2.vim" < /dev/null
-check "a one-page file still gets a banner" \
+"$HEXPAIR_VIM" -es -b -u NONE "$WORK/eol.bin" -S "$WORK/t2.vim" < /dev/null
+check_path "a one-page file still gets a banner" \
     "\" hexpair: page 1/1  bytes 1-3 of 3  $WORK/eol.bin" "$(sed -n 1p "$WORK/t2.out")"
 check "final newline in dump" \
     "00000000: 41 42 0a                                         AB." \
@@ -180,11 +197,11 @@ write
 call writefile([line('.') . ',' . col('.') . '=' . strpart(getline('.'), col('.') - 1, 2)], '$WORK/t3.out')
 qa!
 EOF
-vim -es -b -u NONE "$WORK/ins.bin" -S "$WORK/t3.vim" < /dev/null
+"$HEXPAIR_VIM" -es -b -u NONE "$WORK/ins.bin" -S "$WORK/t3.vim" < /dev/null
 check "insert-write cursor on typed byte" "2,41=03" "$(cat "$WORK/t3.out")"
 check "insert-write file content" \
     "00000000: 41 42 43 44 45 46 47 48 01 02 03 04 05           ABCDEFGH....." \
-    "$(xxd -g 1 "$WORK/ins.bin")"
+    "$("$HEXPAIR_XXD" -g 1 "$WORK/ins.bin")"
 
 # --- Test 4: non-default bytes_per_line geometry ---------------------------
 # g:hexpair_page_size must stay a multiple of it, so both move together.
@@ -198,7 +215,7 @@ let dump = line('.') . ',' . col('.') . '=' . strpart(getline('.'), col('.') - 1
 call writefile([dump, string(HexPairPagedByteOffset())], '$WORK/t4.out')
 qa!
 EOF
-vim -es -b -u NONE "$WORK/pos.bin" -S "$WORK/t4.vim" < /dev/null
+"$HEXPAIR_VIM" -es -b -u NONE "$WORK/pos.bin" -S "$WORK/t4.vim" < /dev/null
 check "n=23 dump position"  "3,68=69" "$(sed -n 1p "$WORK/t4.out")"
 check "n=23 cursor byte"    "1422"     "$(sed -n 2p "$WORK/t4.out")"
 
@@ -221,7 +238,7 @@ let re = [&l:tabstop, &l:expandtab, &paste]
 call writefile([string(on), string(text), string(re)], '$WORK/t5.out')
 qa!
 EOF
-vim -es -b -u NONE "$WORK/ins.bin" -S "$WORK/t5.vim" < /dev/null
+"$HEXPAIR_VIM" -es -b -u NONE "$WORK/ins.bin" -S "$WORK/t5.vim" < /dev/null
 check "ftplugin + paste active in the hex view"  "[10, 3, 1, 1]"   "$(sed -n 1p "$WORK/t5.out")"
 check "ftplugin reverted in the text view"       "[8, 8, 0, 1, 0]" "$(sed -n 2p "$WORK/t5.out")"
 check "ftplugin re-applied back in the hex view" "[10, 1, 1]"      "$(sed -n 3p "$WORK/t5.out")"
@@ -240,7 +257,7 @@ HexPairToggle
 call writefile([string([&l:tabstop, &l:shiftwidth])], '$WORK/t6.out')
 qa!
 EOF
-vim -es -b -u NONE "$WORK/ins.bin" -S "$WORK/t6.vim" < /dev/null
+"$HEXPAIR_VIM" -es -b -u NONE "$WORK/ins.bin" -S "$WORK/t6.vim" < /dev/null
 check "user ftplugin overrules bundled defaults" "[4, 8]" "$(cat "$WORK/t6.out")"
 
 # --- Test 7: g:hexpair_paste opt-out; restore on leaving the hex buffer ----
@@ -261,7 +278,7 @@ let back = &paste
 call writefile([string([optout, inhex, outside, back])], '$WORK/t7.out')
 qa!
 EOF
-vim -es -b -u NONE "$WORK/ins.bin" -S "$WORK/t7.vim" < /dev/null
+"$HEXPAIR_VIM" -es -b -u NONE "$WORK/ins.bin" -S "$WORK/t7.vim" < /dev/null
 check "paste opt-out and restore on buffer switch" "[0, 1, 0, 1]" "$(cat "$WORK/t7.out")"
 
 # --- Test 8: a non-hex character aborts :w; file and dump stay intact ------
@@ -279,7 +296,7 @@ let state = string([get(b:, 'hexpair_page_active', 0), line('.'), col('.')])
 call writefile([caught, state, getline(2)], '$WORK/t8.out')
 qa!
 EOF
-vim -es -b -u NONE "$WORK/val.bin" -S "$WORK/t8.vim" < /dev/null
+"$HEXPAIR_VIM" -es -b -u NONE "$WORK/val.bin" -S "$WORK/t8.vim" < /dev/null
 check "invalid char aborts the write"  "caught"     "$(sed -n 1p "$WORK/t8.out")"
 check "cursor parked on the offender"  "[1, 2, 12]" "$(sed -n 2p "$WORK/t8.out")"
 check "dump kept after aborted write" \
@@ -287,7 +304,7 @@ check "dump kept after aborted write" \
     "$(sed -n 3p "$WORK/t8.out")"
 check "file kept after aborted write" \
     "00000000: 41 42 43 44 45 46 47 48                          ABCDEFGH" \
-    "$(xxd -g 1 "$WORK/val.bin")"
+    "$("$HEXPAIR_XXD" -g 1 "$WORK/val.bin")"
 
 # --- Test 9: a non-hex character refuses the switch to the text view -------
 cat > "$WORK/t9.vim" <<EOF
@@ -300,7 +317,7 @@ redir END
 call writefile([string([b:hexpair_view, line('.'), col('.'), msg =~# 'still in the hex view'])], '$WORK/t9.out')
 qa!
 EOF
-vim -es -b -u NONE "$WORK/val.bin" -S "$WORK/t9.vim" < /dev/null
+"$HEXPAIR_VIM" -es -b -u NONE "$WORK/val.bin" -S "$WORK/t9.vim" < /dev/null
 check "invalid char refuses the text view" "['hex', 3, 5, 1]" "$(cat "$WORK/t9.out")"
 
 # --- Test 10: an odd total number of hex digits aborts :w ------------------
@@ -317,7 +334,7 @@ endtry
 call writefile([caught], '$WORK/t10.out')
 qa!
 EOF
-vim -es -b -u NONE "$WORK/val.bin" -S "$WORK/t10.vim" < /dev/null
+"$HEXPAIR_VIM" -es -b -u NONE "$WORK/val.bin" -S "$WORK/t10.vim" < /dev/null
 check "odd digit count aborts the write" "odd" "$(cat "$WORK/t10.out")"
 
 # --- Test 11: :e re-reads the page from disk -------------------------------
@@ -335,7 +352,7 @@ let state = string([get(b:, 'hexpair_page_active', 0), b:hexpair_view, line('.')
 call writefile([getline(2), state], '$WORK/t11.out')
 qa!
 EOF
-vim -es -b -u NONE "$WORK/val.bin" -S "$WORK/t11.vim" < /dev/null
+"$HEXPAIR_VIM" -es -b -u NONE "$WORK/val.bin" -S "$WORK/t11.vim" < /dev/null
 check "reload regenerates the page" \
     "00000000: 41 42 43 44 45 46 47 48                          ABCDEFGH" \
     "$(sed -n 1p "$WORK/t11.out")"
@@ -353,7 +370,7 @@ HexPairToggle
 call writefile([string([inhex, &l:modified, char2nr(getline(2)[0])])], '$WORK/t12.out')
 qa!
 EOF
-vim -es -b -u NONE "$WORK/mod12.bin" -S "$WORK/t12.vim" < /dev/null
+"$HEXPAIR_VIM" -es -b -u NONE "$WORK/mod12.bin" -S "$WORK/t12.vim" < /dev/null
 check "an edit in the hex view survives into the text view, still modified" \
     "[1, 1, 255]" "$(cat "$WORK/t12.out")"
 
@@ -367,7 +384,7 @@ HexPairToggle
 call writefile([string([text, &l:modified])], '$WORK/t13.out')
 qa!
 EOF
-vim -es -b -u NONE "$WORK/mod13.bin" -S "$WORK/t13.vim" < /dev/null
+"$HEXPAIR_VIM" -es -b -u NONE "$WORK/mod13.bin" -S "$WORK/t13.vim" < /dev/null
 check "an edit-free round trip stays unmodified" "[0, 0]" "$(cat "$WORK/t13.out")"
 
 # --- Test 14: an edit made in the text view survives back into the dump ----
@@ -381,7 +398,7 @@ HexPairToggle
 call writefile([string([intext, &l:modified]), getline(2)], '$WORK/t14.out')
 qa!
 EOF
-vim -es -b -u NONE "$WORK/mod14.bin" -S "$WORK/t14.vim" < /dev/null
+"$HEXPAIR_VIM" -es -b -u NONE "$WORK/mod14.bin" -S "$WORK/t14.vim" < /dev/null
 check "an edit in the text view keeps the buffer modified" "[1, 1]" \
     "$(sed -n 1p "$WORK/t14.out")"
 check "and shows up in the dump" \
@@ -399,12 +416,12 @@ HexPairToggle
 call writefile([string([afterwrite, &l:modified])], '$WORK/t15.out')
 qa!
 EOF
-vim -es -b -u NONE "$WORK/mod15.bin" -S "$WORK/t15.vim" < /dev/null
+"$HEXPAIR_VIM" -es -b -u NONE "$WORK/mod15.bin" -S "$WORK/t15.vim" < /dev/null
 check "a write clears 'modified' and the text view keeps it clear" "[0, 0]" \
     "$(cat "$WORK/t15.out")"
 check "the write reached the file" \
     "00000000: ff 42 43 44 45 46 47 48                          .BCDEFGH" \
-    "$(xxd -g 1 "$WORK/mod15.bin")"
+    "$("$HEXPAIR_XXD" -g 1 "$WORK/mod15.bin")"
 
 # --- Test 16: :HexPairRefresh self-heals offsets/ASCII without writing -----
 cat > "$WORK/t16.vim" <<EOF
@@ -416,7 +433,7 @@ HexPairRefresh
 call writefile([getline(2), string([line('.'), col('.'), &l:modified])], '$WORK/t16.out')
 qa!
 EOF
-vim -es -b -u NONE "$WORK/ref1.bin" -S "$WORK/t16.vim" < /dev/null
+"$HEXPAIR_VIM" -es -b -u NONE "$WORK/ref1.bin" -S "$WORK/t16.vim" < /dev/null
 check "refresh: offsets and ASCII column regenerated" \
     "00000000: 41 42 43 44 45 46 47 48                          ABCDEFGH" \
     "$(sed -n 1p "$WORK/t16.out")"
@@ -431,7 +448,7 @@ HexPairRefresh
 call writefile([string([&l:modified, getline(2) ==# '00000000: 41 42 43 44 45 46 47 48                          ABCDEFGH'])], '$WORK/t17.out')
 qa!
 EOF
-vim -es -b -u NONE "$WORK/ref2.bin" -S "$WORK/t17.vim" < /dev/null
+"$HEXPAIR_VIM" -es -b -u NONE "$WORK/ref2.bin" -S "$WORK/t17.vim" < /dev/null
 check "a no-op refresh changes nothing" "[0, 1]" "$(cat "$WORK/t17.out")"
 
 # --- Test 18: an invalid dump refuses the refresh --------------------------
@@ -445,7 +462,7 @@ redir END
 call writefile([getline(2), string([msg =~# 'invalid character', line('.'), col('.')])], '$WORK/t18.out')
 qa!
 EOF
-vim -es -b -u NONE "$WORK/ref3.bin" -S "$WORK/t18.vim" < /dev/null
+"$HEXPAIR_VIM" -es -b -u NONE "$WORK/ref3.bin" -S "$WORK/t18.vim" < /dev/null
 check "an invalid dump is left as typed" \
     "00000000: 4x 42 43 44 45 46 47 48                          ABCDEFGH" \
     "$(sed -n 1p "$WORK/t18.out")"
@@ -466,7 +483,7 @@ redir END
 call writefile([string([outside =~# 'not active', intext =~# 'no offset or ASCII columns', b:hexpair_view])], '$WORK/t19.out')
 qa!
 EOF
-vim -es -b -u NONE "$WORK/ref4.bin" -S "$WORK/t19.vim" < /dev/null
+"$HEXPAIR_VIM" -es -b -u NONE "$WORK/ref4.bin" -S "$WORK/t19.vim" < /dev/null
 check "refresh says so outside hex mode and in the text view" "[1, 1, 'text']" \
     "$(cat "$WORK/t19.out")"
 
@@ -488,12 +505,12 @@ endtry
 call writefile([caught, string(&l:modified)], '$WORK/t20.out')
 qa!
 EOF
-vim -es -b -u NONE "$WORK/ref5.bin" -S "$WORK/t20.vim" < /dev/null
+"$HEXPAIR_VIM" -es -b -u NONE "$WORK/ref5.bin" -S "$WORK/t20.vim" < /dev/null
 check "an edited banner refuses the write"      "refused" "$(sed -n 1p "$WORK/t20.out")"
 check "and leaves the buffer unwritten"         "1"       "$(sed -n 2p "$WORK/t20.out")"
 check "the file is untouched" \
     "00000000: 41 42 43 44 45 46 47 48                          ABCDEFGH" \
-    "$(xxd -g 1 "$WORK/ref5.bin")"
+    "$("$HEXPAIR_XXD" -g 1 "$WORK/ref5.bin")"
 
 # --- Test 21: :HexPairOpen shows page 1 with banner and absolute offsets ---
 cat > "$WORK/t21.vim" <<EOF
@@ -504,8 +521,8 @@ let state = string([line('\$'), line('.'), col('.'), strpart(getline('.'), col('
 call writefile([getline(1), getline(2), getline('\$'), state], '$WORK/t21.out')
 qa!
 EOF
-vim -es -u NONE -S "$WORK/t21.vim"
-check "page 1 top banner" \
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/t21.vim"
+check_path "page 1 top banner" \
     "\" hexpair: page 1/10  bytes 1-512 of 5000  $WORK/paged21.bin" \
     "$(sed -n 1p "$WORK/t21.out")"
 check "page 1 first data line" \
@@ -534,11 +551,11 @@ let unchanged = getline(1) ==# last[0]
 call writefile([next, string(last), pastend, string(unchanged)], '$WORK/t22.out')
 qa!
 EOF
-vim -es -u NONE -S "$WORK/t22.vim"
-check "next page shows page 2" \
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/t22.vim"
+check_path "next page shows page 2" \
     "\" hexpair: page 2/10  bytes 513-1024 of 5000  $WORK/paged22.bin" \
     "$(sed -n 1p "$WORK/t22.out")"
-check "goto last (short) page banner and size" \
+check_path "goto last (short) page banner and size" \
     "['\" hexpair: page 10/10  bytes 4609-5000 of 5000  $WORK/paged22.bin', '\" hexpair: end of page 10/10', 27]" \
     "$(sed -n 2p "$WORK/t22.out")"
 check "next past the last page does not throw"  "no-error" "$(sed -n 3p "$WORK/t22.out")"
@@ -557,11 +574,11 @@ let forced = [getline(1), &l:modified]
 call writefile([string(refused), string(forced)], '$WORK/t23.out')
 qa!
 EOF
-vim -es -u NONE -S "$WORK/t23.vim"
-check "next without ! refuses to discard edits" \
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/t23.vim"
+check_path "next without ! refuses to discard edits" \
     "['\" hexpair: page 1/10  bytes 1-512 of 5000  $WORK/paged23.bin', 1]" \
     "$(sed -n 1p "$WORK/t23.out")"
-check "next! discards edits and advances" \
+check_path "next! discards edits and advances" \
     "['\" hexpair: page 2/10  bytes 513-1024 of 5000  $WORK/paged23.bin', 0]" \
     "$(sed -n 2p "$WORK/t23.out")"
 
@@ -576,8 +593,8 @@ redir END
 call writefile([trim(msg)], '$WORK/t24.out')
 qa!
 EOF
-vim -es -u NONE -S "$WORK/t24.vim"
-check "HexPairPages reports page/offsets/total" \
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/t24.vim"
+check_path "HexPairPages reports page/offsets/total" \
     "hexpair: page 3 of 10, offsets 1025-1536 of total 5000 bytes ($WORK/paged21.bin); cursor on byte 0x401 (1025)" \
     "$(cat "$WORK/t24.out")"
 
@@ -590,7 +607,7 @@ let saveas = HexPairPagedGateMessage(0, 'writing the whole file somewhere else')
 call writefile([string(ok), fail, saveas], '$WORK/t25.out')
 qa!
 EOF
-vim -es -u NONE -S "$WORK/t25.vim"
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/t25.vim"
 check "gate message empty when supported"     "''" "$(sed -n 1p "$WORK/t25.out")"
 check "gate message set when unsupported" \
     "hexpair: rewriting the file to change its length needs Vim patch 8.2.4906 or later with +num64 (readblob(), 64-bit Numbers for large file offsets); this Vim does not qualify - nothing was written. An edit that keeps the page's length, or that inserts bytes with no more than half the file after them, does not need it." \
@@ -608,7 +625,7 @@ let negative = HexPairPagedSizeError(-16, 16)
 call writefile([string(ok), notmult, negative], '$WORK/t26.out')
 qa!
 EOF
-vim -es -u NONE -S "$WORK/t26.vim"
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/t26.vim"
 check "page size ok"           "''" "$(sed -n 1p "$WORK/t26.out")"
 check "page size not a multiple of bytes_per_line" \
     "hexpair: g:hexpair_page_size (1000) must be a positive multiple of g:hexpair_bytes_per_line (16)" \
@@ -635,7 +652,7 @@ let neg = HexPairPagedBounds(-1, 512, 5000)
 call writefile([string(straddling), string(n), string(last), string(oob), string(neg)], '$WORK/t27.out')
 qa!
 EOF
-vim -es -u NONE -S "$WORK/t27.vim"
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/t27.vim"
 check "a page may straddle a width boundary, at full size" \
     "[3600000000, 900000000]" "$(sed -n 1p "$WORK/t27.out")"
 check "page count is just the file divided by the page size" "6" \
@@ -658,7 +675,7 @@ let dirty = HexPairPagedValidate()
 call writefile([string(stripped_banner), stripped_data, string(clean), string(dirty)], '$WORK/t28.out')
 qa!
 EOF
-vim -es -u NONE -S "$WORK/t28.vim"
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/t28.vim"
 check "banner line strips to zero bytes despite its letters/slashes" "''" "$(sed -n 1p "$WORK/t28.out")"
 check "data line strips to its hex payload"                          " 41 42 43 44" "$(sed -n 2p "$WORK/t28.out")"
 check "validation ignores banner text (no false positive)"           "{}" "$(sed -n 3p "$WORK/t28.out")"
@@ -676,11 +693,11 @@ cat > "$WORK/t29.vim" <<EOF
 source $PLUGIN
 let g:hexpair_page_size = 512
 call HexPairOpenFile(\$HEXPAIR_TEST_FILE)
-let state = string([get(b:, 'hexpair_page_active', 0), b:hexpair_page_file ==# \$HEXPAIR_TEST_FILE])
+let state = string([get(b:, 'hexpair_page_active', 0), HexPairPagedSamePath(b:hexpair_page_file, \$HEXPAIR_TEST_FILE, has('fname_case'), exists('+shellslash'))])
 call writefile([state, getline(2)], '$WORK/t29.out')
 qa!
 EOF
-HEXPAIR_TEST_FILE="$SPECIAL_FILE" vim -es -u NONE -S "$WORK/t29.vim"
+HEXPAIR_TEST_FILE="$SPECIAL_FILE" "$HEXPAIR_VIM" -es -u NONE -S "$WORK/t29.vim"
 check "HexPairOpenFile opens a name with a space and a literal \$VAR" \
     "[1, 1]" "$(sed -n 1p "$WORK/t29.out")"
 check "HexPairOpenFile shows the correct content" \
@@ -696,7 +713,7 @@ let bad_input   = HexPairPagedParsePageInput('abc')
 call writefile([string(empty_input), string(valid_input), string(bad_input)], '$WORK/t30.out')
 qa!
 EOF
-vim -es -u NONE -S "$WORK/t30.vim"
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/t30.vim"
 check "empty prompt input is cancellation, not an error" "{}" "$(sed -n 1p "$WORK/t30.out")"
 check "numeric prompt input yields the page number"      "{'page': 7}" "$(sed -n 2p "$WORK/t30.out")"
 check "non-numeric prompt input is a clear error"         "{'msg': 'hexpair: not a page number: abc'}" "$(sed -n 3p "$WORK/t30.out")"
@@ -717,11 +734,11 @@ let forced = [getline(1), &l:modified]
 call writefile([string(refused), string(forced)], '$WORK/t31.out')
 qa!
 EOF
-vim -es -u NONE -S "$WORK/t31.vim"
-check "goto without ! refuses to discard edits" \
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/t31.vim"
+check_path "goto without ! refuses to discard edits" \
     "['\" hexpair: page 1/10  bytes 1-512 of 5000  $WORK/paged31.bin', 1]" \
     "$(sed -n 1p "$WORK/t31.out")"
-check "goto! discards edits and jumps" \
+check_path "goto! discards edits and jumps" \
     "['\" hexpair: page 5/10  bytes 2049-2560 of 5000  $WORK/paged31.bin', 0]" \
     "$(sed -n 2p "$WORK/t31.out")"
 
@@ -744,7 +761,7 @@ let nonnumeric_unchanged = ([bufname('%'), &l:buftype] ==# before) && !get(b:, '
 call writefile([string(toolarge_unchanged), string(nonnumeric_unchanged)], '$WORK/t32.out')
 qa!
 EOF
-vim -es -u NONE -S "$WORK/t32.vim"
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/t32.vim"
 check "out-of-range page number leaves the buffer untouched" "1" "$(sed -n 1p "$WORK/t32.out")"
 check "non-numeric page number leaves the buffer untouched"  "1" "$(sed -n 2p "$WORK/t32.out")"
 
@@ -760,8 +777,8 @@ write
 call writefile([getline(1), view], '$WORK/te1.out')
 qa!
 EOF
-vim -es -b -u NONE "$WORK/empty.bin" -S "$WORK/te1.vim" < /dev/null
-check "an empty file says so" "\" hexpair: $WORK/empty.bin is empty" \
+"$HEXPAIR_VIM" -es -b -u NONE "$WORK/empty.bin" -S "$WORK/te1.vim" < /dev/null
+check_path "an empty file says so" "\" hexpair: $WORK/empty.bin is empty" \
     "$(sed -n 1p "$WORK/te1.out")"
 check "an empty file has no pages but is still open" "[2, 0, 1]" \
     "$(sed -n 2p "$WORK/te1.out")"
@@ -775,7 +792,7 @@ write
 call writefile([dump], '$WORK/te2.out')
 qa!
 EOF
-vim -es -b -u NONE "$WORK/nl.bin" -S "$WORK/te2.vim" < /dev/null
+"$HEXPAIR_VIM" -es -b -u NONE "$WORK/nl.bin" -S "$WORK/te2.vim" < /dev/null
 check "a lone newline is still dumped" \
     "00000000: 0a                                               ." \
     "$(cat "$WORK/te2.out")"
@@ -790,11 +807,11 @@ write
 call writefile([string([&l:modified, b:hexpair_page_totalpages]), getline(1)], '$WORK/te3.out')
 qa!
 EOF
-vim -es -b -u NONE "$WORK/wipe.bin" -S "$WORK/te3.vim" < /dev/null
+"$HEXPAIR_VIM" -es -b -u NONE "$WORK/wipe.bin" -S "$WORK/te3.vim" < /dev/null
 check "an emptied page writes an empty file" "0" "$(file_size "$WORK/wipe.bin")"
 check "and leaves a view saying the file is empty" "[0, 0]" \
     "$(sed -n 1p "$WORK/te3.out")"
-check "with the banner to match" "\" hexpair: $WORK/wipe.bin is empty" \
+check_path "with the banner to match" "\" hexpair: $WORK/wipe.bin is empty" \
     "$(sed -n 2p "$WORK/te3.out")"
 
 # --- Undo does not reach across a page boundary ----------------------------
@@ -813,7 +830,7 @@ silent! undo
 call writefile([string([getline(1) ==# fresh[0], getline(2) ==# fresh[1], b:hexpair_page_index, &l:modified])], '$WORK/tu1.out')
 qa!
 EOF
-vim -es -u NONE -S "$WORK/tu1.vim" < /dev/null
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tu1.vim" < /dev/null
 check "undo stops at the page boundary" "[1, 1, 1, 0]" "$(cat "$WORK/tu1.out")"
 
 # --- Undo still works INSIDE a page ----------------------------------------
@@ -828,7 +845,7 @@ silent! undo
 call writefile([string([edited, getline(2) ==# before])], '$WORK/tu2.out')
 qa!
 EOF
-vim -es -u NONE -S "$WORK/tu2.vim" < /dev/null
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tu2.vim" < /dev/null
 check "undo still works inside a page" "[1, 1]" "$(cat "$WORK/tu2.out")"
 
 # --- A page that did not come out the expected size is refused -------------
@@ -843,7 +860,7 @@ let good = string([line('\$'), b:hexpair_page_len])
 call writefile([good], '$WORK/ts1.out')
 qa!
 EOF
-vim -es -u NONE -S "$WORK/ts1.vim" < /dev/null
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/ts1.vim" < /dev/null
 check "a full page is two banner lines plus its dump lines" "[34, 512]" \
     "$(cat "$WORK/ts1.out")"
 
@@ -865,7 +882,7 @@ let found_ascii = match(l, '  \zs', stridx(l, ':')) + 1
 call writefile([string([hexstart, found_hex]), string([hexend, strpart(l, hexend - 1, 1)]), string([asciistart, found_ascii])], '$WORK/tl1.out')
 qa!
 EOF
-vim -es -u NONE -S "$WORK/tl1.vim" < /dev/null
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tl1.vim" < /dev/null
 check "hexstart is the first hex digit"     "[11, 11]"   "$(sed -n 1p "$WORK/tl1.out")"
 check "hexend is the last hex digit"        "[57, 'f']"  "$(sed -n 2p "$WORK/tl1.out")"
 check "asciistart is the first ASCII char"  "[60, 60]"   "$(sed -n 3p "$WORK/tl1.out")"
@@ -890,7 +907,7 @@ write
 call writefile([string([&l:modified, line('.'), col('.')]), getline(2)], '$WORK/tw1.out')
 qa!
 EOF
-vim -es -u NONE -S "$WORK/tw1.vim" < /dev/null
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tw1.vim" < /dev/null
 check "in-place write clears 'modified' and keeps the cursor byte" "[0, 2, 11]" \
     "$(sed -n 1p "$WORK/tw1.out")"
 check "in-place write shows in the re-read page" \
@@ -901,7 +918,7 @@ check "in-place write leaves the head untouched" "$W1_HEAD" "$(hash_range "$WORK
 check "in-place write leaves the tail untouched" "$W1_TAIL" "$(hash_range "$WORK/w1.bin" 1024 -1)"
 check "in-place write changed exactly the edited bytes" \
     "00000200: de ad 02 03                                      ...." \
-    "$(xxd -s 512 -l 4 -g 1 "$WORK/w1.bin")"
+    "$("$HEXPAIR_XXD" -s 512 -l 4 -g 1 "$WORK/w1.bin")"
 
 # --- A write on the short LAST page is patched the same way ----------------
 cat > "$WORK/tw2.vim" <<EOF
@@ -912,12 +929,12 @@ write
 call writefile([string([&l:modified, b:hexpair_page_len])], '$WORK/tw2.out')
 qa!
 EOF
-vim -es -u NONE -S "$WORK/tw2.vim" < /dev/null
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tw2.vim" < /dev/null
 check "the short last page writes too" "[0, 392]" "$(cat "$WORK/tw2.out")"
 check "the short last page keeps the file length" "5000" "$(file_size "$WORK/w2.bin")"
 check "the short last page patched its first byte" \
     "00001200: ff                                               ." \
-    "$(xxd -s 4608 -l 1 -g 1 "$WORK/w2.bin")"
+    "$("$HEXPAIR_XXD" -s 4608 -l 1 -g 1 "$WORK/w2.bin")"
 
 # --- An invalid dump refuses the write, on disk and in the buffer ----------
 W3_ALL=$(hash_range "$WORK/w3.bin" 0 -1)
@@ -934,7 +951,7 @@ endtry
 call writefile([caught, string([&l:modified, line('.'), col('.')])], '$WORK/tw3.out')
 qa!
 EOF
-vim -es -u NONE -S "$WORK/tw3.vim" < /dev/null
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tw3.vim" < /dev/null
 check "an invalid dump refuses the paged write" "refused"     "$(sed -n 1p "$WORK/tw3.out")"
 check "the cursor is parked on the offender"    "[1, 2, 15]"  "$(sed -n 2p "$WORK/tw3.out")"
 check "an invalid dump leaves the file alone"   "$W3_ALL"     "$(hash_range "$WORK/w3.bin" 0 -1)"
@@ -955,7 +972,7 @@ endtry
 call writefile([caught, string([&l:modified])], '$WORK/tw4.out')
 qa!
 EOF
-vim -es -u NONE -S "$WORK/tw4.vim" < /dev/null
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tw4.vim" < /dev/null
 check "a file changed on disk refuses the write" "refused" "$(sed -n 1p "$WORK/tw4.out")"
 check "the refused write left the buffer dirty"  "[1]"     "$(sed -n 2p "$WORK/tw4.out")"
 check "the refused write left the file alone"    "$W4_ALL" "$(hash_range "$WORK/w4.bin" 0 -1)"
@@ -970,24 +987,24 @@ $(printf "$PAGEDW")
 HexPairOpen $WORK/w5.bin 2
 call setline(2, substitute(getline(2), '00 01', 'de ad', ''))
 write $WORK/elsewhere.bin
-let state = string([&l:modified, b:hexpair_page_file ==# '$WORK/w5.bin'])
+let state = string([&l:modified, HexPairPagedSamePath(b:hexpair_page_file, '$WORK/w5.bin', has('fname_case'), exists('+shellslash'))])
 write
 call writefile([state, string([&l:modified])], '$WORK/tw5.out')
 qa!
 EOF
-vim -es -u NONE -S "$WORK/tw5.vim" < /dev/null
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tw5.vim" < /dev/null
 check "':w other' leaves the buffer and its own file alone" "[1, 1]" \
     "$(sed -n 1p "$WORK/tw5.out")"
 check "the copy is the whole file, not just the page" "5000" \
     "$(file_size "$WORK/elsewhere.bin")"
 check "with the page's edit in it" \
-    "00000200: de ad 02 03" "$(xxd -s 512 -l 4 -g 1 "$WORK/elsewhere.bin" | cut -c1-21)"
+    "00000200: de ad 02 03" "$("$HEXPAIR_XXD" -s 512 -l 4 -g 1 "$WORK/elsewhere.bin" | cut -c1-21)"
 check "and everything outside the page copied verbatim" \
     "$(hash_range "$WORK/w5.bin" 1024 -1)" "$(hash_range "$WORK/elsewhere.bin" 1024 -1)"
 check "':w' afterwards still writes the page to its own file" "[0]" \
     "$(sed -n 2p "$WORK/tw5.out")"
 check "which is where the edit ended up too" \
-    "00000200: de ad 02 03" "$(xxd -s 512 -l 4 -g 1 "$WORK/w5.bin" | cut -c1-21)"
+    "00000200: de ad 02 03" "$("$HEXPAIR_XXD" -s 512 -l 4 -g 1 "$WORK/w5.bin" | cut -c1-21)"
 
 # --- Piped input can only be saved with ':w {file}' - and then adopts it ---
 # `cat x | vim -` has no file behind it. A plain :w says so; :w {file}
@@ -1003,21 +1020,21 @@ redir END
 let plain = msg =~# 'no file to write it back to' || msg =~# 'E32'
 call setline(2, substitute(getline(2), '^\(.\{10\}\)..', '\1ff', ''))
 write $WORK/frompipe.bin
-let after = string([&l:modified, b:hexpair_page_file ==# '$WORK/frompipe.bin', get(b:, 'hexpair_page_spill', 'gone') ==# ''])
+let after = string([&l:modified, HexPairPagedSamePath(b:hexpair_page_file, '$WORK/frompipe.bin', has('fname_case'), exists('+shellslash')), get(b:, 'hexpair_page_spill', 'gone') ==# ''])
 call setline(2, substitute(getline(2), '^\(.\{10\}\)..', '\1ee', ''))
 write
 call writefile([string(plain), after, string([&l:modified])], '$WORK/tw6.out')
 qa!
 EOF
-vim -es -u NONE -S "$WORK/tw6.vim" < /dev/null
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tw6.vim" < /dev/null
 check "a plain ':w' on piped input says there is no file"  "1" "$(sed -n 1p "$WORK/tw6.out")"
 check "':w file' saves it and the view adopts the file" "[0, 1, 1]" \
     "$(sed -n 2p "$WORK/tw6.out")"
 check "the saved file has all of the piped content, edited" \
     "00000000: ee 69 70 65 64 20 6c 69 6e 65 20 6f 6e 65 0a 70  .iped line one.p" \
-    "$(xxd -s 0 -l 16 -g 1 "$WORK/frompipe.bin")"
+    "$("$HEXPAIR_XXD" -s 0 -l 16 -g 1 "$WORK/frompipe.bin")"
 check "and a later plain ':w' now patches that file" "[0]" "$(sed -n 3p "$WORK/tw6.out")"
-check "which it did" "00000000: ee" "$(xxd -s 0 -l 1 -g 1 "$WORK/frompipe.bin" | cut -c1-12)"
+check "which it did" "00000000: ee" "$("$HEXPAIR_XXD" -s 0 -l 1 -g 1 "$WORK/frompipe.bin" | cut -c1-12)"
 
 # --- A growing write splices the file ---------------------------------------
 SP1_HEAD=$(hash_range "$WORK/sp1.bin" 0 512)
@@ -1031,7 +1048,7 @@ write
 call writefile([string([&l:modified, b:hexpair_page_total, line('.'), col('.')]), getline(2)], '$WORK/ts3a.out')
 qa!
 EOF
-vim -es -u NONE -S "$WORK/ts3a.vim" < /dev/null
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/ts3a.vim" < /dev/null
 check "grow: the file is three bytes longer, cursor still on its byte" \
     "[0, 5003, 2, 20]" "$(sed -n 1p "$WORK/ts3a.out")"
 check "grow: the inserted bytes open the page" \
@@ -1053,7 +1070,7 @@ write
 call writefile([string([&l:modified, b:hexpair_page_total, b:hexpair_page_len])], '$WORK/ts3b.out')
 qa!
 EOF
-vim -es -u NONE -S "$WORK/ts3b.vim" < /dev/null
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/ts3b.vim" < /dev/null
 check "shrink: the file is sixteen bytes shorter" "[0, 4984, 512]" \
     "$(cat "$WORK/ts3b.out")"
 check "shrink: the file really shrank" "4984"      "$(file_size "$WORK/sp2.bin")"
@@ -1074,7 +1091,7 @@ write
 call writefile([string([before, len(glob(dir . '/*', 0, 1)), &l:modified])], '$WORK/ts3c.out')
 qa!
 EOF
-vim -es -u NONE -S "$WORK/ts3c.vim" < /dev/null
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/ts3c.vim" < /dev/null
 check "a successful splice leaves no temp files behind" "[0, 0, 0]" \
     "$(cat "$WORK/ts3c.out")"
 
@@ -1114,7 +1131,7 @@ let kept = filter(glob(dir . '/*', 0, 1), 'getfsize(v:val) == 5003')
 call writefile([string([failed, len(kept), &l:modified])], '$WORK/ts3d.out')
 qa!
 EOF
-    vim -es -u NONE -S "$WORK/ts3d.vim" < /dev/null
+    "$HEXPAIR_VIM" -es -u NONE -S "$WORK/ts3d.vim" < /dev/null
     check "a failed splice keeps a recovery copy" "['failed', 1, 1]" \
         "$(cat "$WORK/ts3d.out")"
     check "a failed splice leaves the file alone" "$SP4_ALL" \
@@ -1132,8 +1149,8 @@ call writefile([getline(1), string([&l:modified, line('\$'), b:hexpair_page_tota
 qa!
 EOF
 sed -i 's/, s:nothing//' "$WORK/ts3e.vim"
-vim -es -u NONE -S "$WORK/ts3e.vim" < /dev/null
-check "emptying the file leaves a banner saying so" \
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/ts3e.vim" < /dev/null
+check_path "emptying the file leaves a banner saying so" \
     "\" hexpair: $WORK/sp5.bin is empty" "$(sed -n 1p "$WORK/ts3e.out")"
 check "emptying the file leaves no pages" "[0, 2, 0]" "$(sed -n 2p "$WORK/ts3e.out")"
 check "the emptied file really is empty"  "0" "$(file_size "$WORK/sp5.bin")"
@@ -1146,7 +1163,7 @@ source $PLUGIN
 call writefile(split(HexPairPagedResizeMessage(-16, 5000, 5000), "\n") + split(HexPairPagedResizeMessage(3, 5000, 900), "\n"), '$WORK/ts3f.out')
 qa!
 EOF
-vim -es -u NONE -S "$WORK/ts3f.vim" < /dev/null
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/ts3f.vim" < /dev/null
 check "the resize prompt names the delta" \
     "hexpair: this page changed length by -16 bytes." "$(sed -n 1p "$WORK/ts3f.out")"
 check "shortening says the file is rewritten" \
@@ -1172,7 +1189,7 @@ qa!
 EOF
 mkdir -p "$WORK/doctags"
 cp "$ROOT/doc/hexpair.txt" "$WORK/doctags/"
-vim -es -u NONE -S "$WORK/th1.vim" < /dev/null
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/th1.vim" < /dev/null
 check "helptags accepts the help file" "ok" "$(sed -n 1p "$WORK/th1.out")"
 check "helptags found the plugin's tags" "1" \
     "$(test "$(sed -n 2p "$WORK/th1.out")" -gt 30 && echo 1 || echo 0)"
@@ -1200,7 +1217,7 @@ write
 call writefile([getline(65), getline(66), widths, string(mapped), jumped, string([&l:modified, b:hexpair_page_total])], '$WORK/t4g.out')
 qa!
 EOF
-vim -es -u NONE -S "$WORK/t4g.vim" < /dev/null
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/t4g.vim" < /dev/null
 check "the line before the 4 GiB mark keeps eight offset digits" \
     "fffffff0: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................" \
     "$(sed -n 1p "$WORK/t4g.out")"
@@ -1236,7 +1253,7 @@ let banner = string([line('.'), col('.')])
 call writefile([ascii, back, hex, banner], '$WORK/tg1.out')
 qa!
 EOF
-vim -es -u NONE -S "$WORK/tg1.vim" < /dev/null
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tg1.vim" < /dev/null
 check "GoAscii lands on the byte's ASCII character" "[2, 61, '.']" \
     "$(sed -n 1p "$WORK/tg1.out")"
 check "Swap comes back to the same byte"            "[2, 14, '01']" \
@@ -1258,7 +1275,7 @@ let back = &paste
 call writefile([string([inpage, outside, back])], '$WORK/tg2.out')
 qa!
 EOF
-vim -es -u NONE -S "$WORK/tg2.vim" < /dev/null
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tg2.vim" < /dev/null
 check "'paste' is on in a paged buffer and restored outside it" "[1, 0, 1]" \
     "$(cat "$WORK/tg2.out")"
 
@@ -1278,7 +1295,7 @@ endtry
 call writefile([refused, string([getline(1), get(b:, 'hexpair_page_active', 0)])], '$WORK/tx1.out')
 qa!
 EOF
-vim -es -u NONE -S "$WORK/tx1.vim" < /dev/null
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tx1.vim" < /dev/null
 check "opening a page refuses to abandon a modified buffer" "refused" \
     "$(sed -n 1p "$WORK/tx1.out")"
 check "the modified buffer is left untouched" "['precious unsaved work', 0]" \
@@ -1301,7 +1318,7 @@ let restored = getline(2) ==# fresh
 call writefile([string([kept, restored, &l:undolevels])], '$WORK/tx2.out')
 qa!
 EOF
-vim -es -u NONE -S "$WORK/tx2.vim" < /dev/null
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tx2.vim" < /dev/null
 check "a buffer-local 'undolevels' is restored, history still cleared" \
     "[1, 1, 500]" "$(cat "$WORK/tx2.out")"
 
@@ -1321,7 +1338,7 @@ let state = string([get(b:, 'hexpair_page_active', 0), b:hexpair_page_totalpages
 call writefile([getline(1), getline(2), state], '$WORK/tp1.out')
 qa!
 EOF
-vim -es -u NONE -S "$WORK/tp1.vim" < /dev/null
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tp1.vim" < /dev/null
 check "an unnamed buffer names itself in the banner" \
     "\" hexpair: page 1/1  bytes 1-34 of 34  [unnamed buffer]" \
     "$(sed -n 1p "$WORK/tp1.out")"
@@ -1343,12 +1360,12 @@ redir END
 call writefile([string([msg =~# 'unwritten changes', get(b:, 'hexpair_page_active', 0), &l:buftype, getline(1)])], '$WORK/tp2.out')
 qa!
 EOF
-vim -es -b -u NONE "$WORK/src1.bin" -S "$WORK/tp2.vim" < /dev/null
+"$HEXPAIR_VIM" -es -b -u NONE "$WORK/src1.bin" -S "$WORK/tp2.vim" < /dev/null
 check "a modified file-backed buffer is refused, and left alone" \
     "[1, 0, '', 'tampered']" "$(cat "$WORK/tp2.out")"
 check "and the file is untouched" \
     "00000000: 00 01 02 03 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f  ................" \
-    "$(xxd -s 0 -l 16 -g 1 "$WORK/src1.bin")"
+    "$("$HEXPAIR_XXD" -s 0 -l 16 -g 1 "$WORK/src1.bin")"
 
 # --- :HexPairGoOffset jumps to a byte, wherever it is ----------------------
 # Pages are fixed-size slices, so the page holding an offset is a division.
@@ -1374,7 +1391,7 @@ let intext = string([b:hexpair_view, b:hexpair_page_index, line('.'), col('.')])
 call writefile([dec, hex, string([m1 =~# 'outside the file', m2 =~# 'not a byte position', m3 =~# 'start at 1']), intext], '$WORK/tp3.out')
 qa!
 EOF
-vim -es -b -u NONE "$WORK/off1.bin" -S "$WORK/tp3.vim" < /dev/null
+"$HEXPAIR_VIM" -es -b -u NONE "$WORK/off1.bin" -S "$WORK/tp3.vim" < /dev/null
 check "byte 2000 is offset 1999 - positions are 1-based, like the banner" \
     "[3, 1999]" "$(sed -n 1p "$WORK/tp3.out")"
 check "and so is a 0x one"                     "[1, 1023]" "$(sed -n 2p "$WORK/tp3.out")"
@@ -1384,7 +1401,7 @@ check "the jump keeps you in the view you were in" "['text', 0, 3, 89]" \
     "$(sed -n 4p "$WORK/tp3.out")"
 
 check "HexPairPagedOffsetError() accepts what is in range" "''" \
-    "$(vim -es -u NONE -c "source $PLUGIN" -c "call writefile([string(HexPairPagedOffsetError(0, 1))], '$WORK/tp4.out')" -c 'qa!' < /dev/null; cat "$WORK/tp4.out")"
+    "$("$HEXPAIR_VIM" -es -u NONE -c "source $PLUGIN" -c "call writefile([string(HexPairPagedOffsetError(0, 1))], '$WORK/tp4.out')" -c 'qa!' < /dev/null; cat "$WORK/tp4.out")"
 
 # --- Editing and writing several pages of one file, one after another ------
 # Each :w patches the page on screen; the pages you never opened keep their
@@ -1409,13 +1426,13 @@ let p10 = [&l:modified, b:hexpair_page_len, b:hexpair_page_total]
 call writefile([string([p1, p5]), string(p10)], '$WORK/tm1.out')
 qa!
 EOF
-vim -es -u NONE -S "$WORK/tm1.vim" < /dev/null
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tm1.vim" < /dev/null
 check "each page write clears 'modified'" "[0, 0]" "$(sed -n 1p "$WORK/tm1.out")"
 check "the short last page writes too, file size unchanged" "[0, 392, 5000]" \
     "$(sed -n 2p "$WORK/tm1.out")"
-check "page 1's byte was patched"  "00000000: aa" "$(xxd -s 0 -l 1 -g 1 "$WORK/multi.bin" | cut -c1-12)"
-check "page 5's byte was patched"  "00000800: bb" "$(xxd -s 2048 -l 1 -g 1 "$WORK/multi.bin" | cut -c1-12)"
-check "page 10's byte was patched" "00001200: cc" "$(xxd -s 4608 -l 1 -g 1 "$WORK/multi.bin" | cut -c1-12)"
+check "page 1's byte was patched"  "00000000: aa" "$("$HEXPAIR_XXD" -s 0 -l 1 -g 1 "$WORK/multi.bin" | cut -c1-12)"
+check "page 5's byte was patched"  "00000800: bb" "$("$HEXPAIR_XXD" -s 2048 -l 1 -g 1 "$WORK/multi.bin" | cut -c1-12)"
+check "page 10's byte was patched" "00001200: cc" "$("$HEXPAIR_XXD" -s 4608 -l 1 -g 1 "$WORK/multi.bin" | cut -c1-12)"
 check "the file kept its length" "5000" "$(file_size "$WORK/multi.bin")"
 check "everything between the edits is untouched" \
     "$(hash_range "$WORK/multi.before" 1 2047)" "$(hash_range "$WORK/multi.bin" 1 2047)"
@@ -1440,7 +1457,7 @@ let after = [get(b:, 'hexpair_page_active', 0), b:hexpair_page_totalpages]
 call writefile([string(refused), string(after)], '$WORK/tm2.out')
 qa!
 EOF
-vim -es -b -u NONE "$WORK/multi2.bin" -S "$WORK/tm2.vim" < /dev/null
+"$HEXPAIR_VIM" -es -b -u NONE "$WORK/multi2.bin" -S "$WORK/tm2.vim" < /dev/null
 check "a dirty buffer is refused, and told both ways out" "[1, 1, 0]" \
     "$(sed -n 1p "$WORK/tm2.out")"
 check "writing it first makes the toggle work"            "[1, 10]" \
@@ -1458,7 +1475,7 @@ let parsed = [HexPairPagedParseOffsetInput(''), HexPairPagedParseOffsetInput('12
 call writefile([string(missing), string(parsed[0]), string(parsed[1]), string(parsed[2]), parsed[3].msg], '$WORK/tk1.out')
 qa!
 EOF
-vim -es -u NONE -S "$WORK/tk1.vim" < /dev/null
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tk1.vim" < /dev/null
 check "every command has a <Plug> target" "[]" "$(sed -n 1p "$WORK/tk1.out")"
 check "an empty offset prompt cancels"    "{}" "$(sed -n 2p "$WORK/tk1.out")"
 check "byte 1234 parses to offset 1233"   "{'offset': 1233}" "$(sed -n 3p "$WORK/tk1.out")"
@@ -1489,7 +1506,7 @@ redir END
 call writefile([string(warned), string([msg2 =~# 'not read in binary mode', get(b:, 'hexpair_page_active', 0)])], '$WORK/tw7.out')
 qa!
 EOF
-vim -es -u NONE -S "$WORK/tw7.vim" < /dev/null
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tw7.vim" < /dev/null
 check "a non-binary piped buffer is flagged, and still opens" "[1, 1, 1]" \
     "$(sed -n 1p "$WORK/tw7.out")"
 check "a binary one is not flagged"                          "[0, 1]" \
@@ -1510,7 +1527,7 @@ let empty = [HexPairPagedSamePath('', '/a/b', 1, 0), HexPairPagedSamePath('/a/b'
 call writefile([string(unix), string(win), string(empty)], '$WORK/twp.out')
 qa!
 EOF
-vim -es -u NONE -S "$WORK/twp.vim" < /dev/null
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/twp.vim" < /dev/null
 check "on Unix, case and backslashes are part of the name" "[1, 0, 0]" \
     "$(sed -n 1p "$WORK/twp.out")"
 check "on Windows, separators and case are not"            "[1, 0]" \
@@ -1530,11 +1547,11 @@ execute 'write!' fnameescape('$WORK/./same1.bin')
 call writefile([string([&l:modified, b:hexpair_page_total])], '$WORK/twp2.out')
 qa!
 EOF
-vim -es -u NONE -S "$WORK/twp2.vim" < /dev/null
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/twp2.vim" < /dev/null
 check "writing to the same file spelled longhand patches the page" "[0, 5000]" \
     "$(cat "$WORK/twp2.out")"
 check "the file is intact, not truncated" "5000" "$(file_size "$WORK/same1.bin")"
-check "the edit landed"    "00000200: de ad" "$(xxd -s 512 -l 2 -g 1 "$WORK/same1.bin" | cut -c1-15)"
+check "the edit landed"    "00000200: de ad" "$("$HEXPAIR_XXD" -s 512 -l 2 -g 1 "$WORK/same1.bin" | cut -c1-15)"
 check "the rest is intact" "$SAME_BEFORE" "$(hash_range "$WORK/same1.bin" 1024 -1)"
 
 # --- A Visual selection is mirrored in the other column --------------------
@@ -1558,7 +1575,7 @@ let banner = HexPairPagedSelectionPositions([0,1,1,0], [0,2,14,0], 'v', 1, 2)
 call writefile([string(inhex), string(inascii), string(across), string(linewise), string(banner)], '$WORK/tv1.out')
 qa!
 EOF
-vim -es -u NONE -S "$WORK/tv1.vim" < /dev/null
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tv1.vim" < /dev/null
 check "a hex selection mirrors into the ASCII column" "[[2, 61, 4]]" \
     "$(sed -n 1p "$WORK/tv1.out")"
 check "an ASCII selection mirrors into the hex column" "[[2, 14, 8]]" \
@@ -1584,7 +1601,7 @@ write
 call writefile([string([&l:modified, b:hexpair_page_total]), getline(2)], '$WORK/tip1.out')
 qa!
 EOF
-vim -es -u NONE -S "$WORK/tip1.vim" < /dev/null
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tip1.vim" < /dev/null
 check "an insert grows the file, in place" "[0, 5003]" "$(sed -n 1p "$WORK/tip1.out")"
 check "the inserted bytes open the page" \
     "00000800: aa bb cc 00 01 02 03 04 05 06 07 08 09 0a 0b 0c  ................" \
@@ -1607,12 +1624,12 @@ write
 call writefile([string([&l:modified, b:hexpair_page_total, b:hexpair_page_len])], '$WORK/tip2.out')
 qa!
 EOF
-vim -es -u NONE -S "$WORK/tip2.vim" < /dev/null
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tip2.vim" < /dev/null
 check "appending to the last page" "[0, 5004, 396]" "$(cat "$WORK/tip2.out")"
 check "the rest of the file is untouched" "$IP2_HEAD" \
     "$(hash_range "$WORK/ip2.bin" 0 4608)"
 check "the appended bytes are at the end" \
-    "00001388: de ad be ef" "$(xxd -s 5000 -l 4 -g 1 "$WORK/ip2.bin" | cut -c1-21)"
+    "00001388: de ad be ef" "$("$HEXPAIR_XXD" -s 5000 -l 4 -g 1 "$WORK/ip2.bin" | cut -c1-21)"
 
 # --- A shrink still rewrites, and says so -----------------------------------
 # Nothing in Vim or xxd can shorten a file except by writing it afresh.
@@ -1625,7 +1642,7 @@ write
 call writefile([string([&l:modified, b:hexpair_page_total])], '$WORK/tip3.out')
 qa!
 EOF
-vim -es -u NONE -S "$WORK/tip3.vim" < /dev/null
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tip3.vim" < /dev/null
 check "a delete shrinks the file"        "[0, 4984]" "$(cat "$WORK/tip3.out")"
 check "its head survives the rewrite"    "$IP3_HEAD" "$(hash_range "$WORK/ip3.bin" 0 2048)"
 
@@ -1657,7 +1674,7 @@ write
 call writefile([string([view, body, &l:modified])], '$WORK/ttv1.out')
 qa!
 EOF
-vim -es -u NONE -S "$WORK/ttv1.vim" < /dev/null
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/ttv1.vim" < /dev/null
 check "the text view holds the page's bytes as three lines" "['text', 3, 0]" \
     "$(cat "$WORK/ttv1.out")"
 check "writing it back unedited changes nothing" "$TV1_ALL" \
@@ -1677,7 +1694,7 @@ write
 call writefile([string([&l:modified])], '$WORK/ttv2.out')
 qa!
 EOF
-vim -es -u NONE -S "$WORK/ttv2.vim" < /dev/null
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/ttv2.vim" < /dev/null
 check "a text-view write clears 'modified'" "[0]" "$(cat "$WORK/ttv2.out")"
 check "a text-view write keeps the file length" "5000" "$(file_size "$WORK/tv2.bin")"
 check "it left the head untouched" "$TV2_HEAD" "$(hash_range "$WORK/tv2.bin" 0 512)"
@@ -1686,7 +1703,7 @@ check "the rest of the page survived the round trip" "$TV2_REST" \
     "$(hash_range "$WORK/tv2.bin" 513 511)"
 check "it changed exactly the edited byte" \
     "00000200: 41 01 02 03                                      A..." \
-    "$(xxd -s 512 -l 4 -g 1 "$WORK/tv2.bin")"
+    "$("$HEXPAIR_XXD" -s 512 -l 4 -g 1 "$WORK/tv2.bin")"
 
 # --- A growing edit moves the tail, from this view too ---------------------
 TV3_HEAD=$(hash_range "$WORK/tv3.bin" 0 512)
@@ -1701,7 +1718,7 @@ write
 call writefile([string([&l:modified])], '$WORK/ttv3.out')
 qa!
 EOF
-vim -es -u NONE -S "$WORK/ttv3.vim" < /dev/null
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/ttv3.vim" < /dev/null
 check "a growing text-view write clears 'modified'" "[0]" "$(cat "$WORK/ttv3.out")"
 check "the file grew by the one byte inserted" "5001" "$(file_size "$WORK/tv3.bin")"
 check "everything before the page is byte-identical" "$TV3_HEAD" \
@@ -1712,7 +1729,7 @@ check "the rest of the page moved up intact" "$TV3_REST" \
     "$(hash_range "$WORK/tv3.bin" 523 502)"
 check "the inserted byte is where the edit put it" \
     "0000020a: 5a 0a 0b                                         Z.." \
-    "$(xxd -s 522 -l 3 -g 1 "$WORK/tv3.bin")"
+    "$("$HEXPAIR_XXD" -s 522 -l 3 -g 1 "$WORK/tv3.bin")"
 
 # --- An edited banner refuses the write: which lines are content is then
 # --- guesswork, and in a page of raw bytes a leading '"' proves nothing ----
@@ -1731,7 +1748,7 @@ endtry
 call writefile([string([outcome, &l:modified])], '$WORK/ttv4.out')
 qa!
 EOF
-vim -es -u NONE -S "$WORK/ttv4.vim" < /dev/null
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/ttv4.vim" < /dev/null
 check "an edited banner refuses the text-view write" "['refused', 1]" \
     "$(cat "$WORK/ttv4.out")"
 check "and leaves the file exactly as it was" "$TV4_ALL" \
@@ -1754,14 +1771,14 @@ call writefile([inhex, banner, intext], '$WORK/tcb.out')
 qa!
 EOF
 sed -i 's/s:PagesTextProbe()/HexPairPagedReport()/g' "$WORK/tcb.vim"
-vim -es -u NONE -S "$WORK/tcb.vim" < /dev/null
-check "the cursor byte is reported in hex and decimal" \
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tcb.vim" < /dev/null
+check_path "the cursor byte is reported in hex and decimal" \
     "hexpair: page 3 of 10, offsets 1025-1536 of total 5000 bytes ($WORK/pos1.bin); cursor on byte 0x424 (1060)" \
     "$(sed -n 1p "$WORK/tcb.out")"
-check "a banner line has no byte to report" \
+check_path "a banner line has no byte to report" \
     "hexpair: page 3 of 10, offsets 1025-1536 of total 5000 bytes ($WORK/pos1.bin)" \
     "$(sed -n 2p "$WORK/tcb.out")"
-check "the text view reports it too" \
+check_path "the text view reports it too" \
     "hexpair: page 3 of 10, offsets 1025-1536 of total 5000 bytes ($WORK/pos1.bin); cursor on byte 0x410 (1040)" \
     "$(sed -n 3p "$WORK/tcb.out")"
 

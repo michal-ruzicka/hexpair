@@ -76,18 +76,27 @@ jobs:
             if (-not (Test-Path (Join-Path $dir $exe))) { throw "$exe is not in $dir" }
           }
           Write-Host "Vim and xxd: $dir"
-          Add-Content -Path $env:GITHUB_PATH -Value $dir
+          # Name them for the suite instead of relying on PATH order: a
+          # Git Bash step puts Git's own MSYS Vim first no matter what is
+          # prepended here, and that one understands POSIX paths - it would
+          # pass the suite while proving nothing about native Windows.
+          $fwd = $dir -replace '\\', '/'
+          Add-Content -Path $env:GITHUB_ENV -Value "HEXPAIR_VIM=$fwd/vim.exe"
+          Add-Content -Path $env:GITHUB_ENV -Value "HEXPAIR_XXD=$fwd/xxd.exe"
       # Git Bash, so the one suite runs on both platforms; it converts its
       # own paths to the drive-letter form that a native Vim understands.
-      # Report which vim answered: Git for Windows puts an MSYS one on
-      # PATH, and testing that instead would prove nothing about native
-      # Windows. GITHUB_PATH prepends, so the one installed above wins.
+      # The MS-Windows check is the point of the job: an MSYS Vim would
+      # pass every test and mean nothing, so fail loudly rather than
+      # quietly test the wrong binary.
       - name: Run the regression suite
         shell: bash
         timeout-minutes: 15
         run: |
-          command -v vim xxd
-          vim --version | head -1
+          "$HEXPAIR_VIM" --version | head -2
+          "$HEXPAIR_VIM" --version | grep -q 'MS-Windows' || {
+            echo "$HEXPAIR_VIM is not a native Windows Vim - refusing to pretend this tested Windows" >&2
+            exit 1
+          }
           test/run-tests.sh
       - name: Package the release tarball
         shell: cmd
