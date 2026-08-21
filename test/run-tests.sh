@@ -153,6 +153,8 @@ for name in ('paged21.bin', 'paged22.bin', 'paged23.bin', 'paged31.bin', 'paged3
 for name in ('scan1.bin', 'scan2.bin'):
     with open(os.path.join(w, name), 'wb') as f:
         f.write(bytes((i * 7) % 256 for i in range(100000)))
+# statusline fixture
+open(os.path.join(w, 'status1.bin'), 'wb').write(bytes(i % 256 for i in range(5000)))
 # ruler fixture
 open(os.path.join(w, 'ruler1.bin'), 'wb').write(bytes(i % 256 for i in range(5000)))
 # cursor-byte fixture
@@ -2009,6 +2011,37 @@ check "and the way back rebuilds it" "['\"        ', 600, 35]" \
 check "the ruler is not read as hex payload" "{}" "$(sed -n 6p "$WORK/trul.out")"
 check "and contributes no bytes to the write" "$RULER_ALL" \
     "$(hash_range "$WORK/ruler1.bin" 0 -1)"
+
+# ===========================================================================
+# HexPairStatus() for 'statusline'
+# ===========================================================================
+# Empty outside hexpair buffers, so it can sit in the statusline
+# unconditionally; and it must agree with :HexPairPages about the byte
+# while the page is unedited, since one is what you see and the other is
+# what you ask.
+cat > "$WORK/tst.vim" <<EOF
+$(printf "$HEX")
+let plain = HexPairStatus()
+HexPairOpen $WORK/status1.bin 3
+call cursor(4, 20)
+let hex = HexPairStatus()
+let agrees = HexPairPagedReport() =~# 'cursor on byte 0x424 '
+normal! 1G
+let banner = HexPairStatus()
+call cursor(4, 20)
+setlocal modified
+let edited = HexPairStatus()
+setlocal nomodified
+HexPairToggle
+call cursor(3, 5)
+let text = HexPairStatus()
+call writefile([string([plain, hex, agrees, banner, edited, text])], '$WORK/tst.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tst.vim" < /dev/null
+check "the statusline says view, page and byte, and nothing elsewhere" \
+    "['', 'hex 3/10 @0x424', 1, 'hex 3/10', 'hex 3/10+ @0x424', 'txt 3/10 @0x410']" \
+    "$(cat "$WORK/tst.out")"
 
 # ---------------------------------------------------------------------------
 if [ "$FAIL" -eq 0 ]; then

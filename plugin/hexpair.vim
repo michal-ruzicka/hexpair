@@ -1927,6 +1927,45 @@ function! s:CursorBytePosition() abort
   endtry
 endfunction
 
+" ---------------------------------------------------------------------------
+" Statusline
+" ---------------------------------------------------------------------------
+
+" A compact summary for 'statusline', e.g. "hex 3/21 @0x4a2001" - the
+" view, the page, and the byte under the cursor in the form
+" |:HexPairGoOffset| and vimhex's @BYTE both take. Empty for every buffer
+" hexpair has not touched, so it can sit in the statusline unconditionally:
+"
+"     set statusline=%f\ %h%w%m%r\ %{HexPairStatus()}%=%l,%c%V\ %P
+"
+" The statusline is evaluated on every cursor movement, so this must never
+" walk the page: the byte comes from the canonical layout in the hex view
+" and from line2byte() in the text one, both constant-time. On a page with
+" unwritten edits that is where the byte WAS - inserting or deleting hex
+" digits above the cursor shifts what follows - so such a page is marked
+" with a "+" and |:HexPairPages|, which counts the digits actually there,
+" is the one to ask for the exact answer.
+function! HexPairStatus() abort
+  if !get(b:, 'hexpair_page_active', 0)
+    return ''
+  endif
+  let view = s:IsHexView() ? 'hex' : 'txt'
+  if b:hexpair_page_totalpages == 0
+    return view . ' 0/0'
+  endif
+  let where = printf('%s %d/%d%s', view, b:hexpair_page_index + 1,
+        \ b:hexpair_page_totalpages, &l:modified ? '+' : '')
+  if s:IsHexView() && s:IsBannerLine(getline('.'))
+    return where
+  endif
+  let at = s:IsHexView()
+        \ ? b:hexpair_page_base
+        \   + (line('.') - 1 - s:HeaderLines()) * b:hexpair_n
+        \   + s:PagedCursorLineIndex()
+        \ : s:TextByteOffset()
+  return printf('%s @0x%x', where, at + 1)
+endfunction
+
 function! s:PagesText() abort
   if b:hexpair_page_totalpages == 0
     return printf('hexpair: %s is empty (no pages)', b:hexpair_page_file)
@@ -2160,7 +2199,12 @@ endfunction
 " Turn the current buffer into a paged one. Both entry points converge
 " here, so nothing downstream can tell which of them a buffer came from.
 function! s:SetupPagedBuffer() abort
-  setlocal buftype=acwrite bufhidden=hide noswapfile
+  " 'fileformat' unix: the buffer is a window onto bytes and Vim never
+  " writes it itself (BufWriteCmd), but line2byte() - which is how a
+  " position in the text view becomes a byte offset - counts the line
+  " break the way 'fileformat' says. One byte per break is the same
+  " convention writefile(..., 'b') uses on the way out.
+  setlocal buftype=acwrite bufhidden=hide noswapfile fileformat=unix
   let b:hexpair_page_size = g:hexpair_page_size
   let b:hexpair_page_bufname = bufname('%') ==# ''
         \ ? '' : fnamemodify(bufname('%'), ':p')
@@ -2271,17 +2315,25 @@ function! s:TextViewLines() abort
   return last < first ? [] : getline(first, last)
 endfunction
 
-" Byte offset within the page of the cursor, and the reverse.
-function! s:TextByteOffset() abort
+" Byte offset within the page of a position, and the reverse.
+"
+" line2byte() rather than a walk adding up line lengths: it is what Vim
+" already tracks, so this stays constant-time however many lines a page
+" of raw bytes turns into - which matters because the statusline asks for
+" it on every cursor movement. It counts one byte per line break because
+" the buffer is forced to 'fileformat' unix (s:SetupPagedBuffer()), which
+" is the same convention the write path's writefile(..., 'b') uses.
+function! s:TextOffsetAt(lnum, col) abort
   let [first, last] = s:TextBodyRange()
-  let lnum = line('.') < first ? first : (line('.') > last ? last : line('.'))
-  let off = 0
-  for l in range(first, lnum - 1)
-    let off += strlen(getline(l)) + 1
-  endfor
+  let lnum = a:lnum < first ? first : (a:lnum > last ? last : a:lnum)
+  let off = line2byte(lnum) - line2byte(first)
   call s:Debug('text view line %d, column %d -> byte %d',
-        \ lnum, col('.'), b:hexpair_page_base + off + col('.') - 1)
-  return b:hexpair_page_base + off + col('.') - 1
+        \ lnum, a:col, b:hexpair_page_base + off + a:col - 1)
+  return b:hexpair_page_base + off + a:col - 1
+endfunction
+
+function! s:TextByteOffset() abort
+  return s:TextOffsetAt(line('.'), col('.'))
 endfunction
 
 function! s:TextGotoOffset(abs) abort
