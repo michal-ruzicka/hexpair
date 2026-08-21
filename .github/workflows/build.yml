@@ -1,9 +1,10 @@
 name: Build
 
 # Runs on every push (all branches) and on every pull request.
-# Purpose: run the regression suite and prove that the release
-# packaging is reproducible across platforms (identical SHA-256 from
-# the POSIX and the Windows packaging scripts).
+# Purpose: run the regression suite on both platforms the plugin claims
+# to support, and prove that the release packaging is reproducible
+# across them (identical SHA-256 from the POSIX and the Windows
+# packaging scripts).
 # Releases are NOT published here — artifacts are signed locally and
 # uploaded to GitHub Releases by hand (see CONTRIBUTING.md).
 on:
@@ -41,10 +42,36 @@ jobs:
             dist/*.tar
             linux.sha256
 
-  pack-windows:
+  test-and-pack-windows:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      # Windows is the platform the plugin's portability rules exist for -
+      # xxd.exe from $VIMRUNTIME instead of a POSIX toolchain - so it is
+      # the one where running the suite is worth the install time.
+      - name: Install Vim
+        run: choco install vim --no-progress -y
+      # The suite calls xxd directly, and Chocolatey's shims cover Vim's
+      # own binaries rather than the whole install directory. Find the
+      # pair instead of hardcoding a version-numbered path, and fail
+      # loudly if the layout is not what is expected.
+      - name: Put Vim and its xxd on PATH
+        shell: pwsh
+        run: |
+          $roots = @('C:\Program Files\Vim', 'C:\Program Files (x86)\Vim', 'C:\tools\vim')
+          $vim = Get-ChildItem -Path $roots -Filter vim.exe -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $vim) { throw 'vim.exe not found after "choco install vim"' }
+          $dir = Split-Path $vim.FullName
+          if (-not (Test-Path (Join-Path $dir 'xxd.exe'))) { throw "no xxd.exe beside $($vim.FullName)" }
+          Write-Host "Vim and xxd: $dir"
+          Add-Content -Path $env:GITHUB_PATH -Value $dir
+      # Git Bash, so the one suite runs on both platforms; it converts its
+      # own paths to the drive-letter form that a native Vim understands.
+      - name: Run the regression suite
+        shell: bash
+        run: |
+          vim --version | head -1
+          test/run-tests.sh
       - name: Package the release tarball
         shell: cmd
         run: pack-release.cmd
@@ -59,7 +86,7 @@ jobs:
             windows.sha256
 
   reproducibility-check:
-    needs: [test-and-pack-linux, pack-windows]
+    needs: [test-and-pack-linux, test-and-pack-windows]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0

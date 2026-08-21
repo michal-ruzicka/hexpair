@@ -101,8 +101,11 @@ claim.
 ## CI
 
 The GitHub Actions workflow (`.github/workflows/build.yml`) runs on
-every push and pull request. It executes the test suite and both
-packaging scripts, and compares the resulting hashes. Releases are
+every push and pull request. It executes the test suite on Linux and on
+Windows — the same `test/run-tests.sh`, under Git Bash against a
+Chocolatey-installed Vim, because Windows is the platform the
+portability rules exist for — then both packaging scripts, and compares
+the resulting hashes. Releases are
 **not** published from CI — artifacts are signed locally and uploaded
 to GitHub Releases by hand (see *Release Process* below).
 
