@@ -153,6 +153,8 @@ for name in ('paged21.bin', 'paged22.bin', 'paged23.bin', 'paged31.bin', 'paged3
 for name in ('scan1.bin', 'scan2.bin'):
     with open(os.path.join(w, name), 'wb') as f:
         f.write(bytes((i * 7) % 256 for i in range(100000)))
+# trace fixture
+open(os.path.join(w, 'dbg1.bin'), 'wb').write(bytes(i % 256 for i in range(5000)))
 # and a 32-byte one, for the lines a scan must not be thrown by
 open(os.path.join(w, 'scan3.bin'), 'wb').write(bytes(range(32)))
 # single-page fixture, so a shrinking write can empty the file entirely
@@ -1885,6 +1887,33 @@ check "an empty, a bare and an indented line strip as the rule says" \
 check "and the bytes on them count towards the cursor's offset" \
     "[16, 22]" "$(sed -n 2p "$WORK/tsc3.out")"
 check "with nothing on them read as invalid" "{}" "$(sed -n 3p "$WORK/tsc3.out")"
+
+# --- The position-mapping trace -------------------------------------------
+# g:hexpair_debug is what a field report about a cursor landing on the
+# wrong byte is diagnosed with, so it has to still exist and still say
+# both directions of the mapping - and say nothing at all when it is off.
+cat > "$WORK/tdbg.vim" <<EOF
+$(printf "$HEX")
+let g:hexpair_debug = 1
+redir => on
+silent HexPairOpen $WORK/dbg1.bin 2
+silent HexPairGoOffset 600
+silent call HexPairPagedByteOffset()
+redir END
+let g:hexpair_debug = 0
+redir => off
+silent HexPairGoOffset 700
+silent call HexPairPagedByteOffset()
+redir END
+let lines = filter(split(on, "\n"), 'v:val =~# "^hexpair: "')
+call writefile([string([len(lines) >= 3, lines[1], lines[2]]), string(split(off, "\n"))], '$WORK/tdbg.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tdbg.vim" < /dev/null
+check "the trace says both directions of the mapping" \
+    "[1, 'hexpair: byte 599 -> hex view line 7, column 32', 'hexpair: hex view line 7, column 32 -> byte 599 (page base 512, 80 bytes above the line)']" \
+    "$(sed -n 1p "$WORK/tdbg.out")"
+check "and nothing at all when it is off" "[]" "$(sed -n 2p "$WORK/tdbg.out")"
 
 # ---------------------------------------------------------------------------
 if [ "$FAIL" -eq 0 ]; then

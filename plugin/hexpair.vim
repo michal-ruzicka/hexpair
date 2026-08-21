@@ -84,6 +84,15 @@ if !exists('g:hexpair_page_confirm')
   let g:hexpair_page_confirm = 1
 endif
 
+" Position-mapping trace, off by default. Every step that turns a cursor
+" position into a byte offset or back says which it made, so :messages
+" holds the whole chain after the fact - which is what a field report
+" about "the cursor landed on the wrong byte" needs, and how two such
+" bugs were actually found.
+if !exists('g:hexpair_debug')
+  let g:hexpair_debug = 0
+endif
+
 " Highlight groups for the byte-pair highlight:
 "   HexPairActive - the byte in the column the cursor is in (subtle)
 "   HexPairMirror - its counterpart in the other column (prominent)
@@ -155,6 +164,20 @@ endfunction
 " whole point of paging is that memory use does not follow the size of
 " the file.
 let s:blocksize = 8 * 1024 * 1024
+
+" ---------------------------------------------------------------------------
+" Debugging
+" ---------------------------------------------------------------------------
+
+" One line of the position-mapping trace (g:hexpair_debug). Cheap when
+" the trace is off, which is the case that matters: the check comes
+" before the formatting.
+function! s:Debug(fmt, ...) abort
+  if !g:hexpair_debug
+    return
+  endif
+  echomsg 'hexpair: ' . call('printf', [a:fmt] + a:000)
+endfunction
 
 " ---------------------------------------------------------------------------
 " xxd resolution
@@ -253,7 +276,10 @@ endfunction
 
 function! s:PostReloadOffset(pos) abort
   let lnum = a:pos.lnum > line('$') ? line('$') : a:pos.lnum
-  return line2byte(lnum) - 1 + a:pos.wcol + (lnum == 1 ? a:pos.bom : 0)
+  let off = line2byte(lnum) - 1 + a:pos.wcol + (lnum == 1 ? a:pos.bom : 0)
+  call s:Debug('++bin reload: line %d, %d bytes into it, %d of BOM -> byte %d',
+        \ lnum, a:pos.wcol, a:pos.bom, off)
+  return off
 endfunction
 
 
@@ -895,6 +921,8 @@ function! s:LoadPage(pageidx) abort
   endif
 
   call cursor(2, b:hexpair_page_hexstart)
+  call s:Debug('page %d/%d loaded: bytes [%d, %d) of %d, %d lines',
+        \ a:pageidx + 1, totalpages, base, base + len, total, line('$'))
 
   setlocal filetype=xxd
   call s:ApplyBannerSyntax()
@@ -1012,8 +1040,12 @@ function! s:PagedByteOffset() abort
   if s:IsBannerLine(getline('.'))
     return b:hexpair_page_base
   endif
-  return b:hexpair_page_base + s:PagedScan(line('.')).bytes
-        \ + s:PagedCursorLineIndex()
+  let scan = s:PagedScan(line('.'))
+  let off = b:hexpair_page_base + scan.bytes + s:PagedCursorLineIndex()
+  call s:Debug('hex view line %d, column %d -> byte %d (page base %d, '
+        \ . '%d bytes above the line)',
+        \ line('.'), col('.'), off, b:hexpair_page_base, scan.bytes)
+  return off
 endfunction
 
 " Put the cursor on the given ABSOLUTE file offset, clamped to the page.
@@ -1036,6 +1068,8 @@ function! s:PagedGotoOffset(abs) abort
   let [n, hexstart, hexend, asciistart] =
         \ s:PagedOffsetLayout(b:hexpair_page_base + rel / n * n)
   call cursor(rel / n + 2, hexstart + (rel % n) * 3)
+  call s:Debug('byte %d -> hex view line %d, column %d',
+        \ a:abs, line('.'), col('.'))
 endfunction
 
 " ---------------------------------------------------------------------------
@@ -1592,6 +1626,8 @@ function! s:Write() abort
     call s:CheckFresh()
     let off = s:PageBytes(raw)
     let newlen = getfsize(raw)
+    call s:Debug('write: page holds %d bytes, was %d; cursor on byte %d',
+          \ newlen, b:hexpair_page_len, off)
     if newlen == b:hexpair_page_len
       call s:PatchInPlace(raw)
     elseif !s:ConfirmResize(newlen)
@@ -2055,6 +2091,8 @@ function! s:ToHex() abort
   endif
 
   let off = s:PageSource()
+  call s:Debug('entering hex mode on byte %d, page %d',
+        \ off, off / g:hexpair_page_size + 1)
   call s:SetupPagedBuffer()
 
   " Start on the page holding the byte the cursor was on, not on page 1 -
@@ -2134,6 +2172,8 @@ function! s:TextByteOffset() abort
   for l in range(first, lnum - 1)
     let off += strlen(getline(l)) + 1
   endfor
+  call s:Debug('text view line %d, column %d -> byte %d',
+        \ lnum, col('.'), b:hexpair_page_base + off + col('.') - 1)
   return b:hexpair_page_base + off + col('.') - 1
 endfunction
 
