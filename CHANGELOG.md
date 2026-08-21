@@ -9,6 +9,47 @@ and this project adheres to
 
 ## [v2.1.0-devel] – 2026-08-21
 
+### Changed
+- **A page is scanned with whole-page regexes instead of a walk over its
+  lines**, which is most of what a write used to cost. On the default
+  128 KiB page, measured on the author's machine: a same-length `:w`
+  goes from 571 ms to 129 ms, a toggle to the text view from 539 ms to
+  83 ms, and `:HexPairPages` from 274 ms to under a millisecond. Nothing
+  about the payload rule changed — the per-line rule is still the
+  reference the whole-page pass is tested against, on a page of
+  thousands of lines. One consequence is visible: the bytes before the
+  cursor's line are counted from the digits of the preceding lines as
+  one run rather than rounding each line down on its own, which is what
+  `xxd -r -p` does when the page is written back, so a heavily edited
+  page with an odd number of digits on some line reports the byte the
+  write would actually produce.
+- **A page of a file the user cannot write opens `'readonly'`**, so `:w`
+  refuses it with Vim's own E45 the moment the page is opened, instead
+  of converting the page and surfacing a `Permission denied` from `xxd`
+  about a temporary file. `:w!` overrides it as everywhere else.
+- `:HexPairGoOffset` refuses a hex number written without the `0x`
+  (`ff`), which used to be read as the decimal 0 and reported as "byte
+  positions start at 1, not 0" — a complaint about the wrong thing.
+
+### Fixed
+- **`g:hexpair_debug` does something again.** The documented
+  position-mapping trace had lost every one of its call sites in the
+  v2.0.0 rewrite, while `README.md` and the plugin header went on
+  describing it. It traces the transitions — a page load, the `++bin`
+  reload, a byte turned into a position and a position turned back into
+  a byte in either view, and what a write found.
+- **The plugin runs on the Vim it claims again.** `count()` over a
+  string (patch 8.0.0794) and Blob literals (8.1.0735) had made
+  everything past *displaying* a page fail on Vim 8.0, which the docs
+  promised for viewing, navigating, same-length writes and in-place
+  inserts. Verified against a Vim 8.0.0000 build: only the splice paths
+  are refused there, each with the `readblob()` gate message.
+- Documentation that had stopped being true: `:HexPairOpen[!]` (the
+  command has no `!`), a Vim requirement justified by lambda
+  expressions the plugin no longer uses, and a Limitations section still
+  describing undo across the conversion boundary and a plugin that
+  "operates on the whole buffer", which paging replaced.
+
 ## [v2.0.0] – 2026-08-21
 
 ### Added
