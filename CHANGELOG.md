@@ -161,6 +161,12 @@ and this project adheres to
 None of these ever reached a release; they are listed because the code
 they were found in is what this release ships.
 
+- The error shown when a write needs `readblob()` on a Vim that lacks it
+  said that "only same-length edits can be written", which stopped being
+  true once inserts started moving the tail in place: an insert with no
+  more than half the file after it needs nothing newer than Vim 8.0. It
+  now names the operation that actually needs the newer Vim, and the
+  save-as path passes its own instead of rewriting the sentence.
 - On Windows a plain `:w` was taken for a `:w {other file}` and went down
   the save-as path, because the two spellings of the buffer's own path
   reaching the check — `<amatch>`'s full path and `bufname()`'s short one
