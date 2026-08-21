@@ -13,7 +13,8 @@
 # It defines one function:
 #
 #     vimhex FILE          the first page
-#     vimhex FILE PAGE     that page, 1-based
+#     vimhex FILE PAGE     that page, 1-based; also '$' for the last one
+#                          and '+N' / '-N' to step from the first
 #     vimhex FILE @BYTE    the page holding that byte, cursor on it;
 #                          decimal or 0x-prefixed, and 1-based, so a
 #                          position :HexPairPages reported can be typed
@@ -22,9 +23,14 @@
 #
 #     vimhex disk.img
 #     vimhex disk.img 37
+#     vimhex disk.img '$'          the end of the file, without counting pages
 #     vimhex disk.img @0x4a2000
 #     cat disk.img | vimhex -
 #     dd if=/dev/sda bs=1M count=64 | vimhex - @1024
+#
+# A block device (/dev/sda) cannot be paged directly: the size the system
+# reports for it is 0, and hexpair pages what a file says it holds. Read a
+# slice of it into a file, or pipe one in as above.
 #
 # Only the page on screen is read, so the size of the file does not matter.
 # Set VIMHEX_VIM to use a particular Vim, e.g. VIMHEX_VIM=/usr/bin/vim.
@@ -48,6 +54,9 @@ vimhex()
             jump='execute "HexPairGoOffset" $HEXPAIR_OPEN_WHERE'
             ;;
         *)
+            # A page number, '$' for the last page, or '+N' / '-N'.
+            # :HexPairPageGoto parses all three; passing it through the
+            # environment keeps the shell out of it.
             jump='execute "HexPairPageGoto" $HEXPAIR_OPEN_WHERE'
             ;;
     esac

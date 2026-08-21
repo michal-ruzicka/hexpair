@@ -28,9 +28,12 @@ installation even when it is not on `PATH`) and inside WSL.
 
 And it is good enough for real work on real files: because it shows one
 page at a time and writes one page at a time, a file that does not fit
-in memory — or on the machine at all, a disk image, a device — is no
-different from a small one. Editing an 8 GiB file costs the same 13 MB
-of memory as editing an 8 KiB one.
+in memory — a disk image, a core dump, a database — is no different from
+a small one. Editing an 8 GiB file costs the same 13 MB of memory as
+editing an 8 KiB one. (A block device such as `/dev/sda` is the one
+thing it cannot page: the size the system reports for one is 0, and
+hexpair pages what a file says it holds. Copy a slice of it into a file,
+or pipe one in — `dd if=/dev/sda bs=1M count=64 | vimhex -`.)
 
 **Project page:** <https://github.com/michal-ruzicka/hexpair> — source
 code, releases and issue tracker.
@@ -82,6 +85,18 @@ code, releases and issue tracker.
 - **Column navigation.** Commands to jump between the HEX and ASCII
   representation of the byte under the cursor, or to swap to the
   opposite column.
+- **A data inspector.** `:HexPairInspect` reads the bytes at the cursor
+  as the numbers they could be — 8, 16, 32 and 64 bits wide, unsigned
+  and signed, little- and big-endian, plus `float32` and `float64` —
+  which is the one question a hex dump cannot answer on its own.
+- **A selection knows its size.** `:HexPairSelection` says how many
+  bytes a Visual selection covers and which ones, in the same 1-based
+  numbering `:HexPairGoOffset` takes.
+- **Statusline support.** `HexPairStatus()` puts `hex 3/21 @0x4a2001` in
+  your statusline and returns nothing in buffers hexpair never touched,
+  so one statusline works everywhere.
+- **An optional column ruler.** `g:hexpair_ruler` numbers the byte
+  columns above the dump.
 - **Binary correctness.** Opening a file without `-b` is handled by an
   automatic `:edit ++bin` reload, so the dump always shows the exact
   on-disk bytes (and a plain `:w` cannot silently re-encode a binary
@@ -135,9 +150,14 @@ nmap <Leader>r <Plug>(HexPairRefresh)       " regenerate offsets/ASCII, no write
 " Moving around the file
 nmap <Leader>j <Plug>(HexPairPageNext)      " next page
 nmap <Leader>k <Plug>(HexPairPagePrev)      " previous page
-nmap <Leader>g <Plug>(HexPairPageGoto)      " prompt for a page number
+nmap <Leader>g <Plug>(HexPairPageGoto)      " prompt for a page (N, +N, -N, $)
 nmap <Leader>b <Plug>(HexPairGoOffset)      " prompt for a byte, 1-based (0x... ok)
 nmap <Leader>? <Plug>(HexPairPages)         " where am I: page, range, cursor byte
+
+" Reading the bytes
+nmap <Leader>i <Plug>(HexPairInspect)       " the bytes at the cursor as numbers
+nmap <Leader>s <Plug>(HexPairSelection)     " how many bytes the last selection was
+xmap <Leader>s <Plug>(HexPairSelection)     " ... and the one being made now
 
 " Uppercase variants: the same, but discard unwritten changes without
 " asking (like the ! commands) - handy for skimming through a file.
@@ -146,6 +166,11 @@ nnoremap <silent> <Leader>K :HexPairPagePrev!<CR>
 nmap <Leader>G <Plug>(HexPairPageGotoForce)
 nmap <Leader>B <Plug>(HexPairGoOffsetForce)
 ```
+
+Note the `xmap` on the last line of the third block: it is the same
+`<Plug>` target in **Visual** mode, where it reports the selection you
+are making rather than the last one. The other targets are Normal-mode
+only.
 
 `:HexPairOpen {file}` takes an argument, so it has no `<Plug>` target;
 it is meant for the command line or a shell wrapper (see below).
@@ -195,6 +220,7 @@ and it gives you `vimhex`:
 ```sh
 vimhex bigfile.bin              # the first page
 vimhex bigfile.bin 3            # page 3
+vimhex bigfile.bin '$'          # the last page, without counting them
 vimhex bigfile.bin @0x4a2000    # the page holding that byte
 cat bigfile.bin | vimhex -      # piped input
 ```
@@ -223,9 +249,45 @@ page. Close and reopen the file for the ordinary view.
 | `:HexPairGoHex` / `:HexPairGoAscii` / `:HexPairSwap` | Move the cursor between the HEX and ASCII columns, staying on the same byte |
 | `:HexPairRefresh` | Regenerate the offset and ASCII columns from the current hex payload, without writing |
 | `:HexPairOpen {file} [page]` | Open `{file}` paged, without loading it |
-| `:HexPairPageNext[!]` / `:HexPairPagePrev[!]` / `:HexPairPageGoto[!] {n}` | Turn pages (`!` discards unwritten changes) |
+| `:HexPairPageNext[!]` / `:HexPairPagePrev[!]` / `:HexPairPageGoto[!] {page}` | Turn pages (`!` discards unwritten changes); `{page}` is a number, `+N`/`-N` to step, or `$` for the last one |
 | `:HexPairGoOffset[!] {byte}` | Jump to a byte, decimal or `0x`-prefixed, turning the page if needed; 1-based, like the banner |
 | `:HexPairPages` | Report page X of Y, the offsets covered, the file size and the byte under the cursor |
+| `:HexPairInspect` | Read the bytes at the cursor as numbers: 8/16/32/64-bit, unsigned and signed, both endiannesses, and both IEEE 754 floats |
+| `:HexPairSelection` | Say how many bytes the Visual selection covers, and which |
+
+### Reading the bytes
+
+`:HexPairInspect` (mapped to `<Leader>i` above) reads the eight bytes at
+the cursor as everything they could be:
+
+```
+hexpair: byte 66 (0x42) of 512: 41 42 43 44 45 46 47 48
+  8-bit    65                          char 'A'  bin 01000001  oct 0101
+           little-endian               big-endian
+  16-bit   16961                       16706
+  32-bit   1145258561                  1094861636
+  64-bit   5208208757389214273         4702394921427289928
+  float32  781.035217                  12.141422
+  float64  1.58398e40                  2393736.541207
+```
+
+The signed reading follows the unsigned one where the two differ
+(`43981 / -21555`). The bytes are this page's, as the buffer holds them
+— edits included — so at the end of a page the wider rows say how many
+are left instead of reaching into a page that is not on screen.
+
+`:HexPairSelection` (`<Leader>s`, in Visual mode too) says what a
+selection covers:
+
+```
+hexpair: 18 bytes selected, 1041-1058 (0x411-0x422) of 5000
+hexpair: 12 bytes selected in 3 lines (4 per line), 1041-1076 (0x411-0x434) of 5000
+```
+
+The second form is a blockwise selection, whose bytes are not one run —
+so it leads with the count. Both work in either view, and the numbers
+are 1-based, the same as the banner's, so they can be typed straight
+into `:HexPairGoOffset`.
 
 Editing rules (see `:help hexpair` for details): keep bytes in the hex
 area separated by at most one space — a run of two spaces marks the
@@ -258,30 +320,61 @@ Where the pages come from depends on what the buffer was:
 
 ### Configuration
 
+Every option, with its default, ready to paste into `~/.vimrc` — the
+values shown are the defaults, so uncomment a line only to change one.
+
 ```vim
-" bytes per dump line (default 16)
-let g:hexpair_bytes_per_line = 32
+" ---- hexpair -------------------------------------------------------------
 
-" bytes per page (default 128 KiB); must stay a positive multiple of
+" Bytes per dump line.
+" let g:hexpair_bytes_per_line = 16
+
+" Bytes per page. Must stay a positive multiple of
 " g:hexpair_bytes_per_line. A page is an ordinary Vim buffer, so a bigger
-" one costs what that many lines cost - see "What it costs" below
-let g:hexpair_page_size = 1024 * 1024
+" one costs what that many lines cost - see "What it costs" below.
+" let g:hexpair_page_size = 128 * 1024
 
-" whether a write that changes the page's length says what it will cost
-" and asks first (default 1); 0 answers yes automatically, e.g. in a script
-let g:hexpair_page_confirm = 0
+" Whether a write that changes the page's length says what it will cost
+" and asks first. Set it to 0 to answer yes automatically, e.g. in a script.
+" let g:hexpair_page_confirm = 1
 
-" keep the global 'paste' option on while the cursor is in a hex buffer,
-" restored when the cursor leaves it (default 1; 0 leaves 'paste' alone)
-let g:hexpair_paste = 0
+" Keep the global 'paste' option on while the cursor is in a hex buffer,
+" and restore it when the cursor leaves. 0 leaves 'paste' alone.
+" let g:hexpair_paste = 1
 
-" highlight overrides
-highlight HexPairActive cterm=bold,underline gui=bold,underline
-highlight HexPairMirror ctermbg=52 guibg=#5f0000
+" A ruler line under the banner, numbering the byte columns of the dump.
+" Set it to 1 to get one.
+" let g:hexpair_ruler = 0
 
-" position-mapping trace for debugging (inspect with :messages)
-let g:hexpair_debug = 1
+" Position-mapping trace for diagnosing a cursor that landed on the wrong
+" byte. Set it to 1 and read the trace with :messages.
+" let g:hexpair_debug = 0
+
+" Highlight overrides: the byte under the cursor, its counterpart in the
+" other column, and the banner (and ruler) lines.
+" highlight HexPairActive cterm=bold,underline gui=bold,underline
+" highlight HexPairMirror ctermbg=52 guibg=#5f0000
+" highlight link HexPairPageBanner Comment
+
+" The page and the byte under the cursor, in the statusline. Empty in
+" every buffer hexpair has not touched, so one statusline serves both.
+" set statusline=%f\ %h%w%m%r\ %{HexPairStatus()}%=%l,%c%V\ %P
 ```
+
+With the ruler on, a page looks like this — the ruler is decoration, it
+carries no bytes and is never written:
+
+```
+" hexpair: page 2/10  bytes 513-1024 of 5000  disk.img
+"         00 01 02 03 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f  0123456789abcdef
+00000200: 00 01 02 03 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f  ................
+```
+
+`HexPairStatus()` gives `hex 3/21 @0x4a2001` in the hex view and
+`txt 3/21 @0x4a2001` in the text view; a page with unwritten edits is
+marked `hex 3/21+ @…`, and the byte is then where the layout puts it —
+use `:HexPairPages` for the counted answer once you have inserted or
+deleted digits.
 
 The plugin also bundles a filetype plugin (`ftplugin/xxd.vim`) with
 editing defaults for the dump: `tabstop=10`, `expandtab`,
@@ -304,13 +397,13 @@ is ever read.
 |---|---|
 | `:HexPairOpen {file} [page]` | Open `{file}` paged at `[page]` (1-based, default 1) without loading it |
 | `:HexPairPageNext[!]` / `:HexPairPagePrev[!]` | Turn the page; refuses to discard unwritten changes without `!` |
-| `:HexPairPageGoto[!] {N}` | Jump to page `{N}` |
+| `:HexPairPageGoto[!] {page}` | Jump to page `{page}`: a number, `+N` / `-N` to step, or `$` for the last one |
 | `:HexPairGoOffset[!] {byte}` | Jump to a byte, decimal or `0x`-prefixed; 1-based, like the banner |
 | `:HexPairPages` | Report the current page, total pages, the byte range shown, and the byte under the cursor |
 
 `<Plug>(HexPairPageGoto)` (mapping example above) prompts for a page
-number with `input()` instead of requiring a typed `:HexPairPageGoto
-{N}` — press the key, type a number, Enter.
+with `input()` instead of requiring a typed `:HexPairPageGoto {page}` —
+press the key, type a number (or `+2`, `-1`, `$`), Enter.
 `<Plug>(HexPairPageGotoForce)` is the same prompt but discards unsaved
 changes without asking, like the `{N}` variant with `!`.
 
@@ -334,8 +427,11 @@ edits in it, and leaves the original alone. For piped input that is the
 only way to save, and the view adopts the file afterwards.
 
 A file that changed on disk since the page was read is refused rather
-than patched blindly. `g:hexpair_page_confirm = 0` answers the resize
-question automatically, for scripts.
+than patched blindly — and not only by its size and timestamp, which
+whole-second resolution lets an in-place writer slip past: the page's
+own bytes are hashed when it is read and again before it is patched.
+`g:hexpair_page_confirm = 0` answers the resize question automatically,
+for scripts.
 
 Only a write that **shortens** a file, and `:w {file}`, need a newer Vim
 than the rest of the plugin: `+num64` and patch 8.2.4906+, for
@@ -360,7 +456,10 @@ of 8 KiB and one of 8 TiB — measured on this machine with the default
 Time is what does scale, and only with what has to move: a same-length
 write touches the page alone, an insert moves the bytes after it, and a
 delete rewrites the file — because nothing in Vim or `xxd` can make a
-file shorter any other way.
+file shorter any other way. On this machine, at the default page size,
+opening or turning a page takes about 0.03 s and a same-length write
+about 0.15 s; both include reading the page's bytes back to check that
+nothing else has written to them meanwhile.
 
 The one exception to all of this is `:HexPairToggle` on a file you have
 already opened normally: by the time you press it, Vim has read the whole

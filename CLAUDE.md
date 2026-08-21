@@ -33,6 +33,10 @@ CONTRIBUTING.md       - developer docs (bundled in the release tarball)
 CHANGELOG.md          - Keep-a-Changelog formatted release notes
 LICENSE.md            - Vim License + copyright notice
 CLAUDE.md             - this file
+hexpair.bashrc        - the `vimhex` shell wrapper, sourced from the
+                        user's ~/.bashrc; opens a file (or piped input)
+                        straight in the hex view, and is bundled in the
+                        release tarball
 pack-release          - POSIX wrapper around pack-release.py
 pack-release.cmd      - Windows wrapper around pack-release.py
 pack-release.py       - the packaging implementation (python3, stdlib
