@@ -429,6 +429,7 @@ is ever read.
 | `:HexPairPageGoto[!] {page}` | Jump to page `{page}`: a number, `+N` / `-N` to step, or `$` for the last one |
 | `:HexPairGoOffset[!] {byte}` | Jump to a byte, decimal or `0x`-prefixed; 1-based, like the banner |
 | `:HexPairPages` | Report the current page, total pages, the byte range shown, and the byte under the cursor |
+| `:HexPairSplit [page]` / `:HexPairVSplit [page]` | A second view of the same file in another window, at `[page]` — see [above](#two-views-of-one-file) |
 
 `<Plug>(HexPairPageGoto)` (mapping example above) prompts for a page
 with `input()` instead of requiring a typed `:HexPairPageGoto {page}` —
