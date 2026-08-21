@@ -9,6 +9,42 @@ and this project adheres to
 
 ## [v2.1.0-devel] – 2026-08-21
 
+### Added
+- **A data inspector.** `:HexPairInspect` (`<Plug>(HexPairInspect)`)
+  reads the bytes at the cursor as the numbers they could be: 8, 16, 32
+  and 64 bits wide, unsigned and signed, little- and big-endian, plus
+  `float32` and `float64`, with the byte itself also shown as a
+  character, in binary and in octal. The bytes are the page's, as the
+  buffer holds them — edits included — and stop at its end, where the
+  wider rows say how many are left rather than reaching into a page that
+  is not on screen.
+- **`:HexPairSelection`** (`<Plug>(HexPairSelection)`, worth mapping in
+  Visual mode as well as Normal) says how many bytes a Visual selection
+  covers and which, 1-based like the banner, so the numbers can be typed
+  straight into `:HexPairGoOffset`. A blockwise selection, whose bytes
+  are not one run, leads with the count and says how many lines and how
+  many per line.
+- **`HexPairStatus()`** for `'statusline'`: `hex 3/21 @0x4a2001` in the
+  hex view, `txt 3/21 @0x4a2001` in the text view, and an empty string
+  in every buffer hexpair has not touched, so one statusline serves
+  both. It never walks the page — it is called on every cursor movement
+  — and marks a page with unwritten edits with a `+`.
+- **`g:hexpair_ruler`** (default 0): a ruler line between the banner and
+  the dump, numbering the byte columns — two digits over each hex byte,
+  the low nibble over each ASCII character. Like the banners it starts
+  with a `"` and therefore carries no bytes.
+- **`:HexPairPageGoto` takes `$` and `+N`/`-N`** as well as a page
+  number, at the command line and at the `<Plug>` prompt alike — and
+  therefore in `vimhex` too: `vimhex disk.img '$'` opens the end of a
+  file without working out how many pages it has.
+- **The page's own bytes are hashed** when it is read and again before it
+  is patched, so a writer that changes bytes in place within the same
+  second — invisible to the file's size and modification time, which is
+  all a portable Vim can see — is caught rather than overwritten. It
+  costs one page read on either side (a page turn 13 ms → 26 ms, a
+  same-length write 129 ms → 144 ms at the default page size, both
+  independent of the size of the file).
+
 ### Changed
 - **A page is scanned with whole-page regexes instead of a walk over its
   lines**, which is most of what a write used to cost. On the default
@@ -32,6 +68,10 @@ and this project adheres to
   positions start at 1, not 0" — a complaint about the wrong thing.
 
 ### Fixed
+- **The cursor in the gap between the hex and the ASCII column** reported
+  the first byte of the NEXT line rather than the last of its own: the
+  pairs counted before it were the whole line's. `:HexPairPages`, the
+  byte a write puts the cursor back on and the statusline all read that.
 - **`g:hexpair_debug` does something again.** The documented
   position-mapping trace had lost every one of its call sites in the
   v2.0.0 rewrite, while `README.md` and the plugin header went on

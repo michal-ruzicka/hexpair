@@ -175,6 +175,13 @@ Key function map:
 4. No default key mappings; commands + `<Plug>` only.
 5. English only: code, comments, docs, commit messages.
 6. Author attribution: `Michal Růžička <ruzicka.mich@gmail.com>`.
+7. A dump line is buffer line `k + s:HeaderLines()`, **never** a literal
+   2: `g:hexpair_ruler` puts a second line above the dump. Every mapping
+   between a line number and a byte offset — `s:PagedLineBase()`,
+   `s:PagedGotoOffset()`, `s:PosOffset()`, `HexPairStatus()`, the line
+   count `s:LoadPage()` checks xxd's output against — goes through it.
+   The text view has no ruler, so its own header is always the one
+   banner line, matched by exact text (`s:TextBodyRange()`).
 
 ## Testing
 
@@ -247,6 +254,8 @@ come back**; each names the test that would catch it.
 | The whole-page scan read a line differently from the per-line rule (a `\zs` anchor that consumed the newline; a negated collection that matched the end-of-line only on a long string) | "the whole-page scan says what the per-line rule says" — on a 6250-line page, since neither shows up on a short one |
 | `count()` over a string (patch 8.0.0794) and Blob literals (8.1.0735) broke the documented Vim 8.0 baseline: everything past *displaying* a page failed with E712 | the baseline run below, and no `count()`/`0z` left in the plugin |
 | `g:hexpair_debug` was documented but no longer implemented at all | "the trace says both directions of the mapping" |
+| The cursor in the gap between the hex and ASCII columns reported the NEXT line's first byte, because the pairs counted before it were the whole line's | "and it is the byte the layout says" — which pins the gap column too |
+| `count` is a read-only Vim variable (`v:count`), so a local named that aborts the function it is in with E46 | caught by the selection tests; do not name a local `count`, `errmsg`, `line`… |
 
 **The Vim version floor is a claim that has to be run.** The plugin says
 everything but the splice works on Vim 8.0; it did not, for a year, and
@@ -556,12 +565,50 @@ was designed and built in Stage 2 - see "What Stage 2 decided".
     removed with the `\n` ATOM (`s:PagedFlatten()`) before any
     collection is applied. This is why the scan is tested against a
     6250-line page and not a handful of lines.
-- `s:PagedByteOffset()` — while the buffer is **unmodified** the page is
-  exactly what xxd produced, so the bytes above the cursor's line are
-  `(line - 2) * n` and no pass is needed; the within-line part goes
-  through the same `s:PagedCursorLineIndex()` either way, so the two
+- `s:PagedLineBase()` / `s:PagedOffsetAt()` — position → byte offset for
+  ANY position, not just the cursor's (`s:PagedByteOffset()` is the
+  cursor wrapper; the selection report needs the same mapping for the
+  two ends of a selection). While the buffer is **unmodified** the page
+  is exactly what xxd produced, so the bytes above a line are
+  `(line - 1 - header) * n` and no pass is needed; the within-line part
+  goes through the same `s:PagedLineIndexAt()` either way, so the two
   paths cannot read a line differently. This is what keeps `:w` (which
-  reports the cursor byte when it finishes) off a second pass.
+  reports the cursor byte when it finishes) off a second pass, and what
+  makes `HexPairStatus()` safe to call on every cursor movement.
+- `b:hexpair_page_header` / `s:HeaderLines()` — how many lines sit above
+  the first dump line: the banner, plus the ruler when
+  `g:hexpair_ruler` was on at page load (snapshotted like `b:hexpair_n`,
+  and for the same reason). See invariant 7.
+- `s:RulerLine()` / `s:HexViewLines()` — the ruler is built for the
+  page's FIRST line's layout, and starts with `"`, which is what already
+  makes a line contribute no bytes. `s:HexViewLines()` is the one place
+  the hex view's shape (banner, ruler, dump, banner) is spelled out, so
+  `s:LoadPage()` and `s:ToHexView()` cannot build different views.
+- `s:PageDigest()` — sha256 of the page's own bytes, taken at load and
+  again in `s:CheckFresh()` before a patch. Size and mtime cannot see a
+  writer that changed bytes in place within the same second; this can.
+  Empty (and skipped) where `sha256()` does not exist or the read fails.
+- `HexPairStatus()` — `'statusline'` support; empty outside hexpair
+  buffers so one statusline serves every buffer. Must never walk the
+  page: it is called on every cursor movement. On an edited page it
+  marks a `+` and reports the canonical byte, and says so in the help.
+- `HexPairPagedSelectionBytes()` / `HexPairPagedSelectionText()` — what
+  a Visual selection covers, split into geometry and wording. Global and
+  parameterized by the two ends and the mode, like
+  `HexPairPagedSelectionPositions()` next to it, because Visual mode
+  cannot be driven under `vim -es`.
+- The data inspector — `s:InspectBytes()` reads at most eight bytes
+  **from the page as the buffer holds it**, without walking it: out of
+  the payload digits from the cursor onward in the hex view, and through
+  `writefile(..., 'b')` on the two or three lines involved in the text
+  view (the only exact way to get bytes out of a Vim string, where a NUL
+  lives as a NL). Everything downstream of it is pure and tested
+  directly: `HexPairPagedInspectLines()`, `HexPairPagedIeeeText()`
+  (decoded from the BYTES, with the mantissa carried as a Float, so
+  nothing depends on how wide a Number is), `HexPairPagedU64Text()` and
+  `HexPairPagedDecSub()` (a 64-bit pattern with its top bit set has no
+  unsigned form in a signed Number, so it is printed by subtracting in
+  decimal), `HexPairPagedBinaryText()` (no `%b` on the supported Vim).
 - Loading a page happens with `'undolevels'` at **-1, buffer-locally**
   (|clear-undo|), so the undo history never survives a page turn:
   a single `u` afterwards would otherwise put the bytes of a different
@@ -689,7 +736,20 @@ above).
   `:HexPairPageGoto!` — a direct Ex-command test of the bang variant
   covers this pass-through without needing `input()`.
 - `:HexPairPages` — reports `page X of Y, offsets A-B of total S
-  bytes (file)`.
+  bytes (file)`, plus the byte under the cursor.
+- `:HexPairPageGoto {page}` — `{page}` is a number, `+N`/`-N` to step,
+  or `$` for the last page; `HexPairPagedParsePageInput()` (pure) says
+  which, `HexPairPagedResolvePage()` (pure) turns it into a page number
+  against the one in view, and both feed the prompt as well as the
+  command. A step past either end is REFUSED, not clamped — the same
+  "page N does not exist" a number out of range gets — so a mistyped
+  step does not quietly land somewhere else.
+- `:HexPairInspect`, `:HexPairSelection` — the data inspector and the
+  selection report; see the function map above for how the bytes and
+  the geometry are obtained without walking the page.
+- `g:hexpair_ruler` — see invariant 7; the option is snapshotted into
+  `b:hexpair_page_header` at page load, never read directly by the
+  arithmetic.
 - `g:hexpair_page_size` — default `1024 * 1024` (1 MiB — overriding an
   earlier 64 MiB draft of this plan; small enough to set down to e.g.
   `512` for tests). Validated as a positive multiple of
