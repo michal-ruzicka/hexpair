@@ -553,6 +553,10 @@ endfunction
 " cursor is on. Both are what the paged mode's correctness across a
 " 4 GiB offset-width change comes down to, and neither is otherwise
 " observable from outside this script scope.
+function! HexPairPagedReport() abort
+  return s:PagesText()
+endfunction
+
 function! HexPairPagedLineHexStart(lnum) abort
   return s:PagedLineLayout(a:lnum)[1]
 endfunction
@@ -1728,14 +1732,37 @@ endfunction
 " 1-based, inclusive byte positions - see the comment on s:BannerTop(),
 " which this must stay consistent with (it reports the same
 " information the banner shows).
+" Position of the byte under the cursor, 1-based, or 0 when the cursor is
+" not on one - a banner line has no byte, and an empty file has none at
+" all. 1-based to match the banner's range and what |:HexPairGoOffset|
+" takes, so the number can be typed straight back in.
+function! s:CursorBytePosition() abort
+  if b:hexpair_page_len <= 0
+    return 0
+  endif
+  if s:IsHexView()
+    return s:IsBannerLine(getline('.')) ? 0 : s:PagedByteOffset() + 1
+  endif
+  try
+    return s:TextByteOffset() + 1
+  catch /^hexpair:/
+    return 0
+  endtry
+endfunction
+
 function! s:PagesText() abort
   if b:hexpair_page_totalpages == 0
     return printf('hexpair: %s is empty (no pages)', b:hexpair_page_file)
   endif
-  return printf('hexpair: page %d of %d, offsets %d-%d of total %d bytes (%s)',
+  let text = printf('hexpair: page %d of %d, offsets %d-%d of total %d bytes (%s)',
         \ b:hexpair_page_index + 1, b:hexpair_page_totalpages,
         \ b:hexpair_page_base + 1, b:hexpair_page_base + b:hexpair_page_len,
         \ b:hexpair_page_total, s:PageLabel())
+  " The byte under the cursor, in the form :HexPairGoOffset and vimhex's
+  " @BYTE both accept, so where you are can be written down and gone back
+  " to - in this session or another one.
+  let at = s:CursorBytePosition()
+  return at > 0 ? printf('%s; cursor on byte 0x%x (%d)', text, at, at) : text
 endfunction
 
 " Prompt for a byte offset and jump to it - the <Plug> equivalent of

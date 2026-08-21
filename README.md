@@ -199,7 +199,7 @@ page. Close and reopen the file for the ordinary view.
 | `:HexPairOpen[!] {file} [page]` | Open `{file}` paged, without loading it |
 | `:HexPairPageNext[!]` / `:HexPairPagePrev[!]` / `:HexPairPageGoto[!] {n}` | Turn pages (`!` discards unwritten changes) |
 | `:HexPairGoOffset[!] {byte}` | Jump to a byte, decimal or `0x`-prefixed, turning the page if needed; 1-based, like the banner |
-| `:HexPairPages` | Report page X of Y, the offsets covered and the file size |
+| `:HexPairPages` | Report page X of Y, the offsets covered, the file size and the byte under the cursor |
 
 Editing rules (see `:help hexpair` for details): keep bytes in the hex
 area separated by at most one space — a run of two spaces marks the
@@ -269,7 +269,7 @@ is ever read.
 | `:HexPairPageNext[!]` / `:HexPairPagePrev[!]` | Turn the page; refuses to discard unwritten changes without `!` |
 | `:HexPairPageGoto[!] {N}` | Jump to page `{N}` |
 | `:HexPairGoOffset[!] {byte}` | Jump to a byte, decimal or `0x`-prefixed; 1-based, like the banner |
-| `:HexPairPages` | Report the current page, total pages and the byte range shown |
+| `:HexPairPages` | Report the current page, total pages, the byte range shown, and the byte under the cursor |
 
 `<Plug>(HexPairPageGoto)` (mapping example above) prompts for a page
 number with `input()` instead of requiring a typed `:HexPairPageGoto

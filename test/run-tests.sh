@@ -75,7 +75,7 @@ for name in ('ref1.bin', 'ref2.bin', 'ref3.bin', 'ref4.bin', 'ref5.bin'):
     open(os.path.join(w, name), 'wb').write(b'ABCDEFGH')
 # paged-mode fixture: 5000 bytes, byte i has value i % 256 - at 512
 # bytes/page that is 10 pages, the last one short (392 bytes)
-for name in ('paged21.bin', 'paged22.bin', 'paged23.bin', 'paged31.bin', 'paged32.bin', 'undo1.bin', 'layout1.bin', 'jump1.bin', 'paste1.bin', 'abandon1.bin', 'ulocal1.bin', 'src1.bin', 'off1.bin', 'multi.bin', 'multi2.bin', 'same1.bin', 'vis1.bin', 'ip1.bin', 'ip2.bin', 'ip3.bin', 'w1.bin', 'w2.bin', 'w3.bin', 'w4.bin', 'w5.bin', 'sp1.bin', 'sp2.bin', 'sp3.bin', 'sp4.bin'):
+for name in ('paged21.bin', 'paged22.bin', 'paged23.bin', 'paged31.bin', 'paged32.bin', 'undo1.bin', 'layout1.bin', 'jump1.bin', 'paste1.bin', 'abandon1.bin', 'ulocal1.bin', 'src1.bin', 'off1.bin', 'multi.bin', 'multi2.bin', 'same1.bin', 'vis1.bin', 'pos1.bin', 'ip1.bin', 'ip2.bin', 'ip3.bin', 'w1.bin', 'w2.bin', 'w3.bin', 'w4.bin', 'w5.bin', 'sp1.bin', 'sp2.bin', 'sp3.bin', 'sp4.bin'):
     with open(os.path.join(w, name), 'wb') as f:
         f.write(bytes(i % 256 for i in range(5000)))
 # single-page fixture, so a shrinking write can empty the file entirely
@@ -546,7 +546,7 @@ qa!
 EOF
 vim -es -u NONE -S "$WORK/t24.vim"
 check "HexPairPages reports page/offsets/total" \
-    "hexpair: page 3 of 10, offsets 1025-1536 of total 5000 bytes ($WORK/paged21.bin)" \
+    "hexpair: page 3 of 10, offsets 1025-1536 of total 5000 bytes ($WORK/paged21.bin); cursor on byte 0x401 (1025)" \
     "$(cat "$WORK/t24.out")"
 
 # --- Test 25: splice version-gate message function, both branches ----------
@@ -1582,6 +1582,34 @@ EOF
 vim -es -u NONE -S "$WORK/tip3.vim" < /dev/null
 check "a delete shrinks the file"        "[0, 4984]" "$(cat "$WORK/tip3.out")"
 check "its head survives the rewrite"    "$IP3_HEAD" "$(hash_range "$WORK/ip3.bin" 0 2048)"
+
+# --- :HexPairPages says which byte the cursor is on ------------------------
+# In the form :HexPairGoOffset and vimhex's @BYTE both take, so a position
+# can be written down and gone back to. 1-based, like the banner's range.
+cat > "$WORK/tcb.vim" <<EOF
+$(printf "$PAGEDW")
+HexPairOpen $WORK/pos1.bin 3
+call cursor(4, 20)
+let inhex = s:PagesTextProbe()
+normal! 1G
+let banner = s:PagesTextProbe()
+HexPairToggle
+call cursor(3, 5)
+let intext = s:PagesTextProbe()
+call writefile([inhex, banner, intext], '$WORK/tcb.out')
+qa!
+EOF
+sed -i 's/s:PagesTextProbe()/HexPairPagedReport()/g' "$WORK/tcb.vim"
+vim -es -u NONE -S "$WORK/tcb.vim" < /dev/null
+check "the cursor byte is reported in hex and decimal" \
+    "hexpair: page 3 of 10, offsets 1025-1536 of total 5000 bytes ($WORK/pos1.bin); cursor on byte 0x424 (1060)" \
+    "$(sed -n 1p "$WORK/tcb.out")"
+check "a banner line has no byte to report" \
+    "hexpair: page 3 of 10, offsets 1025-1536 of total 5000 bytes ($WORK/pos1.bin)" \
+    "$(sed -n 2p "$WORK/tcb.out")"
+check "the text view reports it too" \
+    "hexpair: page 3 of 10, offsets 1025-1536 of total 5000 bytes ($WORK/pos1.bin); cursor on byte 0x410 (1040)" \
+    "$(sed -n 3p "$WORK/tcb.out")"
 
 # ---------------------------------------------------------------------------
 if [ "$FAIL" -eq 0 ]; then

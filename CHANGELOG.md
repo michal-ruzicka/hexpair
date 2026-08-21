@@ -44,6 +44,10 @@ and this project adheres to
   a byte of content.
 
 ### Added
+- `:HexPairPages` also reports the byte under the cursor, in hex with
+  the decimal in brackets and 1-based — exactly the form
+  `:HexPairGoOffset` and the `vimhex` wrapper's `@BYTE` take, so a
+  position can be written down and gone back to.
 - **Inserting bytes no longer rewrites the file.** Bytes cannot be
   spliced into the middle of a file, but they do not have to be: only
   what follows them has to move. The tail is now shifted right in place
