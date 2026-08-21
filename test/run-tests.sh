@@ -75,7 +75,7 @@ for name in ('ref1.bin', 'ref2.bin', 'ref3.bin', 'ref4.bin', 'ref5.bin'):
     open(os.path.join(w, name), 'wb').write(b'ABCDEFGH')
 # paged-mode fixture: 5000 bytes, byte i has value i % 256 - at 512
 # bytes/page that is 10 pages, the last one short (392 bytes)
-for name in ('paged21.bin', 'paged22.bin', 'paged23.bin', 'paged31.bin', 'paged32.bin', 'undo1.bin', 'layout1.bin', 'jump1.bin', 'paste1.bin', 'abandon1.bin', 'ulocal1.bin', 'src1.bin', 'off1.bin', 'multi.bin', 'multi2.bin', 'same1.bin', 'vis1.bin', 'pos1.bin', 'ip1.bin', 'ip2.bin', 'ip3.bin', 'w1.bin', 'w2.bin', 'w3.bin', 'w4.bin', 'w5.bin', 'sp1.bin', 'sp2.bin', 'sp3.bin', 'sp4.bin'):
+for name in ('paged21.bin', 'paged22.bin', 'paged23.bin', 'paged31.bin', 'paged32.bin', 'undo1.bin', 'layout1.bin', 'jump1.bin', 'paste1.bin', 'abandon1.bin', 'ulocal1.bin', 'src1.bin', 'off1.bin', 'multi.bin', 'multi2.bin', 'same1.bin', 'vis1.bin', 'pos1.bin', 'ip1.bin', 'ip2.bin', 'ip3.bin', 'w1.bin', 'w2.bin', 'w3.bin', 'w4.bin', 'w5.bin', 'sp1.bin', 'sp2.bin', 'sp3.bin', 'sp4.bin', 'tv1.bin', 'tv2.bin', 'tv3.bin', 'tv4.bin'):
     with open(os.path.join(w, name), 'wb') as f:
         f.write(bytes(i % 256 for i in range(5000)))
 # single-page fixture, so a shrinking write can empty the file entirely
@@ -1586,6 +1586,114 @@ EOF
 vim -es -u NONE -S "$WORK/tip3.vim" < /dev/null
 check "a delete shrinks the file"        "[0, 4984]" "$(cat "$WORK/tip3.out")"
 check "its head survives the rewrite"    "$IP3_HEAD" "$(hash_range "$WORK/ip3.bin" 0 2048)"
+
+# ===========================================================================
+# Paged mode: writing from the WINDOWED TEXT VIEW
+# ===========================================================================
+# The same write paths as above, but reached from the other view, which
+# sources the page's bytes completely differently: the hex view strips a
+# dump, the text view takes the buffer's lines as they are. That round trip
+# goes through readfile()/writefile() in binary mode, because a NUL byte is
+# stored as a NL *inside* a Vim line and getline() alone cannot express the
+# difference. The fixture holds every byte value, NUL and 0x0a included, so
+# it exercises exactly that.
+#
+# Page 2 at 512 bytes/page is file bytes 512-1023, values 0-255 twice. The
+# two 0x0a bytes in it (at 522 and 778) split the view into three lines:
+# body line 1 is bytes 512-521, line 2 is 523-777, line 3 is 779-1023.
+
+# --- No edit at all must still round-trip every byte -----------------------
+TV1_ALL=$(hash_range "$WORK/tv1.bin" 0 -1)
+cat > "$WORK/ttv1.vim" <<EOF
+$(printf "$PAGEDW")
+HexPairOpen $WORK/tv1.bin 2
+HexPairToggle
+let view = b:hexpair_view
+let body = line('\$') - 2
+setlocal modified
+write
+call writefile([string([view, body, &l:modified])], '$WORK/ttv1.out')
+qa!
+EOF
+vim -es -u NONE -S "$WORK/ttv1.vim" < /dev/null
+check "the text view holds the page's bytes as three lines" "['text', 3, 0]" \
+    "$(cat "$WORK/ttv1.out")"
+check "writing it back unedited changes nothing" "$TV1_ALL" \
+    "$(hash_range "$WORK/tv1.bin" 0 -1)"
+check "and does not change the length" "5000" "$(file_size "$WORK/tv1.bin")"
+
+# --- A same-length edit patches the page in place, as in the hex view ------
+TV2_HEAD=$(hash_range "$WORK/tv2.bin" 0 512)
+TV2_TAIL=$(hash_range "$WORK/tv2.bin" 1024 -1)
+TV2_REST=$(hash_range "$WORK/tv2.bin" 513 511)
+cat > "$WORK/ttv2.vim" <<EOF
+$(printf "$PAGEDW")
+HexPairOpen $WORK/tv2.bin 2
+HexPairToggle
+call setline(2, 'A' . strpart(getline(2), 1))
+write
+call writefile([string([&l:modified])], '$WORK/ttv2.out')
+qa!
+EOF
+vim -es -u NONE -S "$WORK/ttv2.vim" < /dev/null
+check "a text-view write clears 'modified'" "[0]" "$(cat "$WORK/ttv2.out")"
+check "a text-view write keeps the file length" "5000" "$(file_size "$WORK/tv2.bin")"
+check "it left the head untouched" "$TV2_HEAD" "$(hash_range "$WORK/tv2.bin" 0 512)"
+check "it left the tail untouched" "$TV2_TAIL" "$(hash_range "$WORK/tv2.bin" 1024 -1)"
+check "the rest of the page survived the round trip" "$TV2_REST" \
+    "$(hash_range "$WORK/tv2.bin" 513 511)"
+check "it changed exactly the edited byte" \
+    "00000200: 41 01 02 03                                      A..." \
+    "$(xxd -s 512 -l 4 -g 1 "$WORK/tv2.bin")"
+
+# --- A growing edit moves the tail, from this view too ---------------------
+TV3_HEAD=$(hash_range "$WORK/tv3.bin" 0 512)
+TV3_TAIL=$(hash_range "$WORK/tv3.bin" 1024 -1)
+TV3_REST=$(hash_range "$WORK/tv3.bin" 522 502)
+cat > "$WORK/ttv3.vim" <<EOF
+$(printf "$PAGEDW")
+HexPairOpen $WORK/tv3.bin 2
+HexPairToggle
+call setline(2, getline(2) . 'Z')
+write
+call writefile([string([&l:modified])], '$WORK/ttv3.out')
+qa!
+EOF
+vim -es -u NONE -S "$WORK/ttv3.vim" < /dev/null
+check "a growing text-view write clears 'modified'" "[0]" "$(cat "$WORK/ttv3.out")"
+check "the file grew by the one byte inserted" "5001" "$(file_size "$WORK/tv3.bin")"
+check "everything before the page is byte-identical" "$TV3_HEAD" \
+    "$(hash_range "$WORK/tv3.bin" 0 512)"
+check "everything after it is byte-identical, just moved" "$TV3_TAIL" \
+    "$(hash_range "$WORK/tv3.bin" 1025 -1)"
+check "the rest of the page moved up intact" "$TV3_REST" \
+    "$(hash_range "$WORK/tv3.bin" 523 502)"
+check "the inserted byte is where the edit put it" \
+    "0000020a: 5a 0a 0b                                         Z.." \
+    "$(xxd -s 522 -l 3 -g 1 "$WORK/tv3.bin")"
+
+# --- An edited banner refuses the write: which lines are content is then
+# --- guesswork, and in a page of raw bytes a leading '"' proves nothing ----
+TV4_ALL=$(hash_range "$WORK/tv4.bin" 0 -1)
+cat > "$WORK/ttv4.vim" <<EOF
+$(printf "$PAGEDW")
+HexPairOpen $WORK/tv4.bin 2
+HexPairToggle
+call setline(1, getline(1) . ' tampered')
+try
+  write
+  let outcome = 'written'
+catch
+  let outcome = 'refused'
+endtry
+call writefile([string([outcome, &l:modified])], '$WORK/ttv4.out')
+qa!
+EOF
+vim -es -u NONE -S "$WORK/ttv4.vim" < /dev/null
+check "an edited banner refuses the text-view write" "['refused', 1]" \
+    "$(cat "$WORK/ttv4.out")"
+check "and leaves the file exactly as it was" "$TV4_ALL" \
+    "$(hash_range "$WORK/tv4.bin" 0 -1)"
 
 # --- :HexPairPages says which byte the cursor is on ------------------------
 # In the form :HexPairGoOffset and vimhex's @BYTE both take, so a position
