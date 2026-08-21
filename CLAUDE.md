@@ -147,8 +147,14 @@ Key function map:
   then may `b:undo_ftplugin` revert them), and when the restored
   filetype is empty no `FileType` event fires, so the plugin executes
   `b:undo_ftplugin` and clears `b:did_ftplugin` itself.
-- `g:hexpair_debug` — echomsg trace of every position mapping step
-  (`:messages`); keep it working, it has already caught two field bugs.
+- `g:hexpair_debug` — `s:Debug()`, an echomsg trace of every position
+  mapping step (`:messages`); keep it working, it has already caught two
+  field bugs. The Stage 2 rewrite dropped every call site while the docs
+  went on promising it; it is back at the *transitions* (page load,
+  `++bin` reload, offset→position and position→offset in both views,
+  what a write found), deliberately not on `CursorMoved`. Both
+  directions print in the same terms, so a mismatch between them is
+  visible at a glance.
 
 ### Invariants — do not break
 
@@ -234,6 +240,32 @@ come back**; each names the test that would catch it.
 | Opening a page could abandon a modified buffer | "opening a page refuses to abandon a modified buffer" |
 | A plain `:w` took the save-as path on Windows, where one file has more than one spelling. Save-as truncates its target before reading the source, so this would have destroyed a multi-page file | "on Windows, separators and case are not" + "writing to the same file spelled longhand patches the page" |
 | Growing a page in place needed three times the tail in temporary space — it copied the whole tail aside before moving it | "an insert grows the file, in place, and leaves no temp behind" + the cost table in `README.md` |
+| The whole-page scan read a line differently from the per-line rule (a `\zs` anchor that consumed the newline; a negated collection that matched the end-of-line only on a long string) | "the whole-page scan says what the per-line rule says" — on a 6250-line page, since neither shows up on a short one |
+| `count()` over a string (patch 8.0.0794) and Blob literals (8.1.0735) broke the documented Vim 8.0 baseline: everything past *displaying* a page failed with E712 | the baseline run below, and no `count()`/`0z` left in the plugin |
+| `g:hexpair_debug` was documented but no longer implemented at all | "the trace says both directions of the mapping" |
+
+**The Vim version floor is a claim that has to be run.** The plugin says
+everything but the splice works on Vim 8.0; it did not, for a year, and
+nothing noticed because CI only ever ran a current Vim. Build the oldest
+one and point the suite at it:
+
+```sh
+curl -sSLO https://github.com/vim/vim/archive/refs/tags/v8.0.0000.tar.gz
+tar xzf v8.0.0000.tar.gz && cd vim-8.0.0000
+CFLAGS="-O1 -w -Wno-error=implicit-function-declaration \
+-Wno-error=int-conversion -Wno-error=incompatible-pointer-types" \
+    ./configure --with-features=normal --disable-gui --without-x \
+                --disable-nls --with-tlib=ncurses
+make -j4 vim     # `make` alone stops at xxd/xxd.c, whose K&R prototypes
+                 # no modern GCC compiles - use the system xxd instead
+HEXPAIR_VIM=$PWD/src/vim VIMRUNTIME=$PWD/runtime test/run-tests.sh
+```
+ The expected result
+is 32 failures, all of them the splice paths — shortening a file,
+`:w {file}`, and a grow whose tail is more than half the file — each
+refused with the `readblob()` gate message. Anything else failing there
+is a regression in the baseline. The suite itself must stay 8.0-clean
+too: no `trim()`, no Blob literal, no `count()` over a string.
 
 **Gotcha for any new `plugin/*.vim` file**: `vim -es -u NONE` (this
 suite's harness, with no vimrc) starts in `'compatible'` mode, whose
@@ -494,11 +526,38 @@ was designed and built in Stage 2 - see "What Stage 2 decided".
   also handles a line with no offset column.
 - Pair highlighting, from the base plugin's `s:Highlight()` (see
   above), additionally skips banner lines entirely (see "Page banner").
-- `s:PagedScan(lnum)` — ONE walk over the page returning `err`
+- `s:PagedScan(lnum)` — ONE pass over the page returning `err`
   (validation), `lines` (stripped payload) and `bytes` (bytes before
   `lnum`), which is what a write needs. It replaced three separate
-  walks; folding them cut a write on a 128 KiB page from 0.5 s to
-  0.32 s, and scales with the page size.
+  walks, and the walk itself is gone too: `s:PagedPayloadText()` applies
+  the three rules as **whole-page regexes** (banner lines, then offset
+  columns, then ASCII columns), because VimScript's per-iteration
+  overhead - not the matching - was what a walk over 8192 lines cost.
+  A same-length write on the default page went 571 ms → 129 ms this way,
+  `:HexPairPages` 274 ms → under a millisecond (that one via the
+  canonical fast path below). The per-line `s:PagedPayload()` stays the
+  reference implementation and still locates the offending line when a
+  page is rejected; `HexPairPagedScanLines()` lets the suite hold the
+  two against each other on a full-size page.
+- **Two Vim regex traps live in that pass. Do not undo them:**
+  - `'\%(^\|\n\)\zs…'` still CONSUMES the newline it matched, so a
+    line whose strip comes out empty (a banner, an empty line) leaves
+    the scan inside the *next* line, whose offset column then survives
+    into the payload. The newline is matched and put back with `\1`.
+    A lookbehind is correct and quadratic: ten seconds on one page.
+  - a negated collection matches the end-of-line whatever is listed in
+    it (`:help /[\n]`), so `'[^0-9a-fA-F \n]'` does not mean what it
+    reads as - and *looks* right on a short string: the same page
+    validated at 2000 lines and was rejected at 4000. Line breaks are
+    removed with the `\n` ATOM (`s:PagedFlatten()`) before any
+    collection is applied. This is why the scan is tested against a
+    6250-line page and not a handful of lines.
+- `s:PagedByteOffset()` — while the buffer is **unmodified** the page is
+  exactly what xxd produced, so the bytes above the cursor's line are
+  `(line - 2) * n` and no pass is needed; the within-line part goes
+  through the same `s:PagedCursorLineIndex()` either way, so the two
+  paths cannot read a line differently. This is what keeps `:w` (which
+  reports the cursor byte when it finishes) off a second pass.
 - Loading a page happens with `'undolevels'` at **-1, buffer-locally**
   (|clear-undo|), so the undo history never survives a page turn:
   a single `u` afterwards would otherwise put the bytes of a different
