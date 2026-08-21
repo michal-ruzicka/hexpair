@@ -10,8 +10,7 @@ and this project adheres to
 ## [v2.0.0-devel] – 2026-07-20
 
 ### Added
-- Paged large-file mode, Stage 1 (`plugin/hexpair_paged.vim`,
-  read-only so far — writing is planned but not implemented yet):
+- **Paged large-file mode**, the reason for the major version:
   `:HexPairOpen {file} [page]` shows one configurable-size page
   (`g:hexpair_page_size`, default 128 KiB) of an arbitrarily large file
   as a hex dump with absolute file offsets, without ever loading the
@@ -22,11 +21,7 @@ and this project adheres to
   `:HexPairPages` reports the current page, total pages and byte
   range. Each page is bracketed by a decorative banner line (page
   number, byte range) highlighted via the new `HexPairPageBanner`
-  group. Requires a newer Vim than the base plugin (`+num64` and
-  patch 8.2.4906+, needed by a later write stage), checked at load
-  time with a clear message if unmet; the base toggle mode is
-  unaffected. See CLAUDE.md for the remaining write-path stages.
-  `HexPairOpenFile({file} [, {page}])` opens a page the same way as
+  group. `HexPairOpenFile({file} [, {page}])` opens a page the same way as
   `:HexPairOpen` but as a direct function call, for scripts, mappings
   or shell wrappers that build the filename programmatically — safer
   than constructing an `:HexPairOpen` command-line string for a name
@@ -42,8 +37,36 @@ and this project adheres to
   invalid dump refuses the refresh instead of being converted. The
   `'modified'` flag is unaffected — only the rendering changes, never
   a byte of content.
-
-### Added
+- **`:w` on a paged view writes just that page**, by one of three
+  mechanisms chosen by what the edit did to its length. An edit that
+  KEPT the length - overwriting values, the common case - patches the
+  page **in place** through `xxd -r` with the target as an argument: the
+  file keeps its length and every byte outside the page keeps its
+  content, at a cost independent of the file's size. An edit that
+  INSERTED bytes moves only what follows them - the tail is shifted
+  right in place with `xxd` and the page patched in, so the head of the
+  file is never even read, appending to the last page moves nothing at
+  all, and the temporary space needed is one block's worth of hex
+  whatever the file's size; the tail is moved from the end backwards, so
+  a byte is never overwritten before it has been copied and no second
+  copy of it is kept. An edit that DELETED bytes writes the file afresh,
+  because moving the tail left is the same operation but nothing in Vim
+  or `xxd` can then shorten the file: head, edited page and tail are
+  block-copied (8 MiB blocks, so memory does not follow the file's size)
+  into a temporary file, which replaces the original by being copied
+  back over it, keeping its inode, owner and permissions - and if that
+  copy back fails part way through, the temporary file holds the
+  complete new content and its path is reported rather than deleted.
+  Either change of length says by how much the file will change and how
+  many bytes that writes, and asks first; `g:hexpair_page_confirm = 0`
+  answers yes automatically, for scripts. Before any of them the dump is
+  validated exactly as in the whole-file mode, and the file's size and
+  modification time are compared with what they were when the page was
+  read - a file that changed on disk meanwhile is refused rather than
+  patched at offsets that may no longer mean anything. Afterwards the
+  page is re-read from disk and the cursor returns to the byte it was
+  on, even when a splice moved every byte behind it; a shrinking write
+  that empties the file leaves a view saying so instead of a stale dump.
 - The `vimhex` shell wrapper now ships as `hexpair.bashrc` in the plugin
   directory, so it can be sourced from `~/.bashrc` rather than copied
   out of the documentation:
@@ -54,20 +77,6 @@ and this project adheres to
   the decimal in brackets and 1-based — exactly the form
   `:HexPairGoOffset` and the `vimhex` wrapper's `@BYTE` take, so a
   position can be written down and gone back to.
-- **Inserting bytes no longer rewrites the file.** Bytes cannot be
-  spliced into the middle of a file, but they do not have to be: only
-  what follows them has to move. The tail is now shifted right in place
-  with `xxd` and the page patched in, so the head of the file is never
-  even read — and appending to the last page moves nothing at all. It
-  needs temporary space the size of the tail rather than of the file,
-  and, using only `xxd`, runs on the Vim 8.0 baseline. The temporary
-  space it needs is one block's worth of hex whatever the file's size,
-  because the tail is moved from the end backwards — a byte is never
-  overwritten before it has been copied, so no second copy is kept. Deleting bytes
-  still writes the file afresh: moving the tail left is the same
-  operation, but nothing in Vim or `xxd` can then shorten the file. The
-  confirmation says which of the two it is about to do and how many
-  bytes that writes.
 - A **Visual selection** is mirrored in the other column, the way the
   byte under the cursor already was: select hex digits and the text they
   are is highlighted, select text and the bytes it is are highlighted.
@@ -94,30 +103,6 @@ and this project adheres to
 - `<Plug>(HexPairPages)`, so every command that takes no argument now
   has a `<Plug>` target and can be bound to a key — the README and
   `:help hexpair-mappings` list the whole set on a `<Leader>` prefix.
-- The page write path, part one: `:w` on a paged buffer now writes.
-  An edit that kept the page's length — overwriting values, the common
-  case — patches the page **in place** through `xxd -r` with the target
-  as an argument: the file keeps its length and every byte outside the
-  page keeps its content, at a cost independent of the file's size.
-  Before writing, the dump is validated exactly as in the whole-file
-  mode, and the file's size and modification time are compared with
-  what they were when the page was read — a file that changed on disk
-  meanwhile is refused rather than patched at offsets that may no
-  longer mean anything. Afterwards the page is re-read from disk and
-  the cursor returns to the byte it was on. A `:w {other}` is refused:
-  a paged view writes back to its own file only. Length-changing edits
-  are handled by Stage 3 below.
-- Paged large-file mode, Stage 3: an edit that **changed** the page's
-  length is written by splicing the file — head, edited page and tail
-  are block-copied (8 MiB blocks, so memory does not follow the file's
-  size) into a temporary file, which then replaces the original by
-  being copied back over it, keeping its inode, owner and permissions.
-  This rewrites the whole file, so it says by how much the file will
-  change and asks first; `g:hexpair_page_confirm = 0` answers yes
-  automatically for scripted use. If the copy back fails part way
-  through, the temporary file holds the complete new content and its
-  path is reported rather than deleted. A shrinking write that empties
-  the file leaves a view saying so instead of a stale dump.
 
 ### Changed
 - **One hex mode, always paged.** `:HexPairToggle` no longer converts a
@@ -133,28 +118,49 @@ and this project adheres to
   a private temp it is spilled into, and a modified file-backed one is
   refused — the buffer and the file disagree, and both ways of
   resolving that lose edits quietly.
-- `plugin/hexpair_paged.vim` is merged back into `plugin/hexpair.vim`;
-  the paged mode is not a mode any more.
-- A file with no bytes is viewable instead of being refused for having
-  no pages, and `:e` re-reads the current page.
-- Pages are plain fixed-size slices again: the paged view reads the
-  width of each line's offset column off the line itself, so a page may
+- A file with no bytes is viewable - it simply has no pages and the view
+  says so - and `:e` re-reads the current page.
+- Pages are plain fixed-size slices: the paged view reads the width of
+  each line's offset column off the line itself, so a page may
   span the point at 4 GiB where `xxd` widens that column from eight hex
   digits to nine, instead of page boundaries being clamped to keep each
   page uniform. Page `N` always starts at `(N-1) * g:hexpair_page_size`,
   page numbering no longer shifts when a file grows past 4 GiB, and a
   bare hex line with no offset column at all is laid out correctly too.
-- Only a length-changing write now requires Vim patch 8.2.4906 with
-  `+num64`, checked when such a write is attempted. Viewing pages,
-  navigating them and same-length writes work on the Vim 8.0 baseline
-  the rest of the plugin requires; the paged feature no longer refuses
-  to load below that patch level.
+- Only a write that **shortens** a file - and `:w {file}`, and a growing
+  write whose tail is more than half the file, both of which go through
+  the same splice - requires Vim patch 8.2.4906 with `+num64`, for
+  `readblob()`, checked when such a write is attempted and refusing just
+  that write. Viewing pages, navigating them, same-length writes and
+  inserts work on the Vim 8.0 baseline the rest of the plugin requires.
 - Writing a page walks it once instead of three times (validation,
   cursor mapping and stripping share one scan): a write on a 128 KiB
   page went from 0.5 s to 0.32 s, and the saving scales with the page
   size.
 
 ### Fixed
+- An empty file grew to one byte when it went through the hex view.
+  Vim serializes an *empty* buffer for a filter as a single newline, so
+  the dump showed a `0a` the file did not contain and writing it back
+  created one. Deleting the whole dump and writing now also produces an
+  empty file rather than a one-byte one. A file that really holds a
+  lone `0a` looks identical in the buffer and still dumps that byte.
+- Data loss: toggling hex mode off used to unconditionally mirror the
+  buffer's modified state from BEFORE hex mode was entered, so an edit
+  made to the dump on an until-then-unmodified buffer silently cleared
+  `'modified'` on toggle-off — `:q` would then discard it without a
+  warning. The buffer is now tracked for real content changes made
+  while in hex mode (via `b:changedtick`, unaffected by cursor
+  movement) independently of the pre-hex-mode state, in both
+  directions: a pre-existing unsaved change is still preserved, and an
+  edit made purely in hex mode now correctly marks the buffer modified
+  on toggle-off.
+
+### Fixed (during the internal iterations)
+
+None of these ever reached a release; they are listed because the code
+they were found in is what this release ships.
+
 - On Windows a plain `:w` was taken for a `:w {other file}` and went down
   the save-as path, because the two spellings of the buffer's own path
   reaching the check — `<amatch>`'s full path and `bufname()`'s short one
@@ -182,12 +188,6 @@ and this project adheres to
   turning a page, a single `u` restored the previous page's bytes into
   a buffer that claimed to be the new one. Loading a page now discards
   the undo history; undo of edits made within a page is unaffected.
-- An empty file grew to one byte when it went through the hex view.
-  Vim serializes an *empty* buffer for a filter as a single newline, so
-  the dump showed a `0a` the file did not contain and writing it back
-  created one. Deleting the whole dump and writing now also produces an
-  empty file rather than a one-byte one. A file that really holds a
-  lone `0a` looks identical in the buffer and still dumps that byte.
 - The page banner's and `:HexPairPages`' byte range used to be
   0-based and inclusive (`base` to `base + len - 1`), so the last
   page's shown end was always one short of the file's total size,
@@ -202,16 +202,6 @@ and this project adheres to
   inactive but real-looking buffer behind. It now validates the page
   first and leaves the current buffer completely untouched on a bad
   page number — nothing is created.
-- Data loss: toggling hex mode off used to unconditionally mirror the
-  buffer's modified state from BEFORE hex mode was entered, so an edit
-  made to the dump on an until-then-unmodified buffer silently cleared
-  `'modified'` on toggle-off — `:q` would then discard it without a
-  warning. The buffer is now tracked for real content changes made
-  while in hex mode (via `b:changedtick`, unaffected by cursor
-  movement) independently of the pre-hex-mode state, in both
-  directions: a pre-existing unsaved change is still preserved, and an
-  edit made purely in hex mode now correctly marks the buffer modified
-  on toggle-off.
 
 ## [v1.1.0] – 2026-07-19
 
