@@ -324,7 +324,7 @@ rather than guessing which lines are content.
 
 A page is an ordinary Vim buffer, so its size is what everything costs:
 with 16 bytes per line, the default 128 KiB page is 8192 lines. Reading
-one takes hundredths of a second, writing one about a third. Since
+one takes hundredths of a second, writing one about a seventh. Since
 `:HexPairGoOffset` reaches any byte directly, raising the page size buys
 nothing but latency — see `:help hexpair-paged-size`.
 

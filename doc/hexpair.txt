@@ -569,10 +569,11 @@ g:hexpair_page_size     Bytes per page.  Default: 128 KiB (128 * 1024).
                         A page is an ordinary Vim buffer, so everything
                         costs what that many lines cost: 128 KiB is 8192
                         lines, which loads in hundredths of a second and
-                        writes in about a third of one, while 4 MiB takes
-                        about ten seconds to write.  Since
-                        |:HexPairPageGoto| reaches any page directly, a
-                        larger page buys nothing but that wait.
+                        writes in about a seventh of one, while 4 MiB
+                        takes about three and a half seconds to write.
+                        Since |:HexPairPageGoto| reaches any page
+                        directly, a larger page buys nothing but that
+                        wait.
 
                                                   *g:hexpair_page_confirm*
 g:hexpair_page_confirm  Whether a write that changed the page's length
@@ -648,7 +649,7 @@ itself so they survive being copied out of it:
   with ++bin and the file needed fileencoding transcoding, the position
   carried over the reload is a best-effort line/column match.
 - A page is an ordinary Vim buffer, so it costs what that many lines cost,
-  and a write costs a pass over them: about a fifth of a second for the
+  and a write costs a pass over them: about a seventh of a second for the
   default 128 KiB page, in proportion for a larger one
   (|hexpair-paged-size|).  The size of the FILE never enters into it.
 

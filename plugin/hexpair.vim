@@ -66,11 +66,11 @@ endif
 
 " A page is an ordinary Vim buffer, so everything it costs is what that
 " many lines cost: at 16 bytes per line, 128 KiB is 8192 lines, which
-" loads in hundredths of a second and writes in about a third of one.
+" loads in hundredths of a second and writes in about a seventh of one.
 " The size buys nothing in return - :HexPairPageGoto reaches any page
 " directly - so it is deliberately small; raise it only to see more of
 " the file at once, and expect a write to slow down roughly in
-" proportion (1 MiB ~ 2.4 s, 4 MiB ~ 9.5 s on the author's machine).
+" proportion (1 MiB ~ 0.9 s, 4 MiB ~ 3.6 s on the author's machine).
 if !exists('g:hexpair_page_size')
   let g:hexpair_page_size = 128 * 1024
 endif
