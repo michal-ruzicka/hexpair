@@ -12,6 +12,9 @@ cursor mapping between the views, `:w` that writes only the page you are
 looking at, and forgiving editing where the offset and ASCII columns are
 purely decorative.
 
+**The name:** hex in Vim is what the alternatives do too. The *pair* is
+not.
+
 It is not the best hex editor in the world, and does not try to be. It
 is the one that is always a single command away wherever you already
 have Vim — no install, no package manager, nothing to get approved.
