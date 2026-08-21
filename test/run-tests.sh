@@ -153,6 +153,8 @@ for name in ('paged21.bin', 'paged22.bin', 'paged23.bin', 'paged31.bin', 'paged3
 for name in ('scan1.bin', 'scan2.bin'):
     with open(os.path.join(w, name), 'wb') as f:
         f.write(bytes((i * 7) % 256 for i in range(100000)))
+# same-second tampering fixture
+open(os.path.join(w, 'digest1.bin'), 'wb').write(bytes(i % 256 for i in range(5000)))
 # page-goto fixture
 open(os.path.join(w, 'pgoto1.bin'), 'wb').write(bytes(i % 256 for i in range(5000)))
 # selection fixture
@@ -2129,6 +2131,50 @@ check "+2, -1 and \$ turn the pages they name" "[5, 4, 10, 10]" \
 check "a step past the end is refused like any other missing page" \
     "hexpair: page 19 does not exist (file has 10 pages)" \
     "$(sed -n 4p "$WORK/tpg.out")"
+
+# ===========================================================================
+# A page that changed on disk within the same second
+# ===========================================================================
+# Size and mtime are all a portable Vim can see, and mtime is whole
+# seconds: a writer that changes bytes in place, in the same second the
+# page was read, is invisible to both. The page's own bytes are therefore
+# hashed when it is read and again before it is patched. The helper below
+# is that writer - it edits the file and puts the timestamps back, so
+# nothing but the content differs.
+cat > "$WORK/tamper.py" <<'PYEOF'
+import os, sys
+name = sys.argv[1]
+st = os.stat(name)
+with open(name, 'r+b') as f:
+    f.seek(int(sys.argv[2]))
+    f.write(b'\xff\xff\xff\xff')
+os.utime(name, (st.st_atime, st.st_mtime))
+PYEOF
+cat > "$WORK/tdig.vim" <<EOF
+$(printf "$HEX")
+HexPairOpen $WORK/digest1.bin 2
+let same = [getfsize('$WORK/digest1.bin'), getftime('$WORK/digest1.bin')]
+call system('$PY $WORK/tamper.py $WORK/digest1.bin 600')
+let unchanged = [getfsize('$WORK/digest1.bin') == same[0], getftime('$WORK/digest1.bin') == same[1]]
+call setline(3, substitute(getline(3), '^\(.\{10\}\)..', '\1ee', ''))
+let refused = ''
+try
+  write
+catch /^hexpair:/
+  let refused = 'refused'
+endtry
+call writefile([string(unchanged), refused, string(&l:modified)], '$WORK/tdig.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tdig.vim" < /dev/null
+check "the tampering left the size and the timestamp alone" "[1, 1]" \
+    "$(sed -n 1p "$WORK/tdig.out")"
+check "but the page's own bytes give it away" "refused" \
+    "$(sed -n 2p "$WORK/tdig.out")"
+check "and the edit is still there to be saved elsewhere" "1" \
+    "$(sed -n 3p "$WORK/tdig.out")"
+check "the other writer's bytes are still on disk" "ffffffff" \
+    "$("$HEXPAIR_XXD" -s 600 -l 4 -p "$WORK/digest1.bin")"
 
 # ---------------------------------------------------------------------------
 if [ "$FAIL" -eq 0 ]; then

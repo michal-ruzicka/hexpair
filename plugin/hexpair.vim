@@ -924,6 +924,7 @@ function! s:LoadPage(pageidx) abort
   let b:hexpair_page_total      = total
   let b:hexpair_page_totalpages = totalpages
   let b:hexpair_page_ftime      = getftime(b:hexpair_page_file)
+  let b:hexpair_page_digest     = s:PageDigest(base, len)
   let b:hexpair_n               = g:hexpair_bytes_per_line
   " Where the page's FIRST line starts its hex column; later lines
   " derive their own (s:PagedLineLayout()), which differs only on a
@@ -1245,20 +1246,54 @@ function! s:CanonicalDump(src, base, out) abort
   call writefile(lines, a:out)
 endfunction
 
-" Refuse to touch a file that changed underneath us. Size and mtime are
-" all a portable Vim can see; mtime has a one-second resolution, so a
-" change made within the same second as the read AND of exactly the same
-" size can slip through - documented in :help hexpair-paged.
+" A fingerprint of the bytes this page covers, as they are on disk right
+" now. Size and mtime are what a portable Vim can see about a file, and
+" mtime has a one-second resolution, so a change made within the same
+" second as the read AND of exactly the same size is invisible to them -
+" and a write would then patch this page over someone else's bytes. This
+" reads the page's own bytes back and hashes them, which closes that for
+" the range being written, at the cost of one page read (hundredths of a
+" second, independent of the size of the file).
+"
+" Empty when the local Vim has no sha256() (a build without +cryptv) or
+" when reading the page fails, in which case the size and mtime check
+" stands alone - a weaker guard, never a wrong one.
+function! s:PageDigest(base, len) abort
+  if !exists('*sha256') || a:len <= 0
+    return ''
+  endif
+  try
+    return sha256(s:Run(printf('%s -p -s %d -l %d %s', s:xxd, a:base, a:len,
+          \ shellescape(b:hexpair_page_file))))
+  catch
+    return ''
+  endtry
+endfunction
+
+" Refuse to touch a file that changed underneath us.
 function! s:CheckFresh() abort
   let total = getfsize(b:hexpair_page_file)
-  if total == b:hexpair_page_total
-        \ && getftime(b:hexpair_page_file) == b:hexpair_page_ftime
+  if total != b:hexpair_page_total
+        \ || getftime(b:hexpair_page_file) != b:hexpair_page_ftime
+    throw printf('hexpair: %s changed on disk since the page was read '
+          \ . '(size %d -> %d); nothing was written - reload it with '
+          \ . ':HexPairPageGoto! %d',
+          \ b:hexpair_page_file, b:hexpair_page_total, total,
+          \ b:hexpair_page_index + 1)
+  endif
+  let digest = get(b:, 'hexpair_page_digest', '')
+  if digest ==# ''
     return
   endif
-  throw printf('hexpair: %s changed on disk since the page was read '
-        \ . '(size %d -> %d); nothing was written - reload it with '
-        \ . ':HexPairPageGoto! %d',
-        \ b:hexpair_page_file, b:hexpair_page_total, total,
+  let now = s:PageDigest(b:hexpair_page_base, b:hexpair_page_len)
+  if now ==# '' || now ==# digest
+    return
+  endif
+  throw printf('hexpair: the bytes of page %d of %s are no longer the ones '
+        \ . 'that were read, though its size and timestamp are unchanged - '
+        \ . 'something wrote to it in the same second; nothing was written '
+        \ . 'here - reload it with :HexPairPageGoto! %d',
+        \ b:hexpair_page_index + 1, b:hexpair_page_file,
         \ b:hexpair_page_index + 1)
 endfunction
 
@@ -1561,6 +1596,7 @@ function! s:LoadEmpty() abort
   let b:hexpair_page_total      = 0
   let b:hexpair_page_totalpages = 0
   let b:hexpair_page_ftime      = getftime(b:hexpair_page_file)
+  let b:hexpair_page_digest     = ''
   let b:hexpair_n               = g:hexpair_bytes_per_line
   let b:hexpair_page_hexstart   = s:HexStart(0)
   " No dump lines to number, so no ruler whatever the option says.
