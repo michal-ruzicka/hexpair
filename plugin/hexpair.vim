@@ -109,27 +109,32 @@ highlight default link HexPairPageBanner Comment
 " Vim version gate
 " --------------------------------------------------------------------------
 "
-" ONLY the length-changing (splice) write needs readblob(), available
+" ONLY the splice - a write that shortens the file, a growing one whose
+" tail is more than half of it, and ':w {file}' - needs readblob(), available
 " since patch 8.2.4906, and 64-bit Numbers for large absolute offsets
 " (+num64, standard on modern builds). Everything else - reading pages,
-" navigating them, and the same-length in-place write - runs on the
-" Vim 8.0 baseline the rest of the plugin requires, so the check is
-" made at the moment a length-changing write is attempted rather than
-" refusing to load the feature at all. Factored into a function of an
+" navigating them, the same-length in-place write and the in-place
+" insert - runs on the Vim 8.0 baseline the rest of the plugin requires,
+" so the check is made at the moment a splice is actually needed rather
+" than refusing to load the feature at all. Factored into a function of an
 " explicit boolean (rather than calling has() internally) so its
 " failure branch - which cannot be produced by an actual old Vim in
 " this project's test environment - can be tested by passing 0.
 
 " Global (not script-local) so test/run-tests.sh can call it directly
 " with both true and false without needing an actual unsupported Vim.
-function! HexPairPagedGateMessage(supported) abort
+" The optional argument names the operation that needs readblob(), so each
+" caller says what it was about to do; it defaults to the splice.
+function! HexPairPagedGateMessage(supported, ...) abort
   if a:supported
     return ''
   endif
-  return 'hexpair: inserting or deleting bytes needs Vim patch 8.2.4906 or '
-        \ . 'later with +num64 (readblob(), 64-bit Numbers for large file '
-        \ . 'offsets); this Vim does not qualify, so only same-length edits '
-        \ . 'can be written - nothing was written'
+  let what = a:0 ? a:1 : 'rewriting the file to change its length'
+  return printf('hexpair: %s needs Vim patch 8.2.4906 or later with ', what)
+        \ . '+num64 (readblob(), 64-bit Numbers for large file offsets); '
+        \ . 'this Vim does not qualify - nothing was written. An edit that '
+        \ . "keeps the page's length, or that inserts bytes with no more "
+        \ . 'than half the file after them, does not need it.'
 endfunction
 
 " Checked where it matters: s:Splice(). has() cannot be faked, so the
@@ -1490,10 +1495,10 @@ function! s:WriteWholeTo(target) abort
   if s:SamePath(a:target, b:hexpair_page_file)
     throw printf('hexpair: refusing to copy %s over itself', a:target)
   endif
-  let msg = HexPairPagedGateMessage(s:SpliceSupported())
+  let msg = HexPairPagedGateMessage(s:SpliceSupported(),
+        \ 'writing the whole file somewhere else')
   if !empty(msg)
-    throw substitute(msg, 'inserting or deleting bytes',
-          \ 'writing the whole file somewhere else', '')
+    throw msg
   endif
   call s:CheckFresh()
 

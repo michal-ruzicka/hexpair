@@ -554,14 +554,18 @@ cat > "$WORK/t25.vim" <<EOF
 source $PLUGIN
 let ok = HexPairPagedGateMessage(1)
 let fail = HexPairPagedGateMessage(0)
-call writefile([string(ok), fail], '$WORK/t25.out')
+let saveas = HexPairPagedGateMessage(0, 'writing the whole file somewhere else')
+call writefile([string(ok), fail, saveas], '$WORK/t25.out')
 qa!
 EOF
 vim -es -u NONE -S "$WORK/t25.vim"
 check "gate message empty when supported"     "''" "$(sed -n 1p "$WORK/t25.out")"
 check "gate message set when unsupported" \
-    "hexpair: inserting or deleting bytes needs Vim patch 8.2.4906 or later with +num64 (readblob(), 64-bit Numbers for large file offsets); this Vim does not qualify, so only same-length edits can be written - nothing was written" \
+    "hexpair: rewriting the file to change its length needs Vim patch 8.2.4906 or later with +num64 (readblob(), 64-bit Numbers for large file offsets); this Vim does not qualify - nothing was written. An edit that keeps the page's length, or that inserts bytes with no more than half the file after them, does not need it." \
     "$(sed -n 2p "$WORK/t25.out")"
+check "gate message names the operation the caller passed" \
+    "hexpair: writing the whole file somewhere else needs Vim patch 8.2.4906 or later with +num64 (readblob(), 64-bit Numbers for large file offsets); this Vim does not qualify - nothing was written. An edit that keeps the page's length, or that inserts bytes with no more than half the file after them, does not need it." \
+    "$(sed -n 3p "$WORK/t25.out")"
 
 # --- Test 26: g:hexpair_page_size validation --------------------------------
 cat > "$WORK/t26.vim" <<EOF
