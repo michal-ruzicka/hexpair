@@ -430,11 +430,16 @@ HexPairOpenFile({file} [, {page}])
 
                                                               *:HexPairPages*
 :HexPairPages           Report the current page number, the total page
-                        count, and the absolute byte range shown, e.g.
-                        "page 3 of 21, offsets 2097153-3145728 of total
-                        45678901 bytes (bigfile.bin)" - the same
-                        information the page banner shows (below), useful
-                        once the banner has scrolled out of view.
+                        count, the absolute byte range shown and the byte
+                        the cursor is on, e.g. "page 3 of 21, offsets
+                        2097153-3145728 of total 45678901 bytes
+                        (bigfile.bin); cursor on byte 0x2fefe1
+                        (3141601)".  The first half is what the page
+                        banner shows (below), useful once the banner has
+                        scrolled out of view; the second is a position in
+                        exactly the form |:HexPairGoOffset| and vimhex's
+                        @BYTE take, so where you are can be written down
+                        and gone back to.
 
                                                         *:HexPairGoOffset*
 :HexPairGoOffset[!] {byte}
@@ -520,15 +525,16 @@ WRITING A PAGE                                        *hexpair-paged-write*
   except by writing it afresh.  So head, edited page and tail are copied
   through a temporary file, which then replaces the original; that needs
   temporary space the size of the whole file, and is the only operation
-  that does.  If the copy back fails
-  part way through, the temporary file holds the complete new content
-  and its path is reported instead of being deleted.
+  that does.  If the copy back fails part way through, the temporary
+  file holds the complete new content and its path is reported instead
+  of being deleted.
 
-Either way hexpair says by how much the file will change, and how much of
-it has to be written, and asks for confirmation first
-(|g:hexpair_page_confirm| turns the question off).
+Either change of LENGTH - the second case and the third - says by how much
+the file will change, and how much of it has to be written, and asks for
+confirmation first (|g:hexpair_page_confirm| turns the question off).  The
+first case, the same-length patch, does not ask: it writes only the page.
 
-Before either, the dump is validated exactly as in |hexpair-writing|,
+Before any of them, the dump is validated exactly as in |hexpair-writing|,
 and the file's size and modification time are compared with what they
 were when the page was read.  A file that changed on disk meanwhile is
 refused rather than patched at offsets that may no longer mean anything;
@@ -570,9 +576,13 @@ g:hexpair_page_size     Bytes per page.  Default: 128 KiB (128 * 1024).
 
                                                   *g:hexpair_page_confirm*
 g:hexpair_page_confirm  Whether a write that changed the page's length
-                        asks before rewriting the whole file (see
-                        |hexpair-paged-write|).  Default: 1.  Set to 0 to
-                        answer yes automatically, e.g. in a script: >
+                        says what it will cost and asks first.  What it
+                        costs differs: inserting bytes moves only what
+                        follows them, deleting them rewrites the file
+                        (see |hexpair-paged-write|).  A write that kept
+                        the length patches just the page and never asks.
+                        Default: 1.  Set to 0 to answer yes
+                        automatically, e.g. in a script: >
                             let g:hexpair_page_confirm = 0
 <
                                                             *hexpair-vimhex*

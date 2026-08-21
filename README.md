@@ -92,8 +92,9 @@ code, releases and issue tracker.
   simply has exactly one. `:HexPairOpen` opens a file of any size
   instantly, reading only the page it shows and never loading the rest. `:w` writes the page back: overwriting values patches it
   **in place**, so the rest of the file is never read or written
-  whatever its size, and inserting or deleting bytes rewrites the file
-  only after telling you the size change and asking. See
+  whatever its size; inserting bytes moves only what follows them, also
+  in place; and only deleting them rewrites the file. Either change of
+  length says what it will cost and asks first. See
   [below](#paged-large-file-mode).
 
 ## Installation
@@ -129,8 +130,8 @@ nmap <Leader>r <Plug>(HexPairRefresh)       " regenerate offsets/ASCII, no write
 nmap <Leader>j <Plug>(HexPairPageNext)      " next page
 nmap <Leader>k <Plug>(HexPairPagePrev)      " previous page
 nmap <Leader>g <Plug>(HexPairPageGoto)      " prompt for a page number
-nmap <Leader>b <Plug>(HexPairGoOffset)      " prompt for a byte offset (0x... ok)
-nmap <Leader>? <Plug>(HexPairPages)         " where am I: page X of Y, byte range
+nmap <Leader>b <Plug>(HexPairGoOffset)      " prompt for a byte, 1-based (0x... ok)
+nmap <Leader>? <Plug>(HexPairPages)         " where am I: page, range, cursor byte
 
 " Uppercase variants: the same, but discard unwritten changes without
 " asking (like the ! commands) - handy for skimming through a file.
@@ -230,9 +231,11 @@ the write rather than guessing which lines are content.
 `:w` writes just the page you are looking at. If you only overwrote
 values, it is patched **in place** — the file keeps its length, every
 byte outside the page keeps its content, and the cost does not depend on
-the file's size. If you inserted or deleted bytes, no filesystem can
-splice them into the middle of a file, so hexpair tells you how the
-size will change and asks before rewriting it.
+the file's size. If you inserted bytes, only what follows them has to
+move, and it moves in place too — what precedes them is not even read.
+Only deleting bytes rewrites the file, because nothing in Vim or `xxd`
+can make a file shorter any other way. Either change of length says how
+the size will change and how much has to be written, and asks first.
 
 Where the pages come from depends on what the buffer was:
 
@@ -251,11 +254,20 @@ Where the pages come from depends on what the buffer was:
 
 ```vim
 " bytes per dump line (default 16)
-let g:hexpair_bytes_per_line = 16
+let g:hexpair_bytes_per_line = 32
+
+" bytes per page (default 128 KiB); must stay a positive multiple of
+" g:hexpair_bytes_per_line. A page is an ordinary Vim buffer, so a bigger
+" one costs what that many lines cost - see "What it costs" below
+let g:hexpair_page_size = 1024 * 1024
+
+" whether a write that changes the page's length says what it will cost
+" and asks first (default 1); 0 answers yes automatically, e.g. in a script
+let g:hexpair_page_confirm = 0
 
 " keep the global 'paste' option on while the cursor is in a hex buffer,
-" restored when the cursor leaves it (set to 0 to leave 'paste' alone)
-let g:hexpair_paste = 1
+" restored when the cursor leaves it (default 1; 0 leaves 'paste' alone)
+let g:hexpair_paste = 0
 
 " highlight overrides
 highlight HexPairActive cterm=bold,underline gui=bold,underline
