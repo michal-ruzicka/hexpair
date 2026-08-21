@@ -1959,10 +1959,10 @@ EOF
 check "the canonical byte and the counted byte are the same byte" \
     "$(sed -n 1p "$WORK/tcbo.out")" "$(sed -n 2p "$WORK/tcbo.out")"
 # The gap between the columns (5, 58) is the odd one out: the cursor is
-# past the line's last hex digit, so both paths report the byte AFTER the
-# line's - the same answer either way, which is what this is here to pin.
+# past the line's last hex digit, and both paths clamp it to that last
+# byte (1087) rather than counting it as the first of the next line.
 check "and it is the byte the layout says" \
-    "[1024, 1024, 1025, 1078, 1088, 1073, 1075, 1520]" "$(sed -n 1p "$WORK/tcbo.out")"
+    "[1024, 1024, 1025, 1078, 1087, 1073, 1075, 1520]" "$(sed -n 1p "$WORK/tcbo.out")"
 
 # ---------------------------------------------------------------------------
 if [ "$FAIL" -eq 0 ]; then

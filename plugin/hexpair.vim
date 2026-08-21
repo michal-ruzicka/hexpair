@@ -1001,9 +1001,9 @@ endfunction
 " layout coordinates would be wrong. Only when the cursor sits in the
 " ASCII column - detected by a double space before it, the same rule the
 " stripper uses - is the index mapped by layout.
-function! s:PagedCursorByte() abort
-  let [n, hexstart, hexend, asciistart] = s:PagedLineLayout(line('.'))
-  let col = col('.')
+function! s:PagedByteIndexAt(lnum, col) abort
+  let [n, hexstart, hexend, asciistart] = s:PagedLineLayout(a:lnum)
+  let col = a:col
   if col <= hexend
     let idx = col < hexstart ? 0 : (col - hexstart) / 3
   else
@@ -1013,7 +1013,7 @@ function! s:PagedCursorByte() abort
     endif
   endif
   " Clamp to the bytes actually present on this (possibly short) line.
-  let nbytes = strlen(getline('.')) - asciistart + 1
+  let nbytes = strlen(getline(a:lnum)) - asciistart + 1
   if nbytes > n
     let nbytes = n
   endif
@@ -1021,6 +1021,10 @@ function! s:PagedCursorByte() abort
     let idx = nbytes - 1
   endif
   return idx
+endfunction
+
+function! s:PagedCursorByte() abort
+  return s:PagedByteIndexAt(line('.'), col('.'))
 endfunction
 
 " ABSOLUTE file offset of the byte under the cursor. Banner-aware
@@ -1034,13 +1038,28 @@ endfunction
 " where layout coordinates would be wrong. Only when the cursor sits in
 " the ASCII column - detected by a double space before it, the same rule
 " the stripper uses - is the index mapped by layout.
-function! s:PagedCursorLineIndex() abort
-  let prefix = strpart(getline('.'), 0, col('.') - 1)
+function! s:PagedLineIndexAt(lnum, col) abort
+  let line   = getline(a:lnum)
+  let prefix = strpart(line, 0, a:col - 1)
   if prefix =~# '  '
-    return s:PagedCursorByte()
+    return s:PagedByteIndexAt(a:lnum, a:col)
   endif
-  let payload = s:PagedPayload(prefix)
-  return strlen(substitute(payload, '[^0-9a-fA-F]', '', 'g')) / 2
+  let idx = s:PagedLineBytes(prefix)
+  " Between the last hex digit and the ASCII column there is no double
+  " space in the prefix yet, so the pairs counted there are the whole
+  " line's - one past its last byte. Clamp to what the line holds, the
+  " same way the layout branch above already does.
+  let nbytes = s:PagedLineBytes(line)
+  return nbytes > 0 && idx >= nbytes ? nbytes - 1 : idx
+endfunction
+
+" Complete bytes in the payload of one line (or of a prefix of one).
+function! s:PagedLineBytes(text) abort
+  return strlen(substitute(s:PagedPayload(a:text), '[^0-9a-fA-F]', '', 'g')) / 2
+endfunction
+
+function! s:PagedCursorLineIndex() abort
+  return s:PagedLineIndexAt(line('.'), col('.'))
 endfunction
 
 function! s:PagedByteOffset() abort
