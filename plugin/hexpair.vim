@@ -1006,7 +1006,15 @@ function! s:ApplyBannerSyntax() abort
 endfunction
 
 function! s:Open(file, ...) abort
-  let page = a:0 > 0 ? str2nr(a:1) : 1
+  " The page argument takes the same three forms |:HexPairPageGoto| does.
+  " A step is counted from the first page, which is where opening starts:
+  " "+2" is page 3, and "$" is the last one, without having to work out
+  " how many there are.
+  let parsed = HexPairPagedParsePageInput(a:0 > 0 ? a:1 : '')
+  if has_key(parsed, 'msg')
+    echohl ErrorMsg | echomsg parsed.msg | echohl None
+    return
+  endif
   let s:xxd = s:ResolveXxd()
   if s:xxd ==# ''
     echohl ErrorMsg
@@ -1034,6 +1042,8 @@ function! s:Open(file, ...) abort
   " that a later :w would be attempted against that made-up path -
   " which the write path would then patch bytes into.
   let file = fnamemodify(a:file, ':p')
+  let page = empty(parsed) ? 1 : HexPairPagedResolvePage(parsed, 1,
+        \ HexPairPagedTotalPages(g:hexpair_page_size, getfsize(file)))
   if s:ResolvePage(file, g:hexpair_page_size, page - 1)[0] < 0
     return
   endif

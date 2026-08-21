@@ -248,7 +248,7 @@ page. Close and reopen the file for the ordinary view.
 | `:HexPairToggle` | Move between the hex page view and the windowed text view |
 | `:HexPairGoHex` / `:HexPairGoAscii` / `:HexPairSwap` | Move the cursor between the HEX and ASCII columns, staying on the same byte |
 | `:HexPairRefresh` | Regenerate the offset and ASCII columns from the current hex payload, without writing |
-| `:HexPairOpen {file} [page]` | Open `{file}` paged, without loading it |
+| `:HexPairOpen {file} [page]` | Open `{file}` paged, without loading it; `[page]` takes `$` and `+N`/`-N` too |
 | `:HexPairPageNext[!]` / `:HexPairPagePrev[!]` / `:HexPairPageGoto[!] {page}` | Turn pages (`!` discards unwritten changes); `{page}` is a number, `+N`/`-N` to step, or `$` for the last one |
 | `:HexPairGoOffset[!] {byte}` | Jump to a byte, decimal or `0x`-prefixed, turning the page if needed; 1-based, like the banner |
 | `:HexPairPages` | Report page X of Y, the offsets covered, the file size and the byte under the cursor |
@@ -395,7 +395,7 @@ is ever read.
 
 | Command | Description |
 |---|---|
-| `:HexPairOpen {file} [page]` | Open `{file}` paged at `[page]` (1-based, default 1) without loading it |
+| `:HexPairOpen {file} [page]` | Open `{file}` paged at `[page]` (1-based, default 1; `$` and `+N`/`-N` work here too) without loading it |
 | `:HexPairPageNext[!]` / `:HexPairPagePrev[!]` | Turn the page; refuses to discard unwritten changes without `!` |
 | `:HexPairPageGoto[!] {page}` | Jump to page `{page}`: a number, `+N` / `-N` to step, or `$` for the last one |
 | `:HexPairGoOffset[!] {byte}` | Jump to a byte, decimal or `0x`-prefixed; 1-based, like the banner |

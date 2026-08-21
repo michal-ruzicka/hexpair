@@ -519,10 +519,14 @@ or from within Vim:
                                                                *:HexPairOpen*
 :HexPairOpen {file} [page]
                         Open {file} in paged mode, showing [page] (1-based,
-                        default 1).  Does not read the rest of the file.  An
-                        out-of-range or non-numeric [page] reports an error
-                        and leaves the current buffer completely untouched -
-                        nothing is created.
+                        default 1).  Does not read the rest of the file.
+                        [page] takes the same three forms
+                        |:HexPairPageGoto| does - a number, +N or -N, or $
+                        for the last page - with a step counted from the
+                        first page, which is where opening starts, so "+2"
+                        is page 3.  An out-of-range or unparsable [page]
+                        reports an error and leaves the current buffer
+                        completely untouched - nothing is created.
 
                                                           *HexPairOpenFile()*
 HexPairOpenFile({file} [, {page}])

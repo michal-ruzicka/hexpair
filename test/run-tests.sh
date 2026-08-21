@@ -2135,6 +2135,25 @@ check "and resolve against the page in view" "[10, 5, 1, 7]" \
     "$(sed -n 2p "$WORK/tpg.out")"
 check "+2, -1 and \$ turn the pages they name" "[5, 4, 10, 10]" \
     "$(sed -n 3p "$WORK/tpg.out")"
+
+# --- :HexPairOpen takes the same three forms ------------------------------
+# A step counts from the first page, which is where opening starts.
+cat > "$WORK/tpg2.vim" <<EOF
+$(printf "$HEX")
+HexPairOpen $WORK/pgoto1.bin \$
+let last = b:hexpair_page_index + 1
+bwipeout!
+HexPairOpen $WORK/pgoto1.bin +2
+let stepped = b:hexpair_page_index + 1
+bwipeout!
+HexPairOpen $WORK/pgoto1.bin
+let default = b:hexpair_page_index + 1
+call writefile([string([last, stepped, default])], '$WORK/tpg2.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tpg2.vim" < /dev/null
+check "opening at \$, at a step, and by default" "[10, 3, 1]" \
+    "$(cat "$WORK/tpg2.out")"
 check "a step past the end is refused like any other missing page" \
     "hexpair: page 19 does not exist (file has 10 pages)" \
     "$(sed -n 4p "$WORK/tpg.out")"
