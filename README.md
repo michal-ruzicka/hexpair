@@ -12,11 +12,11 @@ cursor mapping between the views, `:w` that writes only the page you are
 looking at, and forgiving editing where the offset and ASCII columns are
 purely decorative.
 
-**The name:** hex and text, always paired. *Within a line* — the byte
-under the cursor and its character light up together, whichever column
-you are in, one byte or a whole Visual selection. *Between the views* —
-the page as a hex dump and the same page as raw text, toggled with the
-cursor left on the same byte.
+**The hex*pair* name:** hex and text, always paired. *Within a line* —
+the byte under the cursor and its character light up together, whichever
+column you are in, one byte or a whole Visual selection. *Between the
+views* — the page as a hex dump and the same page as raw text, toggled
+with the cursor left on the same byte.
 
 It is not the best hex editor in the world, and does not try to be. It
 is the one that is always a single command away wherever you already
