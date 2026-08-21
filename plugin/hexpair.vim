@@ -930,7 +930,8 @@ function! s:LoadPage(pageidx) abort
   " A file this user cannot write is shown read-only, so :w says so at
   " once (E45) instead of at the end of an editing session, through a
   " failure from xxd naming a temp file. ':w!' still reaches the write
-  " path, which checks again and refuses in hexpair's own words.
+  " path and fails there the way the file system makes it fail - which
+  " for a length-changing write is also where the recovery copy is kept.
   let &l:readonly = get(b:, 'hexpair_page_spill', '') ==# ''
         \ && !filewritable(b:hexpair_page_file)
   let b:hexpair_page_active = 1
