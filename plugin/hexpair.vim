@@ -84,6 +84,16 @@ if !exists('g:hexpair_page_confirm')
   let g:hexpair_page_confirm = 1
 endif
 
+" A ruler line under the top banner, numbering the byte columns of the
+" dump. Off by default: it is one more line of decoration on a view whose
+" whole point is the bytes, and the ASCII column already tells you where
+" you are once you know the layout. A page carries the setting it was
+" opened with, so changing it mid-session cannot desynchronize an open
+" page from the arithmetic that maps its lines to byte offsets.
+if !exists('g:hexpair_ruler')
+  let g:hexpair_ruler = 0
+endif
+
 " Position-mapping trace, off by default. Every step that turns a cursor
 " position into a byte offset or back says which it made, so :messages
 " holds the whole chain after the fact - which is what a field report
@@ -401,6 +411,43 @@ endfunction
 
 function! s:BannerBottom(pageidx, totalpages) abort
   return printf('" hexpair: end of page %d/%d', a:pageidx + 1, a:totalpages)
+endfunction
+
+" The ruler line (g:hexpair_ruler): the byte index of every column of the
+" dump, two digits per byte in the hex column and the low nibble alone in
+" the ASCII one, so a byte can be counted off without counting spaces.
+" Starts with a '"', which is what makes it contribute no bytes - the
+" same rule the banner lines rely on (s:IsBannerLine()).
+"
+" It is drawn for the layout of the page's FIRST line. A page that
+" straddles the 4 GiB offset-width change carries lines of two widths
+" (s:PagedLineLayout()), and the ruler can only line up with one of
+" them; the dump itself stays correct either way.
+function! s:RulerLine(hexstart, n) abort
+  let hex = []
+  let ascii = ''
+  for i in range(a:n)
+    call add(hex, printf('%02x', i))
+    let ascii .= printf('%x', i % 16)
+  endfor
+  return '"' . repeat(' ', a:hexstart - 2) . join(hex, ' ') . '  ' . ascii
+endfunction
+
+" Lines before the first dump line of a hex page: the top banner, plus
+" the ruler when the page was opened with one. The one number that turns
+" a dump line into a byte offset and back, so it is read from the buffer
+" it belongs to rather than from the global option.
+function! s:HeaderLines() abort
+  return get(b:, 'hexpair_page_header', 1)
+endfunction
+
+" The whole hex view around a page's dump lines.
+function! s:HexViewLines(dump) abort
+  let head = [b:hexpair_banner_top]
+  if s:HeaderLines() > 1
+    call add(head, s:RulerLine(b:hexpair_page_hexstart, b:hexpair_n))
+  endif
+  return head + a:dump + [b:hexpair_banner_bottom]
 endfunction
 
 " ---------------------------------------------------------------------------
@@ -882,6 +929,9 @@ function! s:LoadPage(pageidx) abort
   " derive their own (s:PagedLineLayout()), which differs only on a
   " page that straddles an offset-width change.
   let b:hexpair_page_hexstart   = s:HexStart(base)
+  " Snapshotted like b:hexpair_n, and for the same reason: every mapping
+  " between a line number and a byte offset counts on it.
+  let b:hexpair_page_header     = g:hexpair_ruler ? 2 : 1
 
   " Replacing the page must not be an undoable edit: undo history that
   " survived a page turn would let a single |u| put the bytes of a
@@ -903,6 +953,9 @@ function! s:LoadPage(pageidx) abort
           \ len, total, s:PageLabel())
     let b:hexpair_banner_bottom = s:BannerBottom(a:pageidx, totalpages)
     call append(0, b:hexpair_banner_top)
+    if b:hexpair_page_header > 1
+      call append(1, s:RulerLine(b:hexpair_page_hexstart, b:hexpair_n))
+    endif
     call append(line('$'), b:hexpair_banner_bottom)
   finally
     let &l:undolevels = save_ul
@@ -911,16 +964,18 @@ function! s:LoadPage(pageidx) abort
   " xxd runs through the shell, which can fail for reasons Vim never
   " reports - leaving an empty or short buffer presented as the page,
   " and a later :w patching that into the file. The dump's shape is
-  " known exactly, so check it: one line per bytesperline bytes, plus
-  " the two banner lines.
-  let expect = (len + b:hexpair_n - 1) / b:hexpair_n + 2
+  " known exactly, so check it: one line per bytesperline bytes, plus the
+  " header (banner, and the ruler when there is one) and the closing
+  " banner.
+  let expect = (len + b:hexpair_n - 1) / b:hexpair_n
+        \ + b:hexpair_page_header + 1
   if line('$') != expect
     throw printf('hexpair: reading page %d of %s produced %d lines, '
           \ . 'expected %d - is xxd working?',
           \ a:pageidx + 1, b:hexpair_page_file, line('$'), expect)
   endif
 
-  call cursor(2, b:hexpair_page_hexstart)
+  call cursor(1 + b:hexpair_page_header, b:hexpair_page_hexstart)
   call s:Debug('page %d/%d loaded: bytes [%d, %d) of %d, %d lines',
         \ a:pageidx + 1, totalpages, base, base + len, total, line('$'))
 
@@ -1079,7 +1134,8 @@ function! s:PagedByteOffset() abort
   " exactly while the page is canonical.
   if !&l:modified
     let off = b:hexpair_page_base
-          \ + (line('.') - 2) * b:hexpair_n + s:PagedCursorLineIndex()
+          \ + (line('.') - 1 - s:HeaderLines()) * b:hexpair_n
+          \ + s:PagedCursorLineIndex()
     call s:Debug('hex view line %d, column %d -> byte %d '
           \ . '(page base %d, unedited page)',
           \ line('.'), col('.'), off, b:hexpair_page_base)
@@ -1112,7 +1168,7 @@ function! s:PagedGotoOffset(abs) abort
   let n = b:hexpair_n
   let [n, hexstart, hexend, asciistart] =
         \ s:PagedOffsetLayout(b:hexpair_page_base + rel / n * n)
-  call cursor(rel / n + 2, hexstart + (rel % n) * 3)
+  call cursor(rel / n + 1 + s:HeaderLines(), hexstart + (rel % n) * 3)
   call s:Debug('byte %d -> hex view line %d, column %d',
         \ a:abs, line('.'), col('.'))
 endfunction
@@ -1504,6 +1560,8 @@ function! s:LoadEmpty() abort
   let b:hexpair_page_ftime      = getftime(b:hexpair_page_file)
   let b:hexpair_n               = g:hexpair_bytes_per_line
   let b:hexpair_page_hexstart   = s:HexStart(0)
+  " No dump lines to number, so no ruler whatever the option says.
+  let b:hexpair_page_header     = 1
   let b:hexpair_banner_top      = printf('" hexpair: %s is empty', s:PageLabel())
   let b:hexpair_banner_bottom   = '" hexpair: end of empty file'
 
@@ -1701,7 +1759,7 @@ endfunction
 " buffer content, so it works when there is none left to read.
 function! s:PosOffset(pos) abort
   let [lnum, col] = a:pos
-  let idx = lnum - 2
+  let idx = lnum - 1 - s:HeaderLines()
   if idx < 0
     return b:hexpair_page_base
   endif
@@ -1730,7 +1788,8 @@ function! s:Reread() abort
     " the user was still on it (see s:PagedHighlight()) by CANONICAL
     " layout - no buffer access at all. Exact for a page as it was read,
     " best-effort for one that was edited, which :e is discarding anyway.
-    let off = s:PosOffset(get(b:, 'hexpair_last_pos', [2, 1]))
+    let off = s:PosOffset(get(b:, 'hexpair_last_pos',
+          \ [1 + s:HeaderLines(), 1]))
     call s:LoadPageInView(b:hexpair_page_index)
     if s:IsHexView()
       call s:PagedGotoOffset(off)
@@ -2240,18 +2299,26 @@ function! s:TextGotoOffset(abs) abort
   call cursor(last, 1)
 endfunction
 
-" Replace the buffer with a:lines bracketed by the current page's banner,
-" without making it an undoable edit (see s:LoadPage() for why).
-function! s:SetViewLines(lines) abort
+" Replace the buffer with exactly a:lines, without making it an undoable
+" edit (see s:LoadPage() for why).
+function! s:SetLines(lines) abort
   let save_ul = &l:undolevels
   setlocal noreadonly modifiable
   try
     setlocal undolevels=-1
     silent %delete _
-    call setline(1, [b:hexpair_banner_top] + a:lines + [b:hexpair_banner_bottom])
+    call setline(1, a:lines)
   finally
     let &l:undolevels = save_ul
   endtry
+endfunction
+
+" The text view: the page's bytes between the two banner lines. No ruler
+" here - there are no columns to number in a page of raw text, and the
+" banner is matched by its exact text (s:TextBodyRange()), so the view
+" has to hold those two lines and nothing else around the body.
+function! s:SetViewLines(lines) abort
+  call s:SetLines([b:hexpair_banner_top] + a:lines + [b:hexpair_banner_bottom])
 endfunction
 
 " HEX-PAGE -> WINDOWED-TEXT, carrying the page's bytes as they stand -
@@ -2312,7 +2379,7 @@ function! s:ToHexView() abort
   try
     call writefile(s:TextViewLines(), raw, 'b')
     call s:CanonicalDump(raw, b:hexpair_page_base, dump)
-    call s:SetViewLines(readfile(dump))
+    call s:SetLines(s:HexViewLines(readfile(dump)))
   finally
     call delete(raw)
     call delete(dump)

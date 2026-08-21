@@ -153,6 +153,8 @@ for name in ('paged21.bin', 'paged22.bin', 'paged23.bin', 'paged31.bin', 'paged3
 for name in ('scan1.bin', 'scan2.bin'):
     with open(os.path.join(w, name), 'wb') as f:
         f.write(bytes((i * 7) % 256 for i in range(100000)))
+# ruler fixture
+open(os.path.join(w, 'ruler1.bin'), 'wb').write(bytes(i % 256 for i in range(5000)))
 # cursor-byte fixture
 open(os.path.join(w, 'cbo1.bin'), 'wb').write(bytes(i % 256 for i in range(5000)))
 # trace fixture
@@ -1963,6 +1965,50 @@ check "the canonical byte and the counted byte are the same byte" \
 # byte (1087) rather than counting it as the first of the next line.
 check "and it is the byte the layout says" \
     "[1024, 1024, 1025, 1078, 1087, 1073, 1075, 1520]" "$(sed -n 1p "$WORK/tcbo.out")"
+
+# ===========================================================================
+# The column ruler (g:hexpair_ruler)
+# ===========================================================================
+# One more line between the banner and the dump, numbering the columns.
+# It carries no bytes (it starts with a '"', like the banners), but it does
+# shift every dump line down by one - and turning a line number into a byte
+# offset is arithmetic that has to know about it.
+RULER_ALL=$(hash_range "$WORK/ruler1.bin" 0 -1)
+cat > "$WORK/trul.vim" <<EOF
+$(printf "$HEX")
+let g:hexpair_ruler = 1
+HexPairOpen $WORK/ruler1.bin 2
+let ruler = getline(2)
+let dump = getline(3)
+" every column of the ruler must sit exactly over the byte it numbers:
+" byte 7 and byte 15 in the hex column, and the ASCII column's own run
+let hexstart = HexPairPagedLineHexStart(3)
+let aligned = [stridx(ruler, '07') + 1 == hexstart + 7 * 3, stridx(ruler, '0f') + 1 == hexstart + 15 * 3, strpart(ruler, hexstart + 16 * 3, 16), stridx(dump, ' 07') + 2 == hexstart + 7 * 3]
+let opened = [line('.'), col('.'), HexPairPagedByteOffset()]
+HexPairGoOffset 600
+let jumped = [line('.'), col('.'), HexPairPagedByteOffset() + 1]
+HexPairToggle
+let intext = [line('\$'), getline(1) ==# b:hexpair_banner_top]
+HexPairToggle
+let back = [getline(2)[0:8], HexPairPagedByteOffset() + 1, line('\$')]
+write
+call writefile([string(aligned), string(opened), string(jumped), string(intext), string(back), string(HexPairPagedValidate())], '$WORK/trul.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/trul.vim" < /dev/null
+check "the ruler numbers the columns it sits over" "[1, 1, '0123456789abcdef', 1]" \
+    "$(sed -n 1p "$WORK/trul.out")"
+check "a page with a ruler opens on its first byte" "[3, 11, 512]" \
+    "$(sed -n 2p "$WORK/trul.out")"
+check "and byte 600 is still where the layout says" "[8, 32, 600]" \
+    "$(sed -n 3p "$WORK/trul.out")"
+check "the text view has no ruler, just the banners" "[5, 1]" \
+    "$(sed -n 4p "$WORK/trul.out")"
+check "and the way back rebuilds it" "['\"        ', 600, 35]" \
+    "$(sed -n 5p "$WORK/trul.out")"
+check "the ruler is not read as hex payload" "{}" "$(sed -n 6p "$WORK/trul.out")"
+check "and contributes no bytes to the write" "$RULER_ALL" \
+    "$(hash_range "$WORK/ruler1.bin" 0 -1)"
 
 # ---------------------------------------------------------------------------
 if [ "$FAIL" -eq 0 ]; then
