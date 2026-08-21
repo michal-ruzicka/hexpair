@@ -57,6 +57,26 @@ if command -v cygpath >/dev/null 2>&1; then
     WORK=$(cygpath -m "$WORK")
 fi
 
+# Then have Vim spell them: fnamemodify(':p') is what the plugin stores and
+# what its banners therefore show, and on Windows it resolves an 8.3 short
+# name - MSYS maps /tmp to %TEMP%, which can be C:/Users/RUNNER~1/... - to
+# the long form. Asserting a banner against the other spelling of the same
+# directory fails on a difference that is not one. On Unix this is a no-op.
+cat > "$WORK/canon.vim" <<EOF
+call writefile([fnamemodify('$ROOT', ':p:h'), fnamemodify('$WORK', ':p:h')], '$WORK/canon.out')
+qa!
+EOF
+if "$HEXPAIR_VIM" -es -u NONE -S "$WORK/canon.vim" < /dev/null 2>/dev/null \
+    && [ -s "$WORK/canon.out" ]; then
+    canon_root=$(sed -n 1p "$WORK/canon.out" | tr '\\' '/')
+    canon_work=$(sed -n 2p "$WORK/canon.out" | tr '\\' '/')
+    rm -f "$WORK/canon.vim" "$WORK/canon.out"
+    [ -n "$canon_root" ] && ROOT=$canon_root
+    [ -n "$canon_work" ] && WORK=$canon_work
+else
+    rm -f "$WORK/canon.vim" "$WORK/canon.out"
+fi
+
 FAIL=0
 
 # Same, for an expected string carrying a path: Windows spells the
@@ -1079,8 +1099,11 @@ check "shrink: the tail is unchanged, just moved" "$SP2_TAIL" \
     "$(hash_range "$WORK/sp2.bin" 512 -1)"
 
 # --- The temp file is gone after a successful splice ------------------------
-# tempname() names files in a private per-session directory; nothing of
-# ours may be left in it once the write has succeeded.
+# Nothing of ours may be left in tempname()'s directory once the write has
+# succeeded. Count the difference, not the contents: that directory is
+# private and empty per Vim session on Unix, but on Windows tempname()
+# names files straight in the shared %TEMP%, which is full of other
+# people's.
 cat > "$WORK/ts3c.vim" <<EOF
 $(printf "$PAGEDW")
 HexPairOpen $WORK/sp3.bin 2
@@ -1088,11 +1111,11 @@ let dir = fnamemodify(tempname(), ':h')
 let before = len(glob(dir . '/*', 0, 1))
 call append(1, 'aa bb cc')
 write
-call writefile([string([before, len(glob(dir . '/*', 0, 1)), &l:modified])], '$WORK/ts3c.out')
+call writefile([string([len(glob(dir . '/*', 0, 1)) - before, &l:modified])], '$WORK/ts3c.out')
 qa!
 EOF
 "$HEXPAIR_VIM" -es -u NONE -S "$WORK/ts3c.vim" < /dev/null
-check "a successful splice leaves no temp files behind" "[0, 0, 0]" \
+check "a successful splice leaves no temp files behind" "[0, 0]" \
     "$(cat "$WORK/ts3c.out")"
 
 # --- A splice that cannot replace the file keeps the recovery copy ----------
