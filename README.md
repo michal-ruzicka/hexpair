@@ -8,15 +8,23 @@
 **A Vim plugin that turns the classic `:%!xxd` hex-dump workflow into a
 small, reliable hex editor** — with live highlighting of the byte pair
 under the cursor in *both* the HEX and the ASCII column, byte-exact
-cursor mapping when toggling between the normal and the hex view, safe
-`:w` while in hex mode, and forgiving editing where the offset and ASCII
-columns are purely decorative.
+cursor mapping between the views, `:w` that writes only the page you are
+looking at, and forgiving editing where the offset and ASCII columns are
+purely decorative.
 
-Everything is built on `xxd` (which ships with Vim) and portable
-VimScript — no `sed`, `tr`, `dd` or other external tools, so the plugin
-works the same on Linux, on Windows (native Vim/gVim, where `xxd.exe` is
-found in the Vim installation directory even when it is not on `PATH`),
-and inside WSL.
+It is not the best hex editor in the world, and does not try to be. It
+is the one that is always a single command away wherever you already
+have Vim — no install, no package manager, nothing to get approved.
+Everything runs on `xxd`, which ships with Vim itself, and portable
+VimScript: no `sed`, `tr`, `dd` or anything else, so it behaves the same
+on Linux, on native Windows (where `xxd.exe` is found inside the Vim
+installation even when it is not on `PATH`) and inside WSL.
+
+And it is good enough for real work on real files: because it shows one
+page at a time and writes one page at a time, a file that does not fit
+in memory — or on the machine at all, a disk image, a device — is no
+different from a small one. Editing an 8 GiB file costs the same 13 MB
+of memory as editing an 8 KiB one.
 
 **Project page:** <https://github.com/michal-ruzicka/hexpair> — source
 code, releases and issue tracker.
@@ -168,8 +176,14 @@ too large to want Vim to read at all, skip the buffer entirely:
 vim -c 'HexPairOpen /var/lib/disk.img'
 ```
 
-A shell wrapper for the same, including piped input, is in
-`:help hexpair-vimhex`:
+A shell wrapper for the same ships with the plugin. Source it from your
+`~/.bashrc`:
+
+```sh
+source ~/.vim/pack/plugins/start/hexpair/hexpair.bashrc
+```
+
+and it gives you `vimhex`:
 
 ```sh
 vimhex bigfile.bin              # the first page
@@ -177,6 +191,11 @@ vimhex bigfile.bin 3            # page 3
 vimhex bigfile.bin @0x4a2000    # the page holding that byte
 cat bigfile.bin | vimhex -      # piped input
 ```
+
+`:HexPairPages` reports the byte under the cursor in exactly the form
+`@BYTE` takes, so you can note where you were and come straight back to
+it later. Set `VIMHEX_VIM` to pick a particular Vim. Details are in the
+file's own comments and in `:help hexpair-vimhex`.
 
 A buffer hexpair has touched is in one of two views, and `:HexPairToggle`
 moves between them:
@@ -305,6 +324,30 @@ than the rest of the plugin: `+num64` and patch 8.2.4906+, for
 `readblob()`, checked when such a write is attempted and refusing just
 that write. Viewing, navigating, same-length writes and inserts run on
 Vim 8.0 with nothing but `xxd`. Details: `:help hexpair-paged`.
+
+## What it costs
+
+Memory does not follow the size of the file. A page is read, written and
+patched a block at a time, so the numbers below are the same for a file
+of 8 KiB and one of 8 TiB — measured on this machine with the default
+128 KiB page:
+
+| Operation | Memory | Temporary disk space |
+|---|---|---|
+| Viewing a page, turning pages | 12 MB | none |
+| Writing a page whose length did not change | 13 MB | about one page |
+| **Inserting** bytes | 13 MB | one block of hex, ~16 MB |
+| **Deleting** bytes | 29 MB | **a full copy of the file** |
+
+Time is what does scale, and only with what has to move: a same-length
+write touches the page alone, an insert moves the bytes after it, and a
+delete rewrites the file — because nothing in Vim or `xxd` can make a
+file shorter any other way.
+
+The one exception to all of this is `:HexPairToggle` on a file you have
+already opened normally: by the time you press it, Vim has read the whole
+file into the buffer. That is exactly what `:HexPairOpen` (and `vimhex`)
+exist to avoid — they read only the page they show.
 
 ## Requirements
 

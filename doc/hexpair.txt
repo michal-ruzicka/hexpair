@@ -577,46 +577,31 @@ g:hexpair_page_confirm  Whether a write that changed the page's length
 <
                                                             *hexpair-vimhex*
 A shell wrapper for opening a file - or piped input - straight in the hex
-view, e.g. in ~/.bashrc: >
+view ships with the plugin as hexpair.bashrc, next to this help file.
+Source it from ~/.bashrc: >
 
-    vimhex()
-    {
-        if [ $# -lt 1 ] || [ $# -gt 2 ]; then
-            echo "usage: vimhex FILE|- [PAGE|@BYTE]" >&2
-            return 1
-        fi
-
-        local where="${2:-1}" jump
-
-        case "$where" in
-            @*)
-                where="${where#@}"
-                jump='execute "HexPairGoOffset" $HEXPAIR_OPEN_WHERE'
-                ;;
-            *)
-                jump='execute "HexPairPageGoto" $HEXPAIR_OPEN_WHERE'
-                ;;
-        esac
-
-        if [ "$1" = "-" ]; then
-            HEXPAIR_OPEN_WHERE="$where" \
-                vim -b -c 'autocmd VimEnter * HexPairToggle' \
-                       -c "autocmd VimEnter * $jump" -
-            return
-        fi
-
-        HEXPAIR_OPEN_FILE="$1" HEXPAIR_OPEN_WHERE="$where" \
-            vim -c 'autocmd VimEnter * call HexPairOpenFile($HEXPAIR_OPEN_FILE)' \
-                -c "autocmd VimEnter * $jump"
-    }
+    source ~/.vim/pack/plugins/start/hexpair/hexpair.bashrc
 <
-    vimhex bigfile.bin              " the first page
-    vimhex bigfile.bin 3            " page 3
-    vimhex bigfile.bin @0x4a2000    " the page holding that byte
-    cat bigfile.bin | vimhex -      " piped input
+and it defines: >
+
+    vimhex FILE          the first page
+    vimhex FILE PAGE     that page, 1-based
+    vimhex FILE @BYTE    the page holding that byte, cursor on it;
+                         decimal or 0x-prefixed, and 1-based, so a
+                         position |:HexPairPages| reported can be typed
+                         straight back in
+    vimhex - [...]       read from standard input instead of a file
+
+    vimhex bigfile.bin
+    vimhex bigfile.bin 3
+    vimhex bigfile.bin @0x4a2000
+    cat bigfile.bin | vimhex -
     dd if=/dev/sda bs=1M count=64 | vimhex - @1024
 <
-Three things in it are not incidental:
+Set $VIMHEX_VIM to use a particular Vim.
+
+Three things in it are not incidental, and are commented in the file
+itself so they survive being copied out of it:
 
 - HexPairOpenFile(), not `-c 'HexPairOpen ...'`, for the reason given at
   |HexPairOpenFile()| above: a name with a space or a literal '$' does

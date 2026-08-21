@@ -44,6 +44,12 @@ and this project adheres to
   a byte of content.
 
 ### Added
+- The `vimhex` shell wrapper now ships as `hexpair.bashrc` in the plugin
+  directory, so it can be sourced from `~/.bashrc` rather than copied
+  out of the documentation:
+  `source ~/.vim/pack/plugins/start/hexpair/hexpair.bashrc`. It handles
+  `-` for standard input, a page number or an `@BYTE` position, and
+  `$VIMHEX_VIM` picks a particular Vim.
 - `:HexPairPages` also reports the byte under the cursor, in hex with
   the decimal in brackets and 1-based — exactly the form
   `:HexPairGoOffset` and the `vimhex` wrapper's `@BYTE` take, so a
