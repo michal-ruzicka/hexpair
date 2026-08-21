@@ -192,10 +192,29 @@ Releases are built and signed locally; no private key ever leaves the
 developer's machine.
 
 1. On a feature branch, bump `Version:` and `Date:` in the header of
-   `plugin/hexpair.vim` and add a `## [X.Y.Z] – YYYY-MM-DD` entry to
+   `plugin/hexpair.vim` and finish the `## [X.Y.Z] – YYYY-MM-DD` entry in
    `CHANGELOG.md`. Versions follow
    [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
    (`MAJOR.MINOR.PATCH`).
+
+   Before bumping, read the release as a stranger would. A changelog
+   entry written over a long cycle describes the cycle, not the release,
+   and the last time this was checked it contradicted itself four ways —
+   so it is worth going through:
+
+   - **Does the entry describe the release, or its history?** Nothing may
+     announce a feature as unfinished that a later bullet then finishes,
+     or credit a file that no release ever contained. One section per
+     type; `Fixed` splits into what was in the previous release and what
+     was found and fixed within this cycle.
+   - **Is every runtime message still true?** They outlive the behaviour
+     they describe. Grep the strings the plugin can print and read them
+     against what the code now does.
+   - **Is every code path tested from every entry point it has?** Two
+     views reach the same write path by different routes; a test that
+     only drives one of them covers half of it.
+   - **Do `CLAUDE.md` and the help still speak in the future tense** about
+     anything that now ships?
 2. Open a PR, get it reviewed (CI must be green, including the
    cross-platform reproducibility check), and merge into `main`.
 3. On `main`, tag and push:
