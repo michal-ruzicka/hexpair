@@ -153,6 +153,8 @@ for name in ('paged21.bin', 'paged22.bin', 'paged23.bin', 'paged31.bin', 'paged3
 for name in ('scan1.bin', 'scan2.bin'):
     with open(os.path.join(w, name), 'wb') as f:
         f.write(bytes((i * 7) % 256 for i in range(100000)))
+# page-goto fixture
+open(os.path.join(w, 'pgoto1.bin'), 'wb').write(bytes(i % 256 for i in range(5000)))
 # selection fixture
 open(os.path.join(w, 'sel1.bin'), 'wb').write(bytes(i % 256 for i in range(5000)))
 # statusline fixture
@@ -754,7 +756,7 @@ EOF
 "$HEXPAIR_VIM" -es -u NONE -S "$WORK/t30.vim"
 check "empty prompt input is cancellation, not an error" "{}" "$(sed -n 1p "$WORK/t30.out")"
 check "numeric prompt input yields the page number"      "{'page': 7}" "$(sed -n 2p "$WORK/t30.out")"
-check "non-numeric prompt input is a clear error"         "{'msg': 'hexpair: not a page number: abc'}" "$(sed -n 3p "$WORK/t30.out")"
+check "non-numeric prompt input is a clear error"         "{'msg': 'hexpair: not a page number: abc (a page, +N or -N to step, \$ for the last)'}" "$(sed -n 3p "$WORK/t30.out")"
 
 # --- Test 31: :HexPairPageGoto! discards unsaved changes -------------------
 # The mechanism <Plug>(HexPairPageGotoForce) relies on (s:GotoPage()'s
@@ -2094,6 +2096,39 @@ check "in the text view a column is a byte" \
 check "and a linewise selection there takes the line break with it" \
     "hexpair: 11 bytes selected, 1025-1035 (0x401-0x40b) of 5000" \
     "$(sed -n 8p "$WORK/tsel.out")"
+
+# --- A page can be named as a step, or as the last one ---------------------
+# The same parser serves :HexPairPageGoto and the <Plug> prompt, so "$"
+# and "+2" work wherever a page number does - including through the vimhex
+# wrapper, which hands its PAGE argument straight to the command.
+cat > "$WORK/tpg.vim" <<EOF
+$(printf "$HEX")
+HexPairOpen $WORK/pgoto1.bin 3
+let parsed = [HexPairPagedParsePageInput('\$'), HexPairPagedParsePageInput('+2'), HexPairPagedParsePageInput('-2'), HexPairPagedParsePageInput('7')]
+let resolved = map(copy(parsed), 'HexPairPagedResolvePage(v:val, 3, 10)')
+HexPairPageGoto +2
+let stepped = b:hexpair_page_index + 1
+HexPairPageGoto -1
+let back = b:hexpair_page_index + 1
+HexPairPageGoto \$
+let last = b:hexpair_page_index + 1
+redir => msg
+silent! HexPairPageGoto +9
+redir END
+call writefile([string(parsed), string(resolved), string([stepped, back, last, b:hexpair_page_index + 1]), substitute(msg, '^[\r\n]*', '', '')], '$WORK/tpg.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tpg.vim" < /dev/null
+check "a step and a \$ parse as themselves" \
+    "[{'last': 1}, {'delta': 2}, {'delta': -2}, {'page': 7}]" \
+    "$(sed -n 1p "$WORK/tpg.out")"
+check "and resolve against the page in view" "[10, 5, 1, 7]" \
+    "$(sed -n 2p "$WORK/tpg.out")"
+check "+2, -1 and \$ turn the pages they name" "[5, 4, 10, 10]" \
+    "$(sed -n 3p "$WORK/tpg.out")"
+check "a step past the end is refused like any other missing page" \
+    "hexpair: page 19 does not exist (file has 10 pages)" \
+    "$(sed -n 4p "$WORK/tpg.out")"
 
 # ---------------------------------------------------------------------------
 if [ "$FAIL" -eq 0 ]; then

@@ -1858,13 +1858,6 @@ function! s:PagePrev(force) abort
   call s:GotoPage(b:hexpair_page_index - 1, a:force)
 endfunction
 
-function! s:PageGoto(n, force) abort
-  if !s:RequirePaged()
-    return
-  endif
-  call s:GotoPage(a:n - 1, a:force)
-endfunction
-
 " Parses the text typed at the :HexPairPageGoto prompt (see
 " s:PageGotoPrompt() below): {} for an empty string (cancelled), a
 " 'msg' key for invalid input, otherwise a 'page' key (1-based, as
@@ -1880,10 +1873,51 @@ function! HexPairPagedParsePageInput(text) abort
   if empty(a:text)
     return {}
   endif
+  if a:text ==# '$'
+    return {'last': 1}
+  endif
+  if a:text =~# '^[+-]\d\+$'
+    " str2nr() is not asked to make sense of a leading '+'.
+    return {'delta': str2nr(a:text[1:]) * (a:text[0] ==# '-' ? -1 : 1)}
+  endif
   if a:text !~# '^\d\+$'
-    return {'msg': 'hexpair: not a page number: ' . a:text}
+    return {'msg': 'hexpair: not a page number: ' . a:text
+          \ . ' (a page, +N or -N to step, $ for the last)'}
   endif
   return {'page': str2nr(a:text)}
+endfunction
+
+" The 1-based page a parsed input names, given where the view is now.
+" Not range-checked here: s:LoadPage()'s HexPairPagedBounds() check
+" already reports a page that does not exist, in the same words whether
+" it was asked for as a number, a step or a $.
+function! HexPairPagedResolvePage(parsed, current, totalpages) abort
+  if has_key(a:parsed, 'last')
+    return a:totalpages
+  endif
+  if has_key(a:parsed, 'delta')
+    return a:current + a:parsed.delta
+  endif
+  return get(a:parsed, 'page', 0)
+endfunction
+
+" :HexPairPageGoto's argument, and the same text typed at the prompt.
+function! s:PageGotoText(text, force) abort
+  if !s:RequirePaged()
+    return
+  endif
+  let parsed = HexPairPagedParsePageInput(a:text)
+  if has_key(parsed, 'msg')
+    echohl ErrorMsg
+    echomsg parsed.msg
+    echohl None
+    return
+  endif
+  if empty(parsed)
+    return
+  endif
+  call s:GotoPage(HexPairPagedResolvePage(parsed, b:hexpair_page_index + 1,
+        \ b:hexpair_page_totalpages) - 1, a:force)
 endfunction
 
 " Prompt for a page number (bounds are reported so the user knows the
@@ -1897,16 +1931,10 @@ function! s:PageGotoPrompt(force) abort
   if !s:RequirePaged()
     return
   endif
-  let n = input(printf('hexpair: goto page (1-%d): ', b:hexpair_page_totalpages))
+  let n = input(printf('hexpair: goto page (1-%d, +N/-N, $): ',
+        \ b:hexpair_page_totalpages))
   redraw
-  let parsed = HexPairPagedParsePageInput(n)
-  if has_key(parsed, 'msg')
-    echohl ErrorMsg
-    echomsg parsed.msg
-    echohl None
-  elseif has_key(parsed, 'page')
-    call s:GotoPage(parsed.page - 1, a:force)
-  endif
+  call s:PageGotoText(n, a:force)
 endfunction
 
 " 1-based, inclusive byte positions - see the comment on s:BannerTop(),
@@ -2660,7 +2688,8 @@ command! -bar HexPairRefresh call s:Refresh()
 command! -bar -nargs=+ -complete=file HexPairOpen call s:Open(<f-args>)
 command! -bar -bang HexPairPageNext call s:PageNext('<bang>' ==# '!')
 command! -bar -bang HexPairPagePrev call s:PagePrev('<bang>' ==# '!')
-command! -bar -bang -nargs=1 HexPairPageGoto call s:PageGoto(str2nr(<q-args>), '<bang>' ==# '!')
+command! -bar -bang -nargs=1 HexPairPageGoto
+      \ call s:PageGotoText(<q-args>, '<bang>' ==# '!')
 command! -bar -bang -nargs=1 HexPairGoOffset
       \ call s:GotoOffset(<q-args>, '<bang>' ==# '!')
 command! -bar HexPairPages call s:Pages()
