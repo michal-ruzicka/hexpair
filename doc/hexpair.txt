@@ -166,6 +166,65 @@ last byte, and on a short last line on its last existing byte.
                         |hexpair-refresh|, where the command is described
                         in full.
 
+                                                            *:HexPairInspect*
+:HexPairInspect         Read the bytes at the cursor as the numbers they
+                        could be - 8, 16, 32 and 64 bits wide, unsigned
+                        and signed, little- and big-endian, plus the two
+                        IEEE 754 floats: >
+
+    hexpair: byte 66 (0x42) of 512: 41 42 43 44 45 46 47 48
+      8-bit    65                          char 'A'  bin 01000001  oct 0101
+               little-endian               big-endian
+      16-bit   16961                       16706
+      32-bit   1145258561                  1094861636
+      64-bit   5208208757389214273         4702394921427289928
+      float32  781.035217                  12.141422
+      float64  1.58398e40                  2393736.541207
+<
+                        The signed reading follows the unsigned one where
+                        the two differ ("43981 / -21555"), which is
+                        exactly when the top bit is set.
+
+                        The bytes are THIS PAGE's, as the buffer holds
+                        them - edits included - and stop at its end, so
+                        near the boundary there may be fewer than eight
+                        and the wider rows say how many are left rather
+                        than reaching into a page that is not on screen.
+                        Works in either view; a banner line has no byte
+                        to read and says so.
+
+                        Widths above 16 bits need a Vim whose |Number| is
+                        64 bits (|+num64|) and the floats need |+float|;
+                        without them those rows are left out rather than
+                        shown wrong.
+
+                                                          *:HexPairSelection*
+:HexPairSelection       Say how many bytes the |Visual| selection covers,
+                        and which: >
+
+    hexpair: 18 bytes selected, 1041-1058 (0x411-0x422) of 5000
+    hexpair: 12 bytes selected in 3 lines (4 per line), 1041-1076
+             (0x411-0x434) of 5000
+<
+                        Characterwise and linewise selections are one run
+                        of bytes and are reported as a range; a blockwise
+                        one is not, so it leads with the count and says
+                        how many lines and how many per line.  The
+                        positions are 1-based, like the page banner's, so
+                        they can be typed straight into |:HexPairGoOffset|.
+
+                        Banner lines contribute no bytes here either; a
+                        selection of nothing else says so.  In the text
+                        view a column is a byte, and a linewise selection
+                        takes in the line break that ends each line -
+                        which in a page of raw bytes is a byte like any
+                        other.
+
+                        From Normal mode it reports the selection made
+                        last ('< and '>), which is also how the Visual
+                        mapping works: |<Plug>(HexPairSelection)| leaves
+                        Visual mode, and that is what sets the marks.
+
 ==============================================================================
 3. Mappings                                                 *hexpair-mappings*
 
@@ -174,6 +233,7 @@ last byte, and on a short last line on its last existing byte.
                                                        *<Plug>(HexPairRefresh)*
                             *<Plug>(HexPairGoOffset)* *<Plug>(HexPairGoOffsetForce)*
                                                           *<Plug>(HexPairPages)*
+                       *<Plug>(HexPairInspect)* *<Plug>(HexPairSelection)*
 The plugin defines NO key mappings by default; it only provides the
 commands above and <Plug> mappings.  Choose your own keys in your vimrc.
 Every command that takes no argument has a target; the whole set, on a
@@ -193,6 +253,11 @@ Every command that takes no argument has a target; the whole set, on a
     nmap <Leader>b <Plug>(HexPairGoOffset)
     nmap <Leader>? <Plug>(HexPairPages)
 
+    " Reading the bytes
+    nmap <Leader>i <Plug>(HexPairInspect)
+    nmap <Leader>s <Plug>(HexPairSelection)
+    xmap <Leader>s <Plug>(HexPairSelection)
+
     " The same, discarding unwritten changes without asking - as the !
     " commands do; handy for reading through a file rather than editing it
     nnoremap <silent> <Leader>J :HexPairPageNext!<CR>
@@ -205,8 +270,12 @@ the command line or a shell wrapper (see |hexpair-paged| for one).
 
 |<Plug>(HexPairPageGoto)| and |<Plug>(HexPairGoOffset)| prompt with
 |input()| for the number a bare <Plug> target cannot carry: press the
-key, type a page number or a byte offset (decimal, or 0x-prefixed for
-the offset), Enter.  An empty answer cancels.
+key, type a page (a number, +N or -N to step, $ for the last) or a byte
+offset (decimal, or 0x-prefixed), Enter.  An empty answer cancels.
+
+|<Plug>(HexPairSelection)| is the one target worth mapping in TWO modes:
+in Visual mode it reports the selection you are making, in Normal mode
+the one you made last.  Map it with both `xmap` and `nmap`, as above.
 
 Or map the commands directly: >
 
@@ -270,6 +339,65 @@ g:hexpair_paste         The 'paste' option is global, so it cannot be set
                         to 0 to leave 'paste' alone: >
                             let g:hexpair_paste = 0
 <
+                                                             *g:hexpair_ruler*
+g:hexpair_ruler         A ruler line between the top banner and the dump,
+                        numbering the byte columns - two digits over each
+                        hex byte, the low nibble over each ASCII
+                        character.  Default: 0 (no ruler). >
+
+    let g:hexpair_ruler = 1
+<
+                        gives >
+
+  " hexpair: page 2/10  bytes 513-1024 of 5000  disk.img
+  "         00 01 02 03 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f  0123456789abcdef
+  00000200: 00 01 02 03 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f  ................
+<
+                        Like the banners, the line starts with a '"' and
+                        therefore contributes no bytes: it is never
+                        written, and editing it changes nothing.  It is
+                        drawn for the layout of the page's FIRST line, so
+                        on a page that straddles the 4 GiB offset-width
+                        change it lines up with the narrower half.  A
+                        page keeps the setting it was opened with; a
+                        later change takes effect on the next page.
+
+                        The text view has no ruler - there are no columns
+                        to number in a page of raw bytes.
+
+                                                             *g:hexpair_debug*
+g:hexpair_debug         Trace every mapping between a cursor position and
+                        a byte offset to |:messages|, for diagnosing a
+                        cursor that landed on the wrong byte.  Default: 0. >
+
+    let g:hexpair_debug = 1
+<
+                        Both directions are printed in the same terms, so
+                        a page load, a jump to an offset and the byte a
+                        write found can be read off against each other.
+
+                                                          *HexPairStatus()*
+HexPairStatus()         The view, the page and the byte under the cursor,
+                        for 'statusline': >
+
+    set statusline=%f\ %h%w%m%r\ %{HexPairStatus()}%=%l,%c%V\ %P
+<
+                        gives "hex 3/21 @0x4a2001" in a hex page and
+                        "txt 3/21 @0x4a2001" in the text view, and an
+                        EMPTY string in every buffer hexpair has not
+                        touched - so one statusline serves both.  The
+                        byte is in the form |:HexPairGoOffset| and
+                        vimhex's @BYTE take.
+
+                        A statusline function is called on every cursor
+                        movement, so this one never walks the page: the
+                        byte comes from the canonical layout.  On a page
+                        with unwritten edits - marked with a "+" after
+                        the page numbers - that is where the byte WAS,
+                        since inserting or deleting hex digits above the
+                        cursor moves what follows; |:HexPairPages| counts
+                        the digits actually there and is the exact answer.
+
                                                 *HexPairActive* *HexPairMirror*
 HexPairActive           Highlight for the byte representation in the column
                         the cursor is currently in.  Default: underline.
@@ -420,13 +548,22 @@ HexPairOpenFile({file} [, {page}])
 
                           *:HexPairPageGoto* *<Plug>(HexPairPageGoto)*
                                               *<Plug>(HexPairPageGotoForce)*
-:HexPairPageGoto[!] {N} Jump directly to page {N} (1-based).  Refuses to
+:HexPairPageGoto[!] {page}
+                        Jump directly to {page}, which is one of:
+                            {N}     the page numbered N, 1-based
+                            +N, -N  N pages forward or back from this one
+                            $       the last page
+                        A step past either end is refused with the same
+                        "page N does not exist" as a number out of range,
+                        rather than being clamped, so a mistyped step does
+                        not quietly land somewhere else.  Refuses to
                         discard unsaved changes without !, same as above.
                         <Plug>(HexPairPageGoto) is the mapping equivalent:
-                        it prompts for the number with |input()| instead of
-                        needing a typed {N}.  <Plug>(HexPairPageGotoForce)
-                        is the same prompt but discards unsaved changes
-                        without asking, like the {N} variant with !.
+                        it prompts with |input()| instead of needing a
+                        typed {page}, and accepts the same three forms.
+                        <Plug>(HexPairPageGotoForce) is the same prompt but
+                        discards unsaved changes without asking, like the
+                        {page} variant with !.
 
                                                               *:HexPairPages*
 :HexPairPages           Report the current page number, the total page
@@ -537,10 +674,20 @@ confirmation first (|g:hexpair_page_confirm| turns the question off).  The
 first case, the same-length patch, does not ask: it writes only the page.
 
 Before any of them, the dump is validated exactly as in |hexpair-writing|,
-and the file's size and modification time are compared with what they
-were when the page was read.  A file that changed on disk meanwhile is
+and the file is checked for having changed underneath the page: its size
+and modification time are compared with what they were when the page was
+read, AND the page's own bytes are read back and compared with a hash
+taken at the same moment.  The second check is there because the first
+cannot see everything: a modification time has whole-second resolution,
+so a writer that changes bytes in place, in the same second the page was
+read, is invisible to size and mtime both.  Either way the write is
 refused rather than patched at offsets that may no longer mean anything;
-reload it with |:HexPairPageGoto|! and redo the edit.
+reload with |:HexPairPageGoto|! and redo the edit.
+
+Reading the page back costs what reading a page costs - hundredths of a
+second, independent of the size of the file.  Where Vim has no |sha256()|
+(a build without |+cryptv|) the hash is skipped and the size and mtime
+check stands alone.
 
 `:w {file}` means something different from a plain |:w|: not "patch this
 page into its own file" but "save what I am looking at, as a whole, over
@@ -631,6 +778,11 @@ itself so they survive being copied out of it:
 ==============================================================================
 9. Limitations                                           *hexpair-limitations*
 
+- A block device (/dev/sda) cannot be paged: the size the system reports
+  for one is 0, and hexpair pages what a file says it holds, so it opens
+  as an empty file with no pages.  Copy a slice of it into a file, or
+  pipe one in - `dd if=/dev/sda bs=1M count=64 | vimhex -` - and page
+  that (|hexpair-vimhex|).
 - A page of a file this user cannot write opens |'readonly'|, so |:w|
   refuses it (E45) rather than converting the page and finding out from
   xxd.  |:w!| overrides that, as everywhere else in Vim, and then fails
