@@ -1117,35 +1117,38 @@ function! s:PagedCursorLineIndex() abort
   return s:PagedLineIndexAt(line('.'), col('.'))
 endfunction
 
+" Absolute offset of the FIRST byte of a dump line.
+"
+" On a page nobody has edited, what is above the line needs no counting:
+" the page is exactly what xxd produced, so dump line k holds bytes k * n
+" and the walk can be skipped entirely. That is what keeps a write and
+" |:HexPairPages| off a second pass over the page - the cursor byte is
+" reported after every write, and on the default page size counting it
+" costs as much as the write itself. Once the page has been edited, only
+" the digits actually on the lines above say where a line starts.
+function! s:PagedLineBase(lnum) abort
+  return !&l:modified
+        \ ? b:hexpair_page_base + (a:lnum - 1 - s:HeaderLines()) * b:hexpair_n
+        \ : b:hexpair_page_base + s:PagedScan(a:lnum).bytes
+endfunction
+
+" Absolute offset of the byte at a position in the hex view. The
+" WITHIN-line part goes through s:PagedLineIndexAt() whichever way the
+" line base was found, so the two cannot drift apart in how they read a
+" line - only in how they count the lines above it, which is arithmetic
+" exactly while the page is canonical.
+function! s:PagedOffsetAt(lnum, col) abort
+  return s:PagedLineBase(a:lnum) + s:PagedLineIndexAt(a:lnum, a:col)
+endfunction
+
 function! s:PagedByteOffset() abort
   if s:IsBannerLine(getline('.'))
     return b:hexpair_page_base
   endif
-  " On a page nobody has edited, what is above the cursor's line needs no
-  " counting: the page is exactly what xxd produced, so dump line k holds
-  " bytes k * n .. and the walk can be skipped entirely. That is what
-  " keeps a write and |:HexPairPages| off a second pass over the page -
-  " the cursor byte is reported after every write, and on the default
-  " page size counting it costs as much as the write itself.
-  "
-  " The WITHIN-line part goes through the same s:PagedCursorLineIndex()
-  " either way, so the two paths cannot drift apart in how they read a
-  " line - only in how they count the lines above it, which is arithmetic
-  " exactly while the page is canonical.
-  if !&l:modified
-    let off = b:hexpair_page_base
-          \ + (line('.') - 1 - s:HeaderLines()) * b:hexpair_n
-          \ + s:PagedCursorLineIndex()
-    call s:Debug('hex view line %d, column %d -> byte %d '
-          \ . '(page base %d, unedited page)',
-          \ line('.'), col('.'), off, b:hexpair_page_base)
-    return off
-  endif
-  let scan = s:PagedScan(line('.'))
-  let off = b:hexpair_page_base + scan.bytes + s:PagedCursorLineIndex()
-  call s:Debug('hex view line %d, column %d -> byte %d (page base %d, '
-        \ . '%d bytes above the line)',
-        \ line('.'), col('.'), off, b:hexpair_page_base, scan.bytes)
+  let off = s:PagedOffsetAt(line('.'), col('.'))
+  call s:Debug('hex view line %d, column %d -> byte %d (page base %d%s)',
+        \ line('.'), col('.'), off, b:hexpair_page_base,
+        \ &l:modified ? ', counted' : ', unedited page')
   return off
 endfunction
 
@@ -1928,6 +1931,152 @@ function! s:CursorBytePosition() abort
 endfunction
 
 " ---------------------------------------------------------------------------
+" What a Visual selection covers
+" ---------------------------------------------------------------------------
+
+" The bytes a selection covers: {'first', 'last', 'count', 'lines',
+" 'perline'} in absolute file offsets, or {} when it covers none (a
+" selection of banner lines alone). 'perline' is 0 unless the selection is
+" blockwise, where the bytes are not one run and the count is what matters.
+"
+" Global and parameterized by the two ends and the mode rather than
+" reading them itself, for the reason |HexPairPagedSelectionPositions()|
+" gives: Visual mode cannot be driven under this project's `vim -es`
+" harness, so the geometry has to be callable without it.
+function! HexPairPagedSelectionBytes(vpos, cpos, mode) abort
+  let forward = a:vpos[1] < a:cpos[1]
+        \ || (a:vpos[1] == a:cpos[1] && a:vpos[2] <= a:cpos[2])
+  let [head, tail] = forward ? [a:vpos, a:cpos] : [a:cpos, a:vpos]
+  let sel = s:IsHexView()
+        \ ? s:HexSelectionBytes(head, tail, a:mode)
+        \ : s:TextSelectionBytes(head, tail, a:mode)
+  if empty(sel)
+    return {}
+  endif
+  " Nothing may be reported outside the page: a linewise selection of the
+  " last line takes in a line break the page may not have, and a blockwise
+  " one can reach past the bytes a short line holds.
+  let last = b:hexpair_page_base + b:hexpair_page_len - 1
+  let sel.first = sel.first < b:hexpair_page_base ? b:hexpair_page_base : sel.first
+  let sel.last  = sel.last > last ? last : sel.last
+  return sel
+endfunction
+
+" Bytes on one dump line: the index of its first and last, or [] if it
+" holds none (a banner line, or an empty one the user inserted).
+function! s:HexLineBytes(lnum) abort
+  if s:IsBannerLine(getline(a:lnum))
+    return []
+  endif
+  let n = s:PagedLineBytes(getline(a:lnum))
+  return n > 0 ? [0, n - 1] : []
+endfunction
+
+function! s:HexSelectionBytes(head, tail, mode) abort
+  let block = a:mode ==# "\<C-V>"
+  let [locol, hicol] = [min([a:head[2], a:tail[2]]), max([a:head[2], a:tail[2]])]
+  let [first, last, nbytes, lines, perline] = [-1, -1, 0, 0, 0]
+  for lnum in range(a:head[1], a:tail[1])
+    let ends = s:HexLineBytes(lnum)
+    if empty(ends)
+      continue
+    endif
+    if block
+      let lo = s:PagedByteIndexAt(lnum, locol)
+      let hi = s:PagedByteIndexAt(lnum, hicol)
+    elseif a:mode ==# 'V'
+      let [lo, hi] = ends
+    else
+      let lo = lnum == a:head[1] ? s:PagedLineIndexAt(lnum, a:head[2]) : ends[0]
+      let hi = lnum == a:tail[1] ? s:PagedLineIndexAt(lnum, a:tail[2]) : ends[1]
+    endif
+    let lo = lo < ends[0] ? ends[0] : lo
+    let hi = hi > ends[1] ? ends[1] : hi
+    if hi < lo
+      continue
+    endif
+    let base = s:PagedLineBase(lnum)
+    let first = first < 0 ? base + lo : first
+    let last = base + hi
+    let nbytes += hi - lo + 1
+    let lines += 1
+    let perline = hi - lo + 1
+  endfor
+  return lines == 0 ? {}
+        \ : {'first': first, 'last': last, 'count': nbytes,
+        \    'lines': lines, 'perline': block ? perline : 0}
+endfunction
+
+" The text view: a column IS a byte, so the ends map straight through -
+" except blockwise, where the same column range is taken from every line.
+function! s:TextSelectionBytes(head, tail, mode) abort
+  let [firstline, lastline] = s:TextBodyRange()
+  let head = a:head[1] < firstline ? firstline : a:head[1]
+  let tail = a:tail[1] > lastline ? lastline : a:tail[1]
+  if tail < head
+    return {}
+  endif
+  if a:mode ==# "\<C-V>"
+    let [locol, hicol] = [min([a:head[2], a:tail[2]]), max([a:head[2], a:tail[2]])]
+    let [first, last, nbytes, lines] = [-1, -1, 0, 0]
+    for lnum in range(head, tail)
+      let len = strlen(getline(lnum))
+      let hi = hicol > len ? len : hicol
+      if len == 0 || locol > len
+        continue
+      endif
+      let first = first < 0 ? s:TextOffsetAt(lnum, locol) : first
+      let last = s:TextOffsetAt(lnum, hi)
+      let nbytes += hi - locol + 1
+      let lines += 1
+    endfor
+    return lines == 0 ? {}
+          \ : {'first': first, 'last': last, 'count': nbytes,
+          \    'lines': lines, 'perline': hicol - locol + 1}
+  endif
+  " Charwise and linewise are one run of bytes. A linewise selection
+  " takes in the line break that ends each line, which in a page of raw
+  " bytes is a byte like any other.
+  let [locol, hicol] = a:mode ==# 'V'
+        \ ? [1, strlen(getline(tail)) + 1]
+        \ : [a:head[2], a:tail[2]]
+  let first = s:TextOffsetAt(head, locol)
+  let last  = s:TextOffsetAt(tail, hicol)
+  return {'first': first, 'last': last, 'count': last - first + 1,
+        \ 'lines': tail - head + 1, 'perline': 0}
+endfunction
+
+" What |:HexPairSelection| says. 1-based and inclusive like the banner and
+" |:HexPairPages|, so the numbers can be typed straight into
+" |:HexPairGoOffset|. Pure, so the wording is testable without Visual mode.
+function! HexPairPagedSelectionText(sel, total) abort
+  if empty(a:sel)
+    return 'hexpair: the selection covers no bytes'
+  endif
+  let where = printf('%d-%d (0x%x-0x%x) of %d',
+        \ a:sel.first + 1, a:sel.last + 1, a:sel.first + 1, a:sel.last + 1,
+        \ a:total)
+  if a:sel.perline > 0
+    return printf('hexpair: %d bytes selected in %d lines (%d per line), %s',
+          \ a:sel.count, a:sel.lines, a:sel.perline, where)
+  endif
+  return printf('hexpair: %d byte%s selected, %s',
+        \ a:sel.count, a:sel.count == 1 ? '' : 's', where)
+endfunction
+
+function! s:Selection() abort
+  if !s:RequirePaged()
+    return
+  endif
+  if b:hexpair_page_len <= 0
+    echo 'hexpair: this page holds no bytes'
+    return
+  endif
+  let sel = HexPairPagedSelectionBytes(getpos("'<"), getpos("'>"), visualmode())
+  echo HexPairPagedSelectionText(sel, b:hexpair_page_total)
+endfunction
+
+" ---------------------------------------------------------------------------
 " Statusline
 " ---------------------------------------------------------------------------
 
@@ -2515,6 +2664,7 @@ command! -bar -bang -nargs=1 HexPairPageGoto call s:PageGoto(str2nr(<q-args>), '
 command! -bar -bang -nargs=1 HexPairGoOffset
       \ call s:GotoOffset(<q-args>, '<bang>' ==# '!')
 command! -bar HexPairPages call s:Pages()
+command! -bar HexPairSelection call s:Selection()
 
 " No default key mappings are defined; map the <Plug> mappings (or the
 " commands directly) in your vimrc, e.g.:
@@ -2533,6 +2683,11 @@ nnoremap <silent> <Plug>(HexPairPageGotoForce) :<C-U>call <SID>PageGotoPrompt(1)
 nnoremap <silent> <Plug>(HexPairGoOffset) :<C-U>call <SID>GotoOffsetPrompt(0)<CR>
 nnoremap <silent> <Plug>(HexPairGoOffsetForce) :<C-U>call <SID>GotoOffsetPrompt(1)<CR>
 nnoremap <silent> <Plug>(HexPairPages) :<C-U>HexPairPages<CR>
+" Both modes: from Visual mode it reports the selection being made (the
+" :<C-U> leaves Visual mode, which is what sets '< and '>), from Normal
+" mode the one made last.
+xnoremap <silent> <Plug>(HexPairSelection) :<C-U>HexPairSelection<CR>
+nnoremap <silent> <Plug>(HexPairSelection) :<C-U>HexPairSelection<CR>
 
 " No default key mappings are defined; map the <Plug> mappings (or the
 " commands directly) in your vimrc, e.g.:

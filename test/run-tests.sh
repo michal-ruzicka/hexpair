@@ -153,6 +153,8 @@ for name in ('paged21.bin', 'paged22.bin', 'paged23.bin', 'paged31.bin', 'paged3
 for name in ('scan1.bin', 'scan2.bin'):
     with open(os.path.join(w, name), 'wb') as f:
         f.write(bytes((i * 7) % 256 for i in range(100000)))
+# selection fixture
+open(os.path.join(w, 'sel1.bin'), 'wb').write(bytes(i % 256 for i in range(5000)))
 # statusline fixture
 open(os.path.join(w, 'status1.bin'), 'wb').write(bytes(i % 256 for i in range(5000)))
 # ruler fixture
@@ -2042,6 +2044,56 @@ EOF
 check "the statusline says view, page and byte, and nothing elsewhere" \
     "['', 'hex 3/10 @0x424', 1, 'hex 3/10', 'hex 3/10+ @0x424', 'txt 3/10 @0x410']" \
     "$(cat "$WORK/tst.out")"
+
+# ===========================================================================
+# What a Visual selection covers
+# ===========================================================================
+# Visual mode cannot be driven under `vim -es`, so the geometry is called
+# with the two ends and the mode passed in - the same split
+# HexPairPagedSelectionPositions() already uses for the mirror highlight.
+cat > "$WORK/tsel.vim" <<EOF
+$(printf "$HEX")
+HexPairOpen $WORK/sel1.bin 3
+let out = []
+call add(out, string(HexPairPagedSelectionBytes([0, 3, 11, 0], [0, 4, 14, 0], 'v')))
+call add(out, HexPairPagedSelectionText(HexPairPagedSelectionBytes([0, 3, 11, 0], [0, 4, 14, 0], 'v'), b:hexpair_page_total))
+call add(out, HexPairPagedSelectionText(HexPairPagedSelectionBytes([0, 3, 1, 0], [0, 3, 1, 0], 'V'), b:hexpair_page_total))
+call add(out, HexPairPagedSelectionText(HexPairPagedSelectionBytes([0, 3, 11, 0], [0, 5, 20, 0], "\<C-V>"), b:hexpair_page_total))
+call add(out, HexPairPagedSelectionText(HexPairPagedSelectionBytes([0, 1, 1, 0], [0, 1, 5, 0], 'v'), b:hexpair_page_total))
+" a selection made backwards covers the same bytes as one made forwards
+call add(out, string(HexPairPagedSelectionBytes([0, 4, 14, 0], [0, 3, 11, 0], 'v') ==# HexPairPagedSelectionBytes([0, 3, 11, 0], [0, 4, 14, 0], 'v')))
+HexPairToggle
+call add(out, HexPairPagedSelectionText(HexPairPagedSelectionBytes([0, 2, 1, 0], [0, 2, 16, 0], 'v'), b:hexpair_page_total))
+call add(out, HexPairPagedSelectionText(HexPairPagedSelectionBytes([0, 2, 1, 0], [0, 2, 1, 0], 'V'), b:hexpair_page_total))
+call writefile(out, '$WORK/tsel.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tsel.vim" < /dev/null
+check "a charwise selection is one run of bytes" \
+    "{'first': 1040, 'perline': 0, 'last': 1057, 'lines': 2, 'count': 18}" \
+    "$(sed -n 1p "$WORK/tsel.out")"
+check "and says so 1-based, in hex and decimal" \
+    "hexpair: 18 bytes selected, 1041-1058 (0x411-0x422) of 5000" \
+    "$(sed -n 2p "$WORK/tsel.out")"
+check "a linewise selection is the line's bytes" \
+    "hexpair: 16 bytes selected, 1041-1056 (0x411-0x420) of 5000" \
+    "$(sed -n 3p "$WORK/tsel.out")"
+# Blockwise bytes are not one run, so the count is what it leads with.
+check "a blockwise selection counts its columns on every line" \
+    "hexpair: 12 bytes selected in 3 lines (4 per line), 1041-1076 (0x411-0x434) of 5000" \
+    "$(sed -n 4p "$WORK/tsel.out")"
+check "banner lines cover no bytes" "hexpair: the selection covers no bytes" \
+    "$(sed -n 5p "$WORK/tsel.out")"
+check "and which end it was made from makes no difference" "1" \
+    "$(sed -n 6p "$WORK/tsel.out")"
+check "in the text view a column is a byte" \
+    "hexpair: 16 bytes selected, 1025-1040 (0x401-0x410) of 5000" \
+    "$(sed -n 7p "$WORK/tsel.out")"
+# A line break is a byte of the file like any other, so a linewise
+# selection of a 10-byte line covers 11.
+check "and a linewise selection there takes the line break with it" \
+    "hexpair: 11 bytes selected, 1025-1035 (0x401-0x40b) of 5000" \
+    "$(sed -n 8p "$WORK/tsel.out")"
 
 # ---------------------------------------------------------------------------
 if [ "$FAIL" -eq 0 ]; then
