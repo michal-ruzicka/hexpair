@@ -84,12 +84,6 @@ if !exists('g:hexpair_page_confirm')
   let g:hexpair_page_confirm = 1
 endif
 
-" Highlight group for the page banner (leading/trailing comment lines).
-" xxd.vim's bundled syntax file defines no comment group to link to
-" (only xxdAddress/xxdSep/xxdAscii, all tied to real dump lines), so
-" this is the plugin's own, following the HexPairActive/HexPairMirror
-" precedent in plugin/hexpair.vim.
-
 " Highlight groups for the byte-pair highlight:
 "   HexPairActive - the byte in the column the cursor is in (subtle)
 "   HexPairMirror - its counterpart in the other column (prominent)
@@ -158,21 +152,9 @@ function! HexPairPagedSizeError(size, bytesperline) abort
 endfunction
 
 " Blocks the length-changing write copies in. Bounded on purpose: the
-" whole point of the paged mode is that memory use does not follow the
-" size of the file.
-let s:blocksize = 8 * 1024 * 1024
-
-" Blocks the length-changing write copies in. Bounded on purpose: the
 " whole point of paging is that memory use does not follow the size of
 " the file.
 let s:blocksize = 8 * 1024 * 1024
-
-" ---------------------------------------------------------------------------
-" Layout helpers
-" ---------------------------------------------------------------------------
-
-
-
 
 " ---------------------------------------------------------------------------
 " xxd resolution
@@ -212,7 +194,6 @@ function! s:ZeroBytes() abort
 endfunction
 
 
-" ---------------------------------------------------------------------------
 " ---------------------------------------------------------------------------
 " Cursor position mapping (byte offset <-> dump coordinates)
 " ---------------------------------------------------------------------------
@@ -315,18 +296,6 @@ function! s:PasteOff() abort
     unlet b:hexpair_paste_save
   endif
 endfunction
-
-
-" ---------------------------------------------------------------------------
-" Mode switching
-" ---------------------------------------------------------------------------
-
-
-
-
-" ---------------------------------------------------------------------------
-" Refreshing the dump
-" ---------------------------------------------------------------------------
 
 
 " ---------------------------------------------------------------------------
@@ -2258,12 +2227,6 @@ function! s:Refresh() abort
     echohl None
   endtry
 endfunction
-
-" ---------------------------------------------------------------------------
-" Column navigation
-" ---------------------------------------------------------------------------
-
-
 
 " ---------------------------------------------------------------------------
 " Command and mappings
