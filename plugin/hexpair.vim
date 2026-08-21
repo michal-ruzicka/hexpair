@@ -1005,6 +1005,30 @@ function! s:ApplyBannerSyntax() abort
   syntax match HexPairPageBanner '^".*$'
 endfunction
 
+" Name the scratch buffer a page lives in. The name is the file's, with a
+" tag saying what it is - and a number on the tag when that name is
+" already taken, which is what makes a SECOND view of the same file
+" possible: two windows, two buffers, two pages, one file.
+"
+" The collision is detected by trying the name rather than by looking for
+" it: Vim compares buffer names by rules of its own (a relative path and
+" its absolute form can be the same buffer), and the only thing that
+" knows all of them is the rename itself. E95 is the answer to "taken".
+function! s:NamePageBuffer(file) abort
+  let n = 1
+  while n < 100
+    let name = n == 1 ? a:file . ' [hexpair page]'
+          \ : printf('%s [hexpair page #%d]', a:file, n)
+    try
+      silent execute 'file ' . fnameescape(name)
+      return
+    catch /E95/
+      let n += 1
+    endtry
+  endwhile
+  throw printf('hexpair: 99 views of %s are already open', a:file)
+endfunction
+
 function! s:Open(file, ...) abort
   " The page argument takes the same three forms |:HexPairPageGoto| does.
   " A step is counted from the first page, which is where opening starts:
@@ -1049,7 +1073,7 @@ function! s:Open(file, ...) abort
   endif
 
   enew
-  silent execute 'file ' . fnameescape(a:file . ' [hexpair page]')
+  call s:NamePageBuffer(a:file)
   let b:hexpair_page_file = file
   let b:hexpair_page_spill = ''
   call s:SetupPagedBuffer()
@@ -1281,30 +1305,52 @@ function! s:PageDigest(base, len) abort
 endfunction
 
 " Refuse to touch a file that changed underneath us.
+"
+" What matters is not that the FILE changed but that THIS PAGE did: a
+" second view of the same file, patching a different page of it, changes
+" the file's modification time without touching a byte this view holds -
+" and that is a thing to allow, not to refuse, or two views of one file
+" could not both be written (|hexpair-two-views|). So the size decides
+" first, because a different length moves every page after the change;
+" then the page's own bytes decide, by the hash taken when it was read.
+"
+" The modification time is only the fallback for a Vim without sha256():
+" it is the weaker guard - it cannot see a change made within the same
+" second - and it is also the one that cannot tell a change to this page
+" from a change to the rest of the file.
 function! s:CheckFresh() abort
   let total = getfsize(b:hexpair_page_file)
   if total != b:hexpair_page_total
-        \ || getftime(b:hexpair_page_file) != b:hexpair_page_ftime
     throw printf('hexpair: %s changed on disk since the page was read '
           \ . '(size %d -> %d); nothing was written - reload it with '
           \ . ':HexPairPageGoto! %d',
           \ b:hexpair_page_file, b:hexpair_page_total, total,
           \ b:hexpair_page_index + 1)
   endif
+
   let digest = get(b:, 'hexpair_page_digest', '')
-  if digest ==# ''
-    return
+  let now = digest ==# ''
+        \ ? '' : s:PageDigest(b:hexpair_page_base, b:hexpair_page_len)
+  if now ==# ''
+    if getftime(b:hexpair_page_file) == b:hexpair_page_ftime
+      return
+    endif
+    throw printf('hexpair: %s changed on disk since page %d was read; '
+          \ . 'nothing was written - reload it with :HexPairPageGoto! %d',
+          \ b:hexpair_page_file, b:hexpair_page_index + 1,
+          \ b:hexpair_page_index + 1)
   endif
-  let now = s:PageDigest(b:hexpair_page_base, b:hexpair_page_len)
-  if now ==# '' || now ==# digest
-    return
+  if now !=# digest
+    throw printf('hexpair: the bytes of page %d of %s are no longer the '
+          \ . 'ones that were read, though the file is still %d bytes '
+          \ . 'long - something else wrote to this page; nothing was '
+          \ . 'written here - reload it with :HexPairPageGoto! %d',
+          \ b:hexpair_page_index + 1, b:hexpair_page_file, total,
+          \ b:hexpair_page_index + 1)
   endif
-  throw printf('hexpair: the bytes of page %d of %s are no longer the ones '
-        \ . 'that were read, though its size and timestamp are unchanged - '
-        \ . 'something wrote to it in the same second; nothing was written '
-        \ . 'here - reload it with :HexPairPageGoto! %d',
-        \ b:hexpair_page_index + 1, b:hexpair_page_file,
-        \ b:hexpair_page_index + 1)
+  " The page is intact; the file may still have changed elsewhere, so the
+  " timestamp is adopted rather than left to look stale next time.
+  let b:hexpair_page_ftime = getftime(b:hexpair_page_file)
 endfunction
 
 " Same length: patch the page in place. xxd -r with the target file as an
@@ -2568,6 +2614,68 @@ function! s:GotoOffset(text, force) abort
   endtry
 endfunction
 
+" ---------------------------------------------------------------------------
+" A second view of the same file
+" ---------------------------------------------------------------------------
+
+" |:HexPairSplit| / |:HexPairVSplit|: another window onto the same file,
+" showing another page of it - for reading one region while editing
+" another, or copying bytes from one to the other.
+"
+" Nothing about a page is shared between the two: each view is its own
+" buffer with its own page state, and the write path patches only the page
+" its own view holds. What used to make this impossible was the buffer's
+" NAME, which is now numbered when it is taken (s:NamePageBuffer()), and
+" the freshness check, which refused a write whenever the file's timestamp
+" had moved - which is exactly what the other view writing does. It now
+" asks whether THIS PAGE changed (s:CheckFresh()).
+"
+" [page] is resolved in THIS view's terms - a number, +N or -N from the
+" page on screen, or $ - and then handed to the new view as the byte it
+" starts at, so the two agree even if g:hexpair_page_size was changed in
+" between and the new view therefore slices the file differently.
+function! s:SplitView(vertical, ...) abort
+  if !s:RequirePaged()
+    return
+  endif
+  if get(b:, 'hexpair_page_spill', '') !=# ''
+    echohl ErrorMsg
+    echomsg 'hexpair: this view is paged from a private copy of piped '
+          \ . 'input, which belongs to it alone; save it with :w {file} '
+          \ . 'first, and split that'
+    echohl None
+    return
+  endif
+  let parsed = HexPairPagedParsePageInput(a:0 ? a:1 : '')
+  if has_key(parsed, 'msg')
+    echohl ErrorMsg | echomsg parsed.msg | echohl None
+    return
+  endif
+  let page = empty(parsed) ? b:hexpair_page_index + 1
+        \ : HexPairPagedResolvePage(parsed, b:hexpair_page_index + 1,
+        \                          b:hexpair_page_totalpages)
+  let file = b:hexpair_page_file
+  " Everything that can be refused is refused BEFORE the window is split,
+  " so a page that does not exist leaves no half-made view behind.
+  let [base, len] = HexPairPagedBounds(page - 1, b:hexpair_page_size,
+        \ b:hexpair_page_total)
+  if base < 0
+    echohl ErrorMsg
+    echomsg printf('hexpair: page %d does not exist (file has %d page%s)',
+          \ page, b:hexpair_page_totalpages,
+          \ b:hexpair_page_totalpages == 1 ? '' : 's')
+    echohl None
+    return
+  endif
+
+  execute a:vertical ? 'vsplit' : 'split'
+  call s:Open(file, string(base / g:hexpair_page_size + 1))
+  if get(b:, 'hexpair_page_active', 0)
+    call s:PagedGotoOffset(base)
+    call s:PagedHighlight()
+  endif
+endfunction
+
 function! HexPairOpenFile(file, ...) abort
   call call('s:Open', [a:file] + a:000)
 endfunction
@@ -2983,6 +3091,8 @@ command! -bar -bang -nargs=1 HexPairGoOffset
 command! -bar HexPairPages call s:Pages()
 command! -bar HexPairSelection call s:Selection()
 command! -bar HexPairInspect call s:Inspect()
+command! -bar -nargs=? HexPairSplit  call s:SplitView(0, <f-args>)
+command! -bar -nargs=? HexPairVSplit call s:SplitView(1, <f-args>)
 
 " No default key mappings are defined; map the <Plug> mappings (or the
 " commands directly) in your vimrc, e.g.:

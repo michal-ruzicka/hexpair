@@ -153,6 +153,10 @@ for name in ('paged21.bin', 'paged22.bin', 'paged23.bin', 'paged31.bin', 'paged3
 for name in ('scan1.bin', 'scan2.bin'):
     with open(os.path.join(w, name), 'wb') as f:
         f.write(bytes((i * 7) % 256 for i in range(100000)))
+# two-views fixtures
+for name in ('split1.bin', 'split2.bin', 'split3.bin'):
+    with open(os.path.join(w, name), 'wb') as f:
+        f.write(bytes(i % 256 for i in range(5000)))
 # data-inspector fixture: a little-endian double and float at known
 # offsets, so the conversions can be checked against python's packing
 import struct
@@ -2277,6 +2281,122 @@ check "a width that does not fit in what is left of the page says so" \
 check "both views read the same bytes" "1" "$(sed -n 15p "$WORK/tins.out")"
 check "and a banner line has nothing to read" "hexpair: no byte here to read" \
     "$(sed -n 16p "$WORK/tins.out")"
+
+# ===========================================================================
+# Two views of one file
+# ===========================================================================
+# :HexPairSplit opens a second window on the same file at another page.
+# Two things used to stand in the way: the buffer name, which was the
+# file's alone and collided (E95), and the freshness check, which refused
+# a write whenever the file's timestamp had moved - which is exactly what
+# the other view writing does. This bumps the timestamp deliberately, so
+# the test does not depend on how fast the two writes happen to be.
+cat > "$WORK/bump.py" <<'PYEOF'
+import os, sys
+st = os.stat(sys.argv[1])
+os.utime(sys.argv[1], (st.st_atime, st.st_mtime + 5))
+PYEOF
+cat > "$WORK/tsv.vim" <<EOF
+$(printf "$HEX")
+HexPairOpen $WORK/split1.bin 3
+let first = bufname('%')
+HexPairSplit +2
+let second = [bufname('%') !=# first, b:hexpair_page_index + 1, winnr('\$')]
+HexPairVSplit \$
+let third = [b:hexpair_page_index + 1, winnr('\$'), winwidth(0) < &columns]
+let before = winnr('\$')
+silent! HexPairSplit +99
+let nowindow = winnr('\$') == before
+only
+call writefile([string([second, third, nowindow])], '$WORK/tsv.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tsv.vim" < /dev/null
+check "a split is a second view, on the page it names" \
+    "[[1, 5, 2], [10, 3, 1], 1]" "$(cat "$WORK/tsv.out")"
+
+# --- Both views can write, because they hold different pages --------------
+SV2_HEAD=$(hash_range "$WORK/split2.bin" 0 1024)
+cat > "$WORK/tsv2.vim" <<EOF
+$(printf "$HEX")
+HexPairOpen $WORK/split2.bin 3
+let a = bufnr('%')
+HexPairSplit 7
+call cursor(3, 11)
+normal! rf
+write
+let b = 'wrote page 7'
+call system('$PY $WORK/bump.py $WORK/split2.bin')
+execute bufwinnr(a) . 'wincmd w'
+call cursor(3, 11)
+normal! re
+let outcome = ''
+try
+  write
+  let outcome = 'wrote page 3'
+catch /^hexpair:/
+  let outcome = 'refused'
+endtry
+call writefile([string([b, outcome, &l:modified])], '$WORK/tsv2.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tsv2.vim" < /dev/null
+check "one view writing does not lock the other out" \
+    "['wrote page 7', 'wrote page 3', 0]" "$(cat "$WORK/tsv2.out")"
+check "and both edits are in the file" "e0 f0" \
+    "$("$HEXPAIR_XXD" -s 1040 -l 1 -p "$WORK/split2.bin") $("$HEXPAIR_XXD" -s 3088 -l 1 -p "$WORK/split2.bin")"
+
+# --- ... but a view whose own page was overwritten is still refused -------
+cat > "$WORK/tsv3.vim" <<EOF
+$(printf "$HEX")
+HexPairOpen $WORK/split3.bin 3
+let a = bufnr('%')
+HexPairSplit 3
+call cursor(4, 11)
+normal! rf
+write
+call system('$PY $WORK/bump.py $WORK/split3.bin')
+execute bufwinnr(a) . 'wincmd w'
+call cursor(3, 11)
+normal! re
+let outcome = ''
+try
+  write
+  let outcome = 'wrote'
+catch /^hexpair:/
+  let outcome = 'refused'
+endtry
+call writefile([outcome, string(&l:modified)], '$WORK/tsv3.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tsv3.vim" < /dev/null
+check "two views of the SAME page do not overwrite each other" "refused" \
+    "$(sed -n 1p "$WORK/tsv3.out")"
+check "the refused edit is still in the buffer" "1" "$(sed -n 2p "$WORK/tsv3.out")"
+# The split view edited the byte at 1056 and wrote it; the refused view
+# wanted 1040, which must still hold what it always did.
+check "the other view's byte is the one on disk" "f0" \
+    "$("$HEXPAIR_XXD" -s 1056 -l 1 -p "$WORK/split3.bin")"
+check "and the refused edit reached nothing" "10" \
+    "$("$HEXPAIR_XXD" -s 1040 -l 1 -p "$WORK/split3.bin")"
+
+# --- A view paged from piped input has nothing to split -------------------
+# Its temp file belongs to that buffer and goes when the buffer does.
+cat > "$WORK/tsv4.vim" <<EOF
+$(printf "$HEX")
+call setline(1, ['abc', 'def'])
+HexPairToggle
+redir => msg
+silent! HexPairSplit
+redir END
+call writefile([substitute(substitute(msg, '^[\r\n]*', '', ''), '\n', ' ', 'g'), string(winnr('\$'))], '$WORK/tsv4.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tsv4.vim" < /dev/null
+check "splitting piped input says why not" \
+    "hexpair: this view is paged from a private copy of piped input, which belongs to it alone; save it with :w {file} first, and split that" \
+    "$(sed -n 1p "$WORK/tsv4.out")"
+check "and opens no window" "1" "$(sed -n 2p "$WORK/tsv4.out")"
 
 # ---------------------------------------------------------------------------
 if [ "$FAIL" -eq 0 ]; then

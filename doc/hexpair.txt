@@ -582,6 +582,42 @@ HexPairOpenFile({file} [, {page}])
                         @BYTE take, so where you are can be written down
                         and gone back to.
 
+                          *:HexPairSplit* *:HexPairVSplit* *hexpair-two-views*
+:HexPairSplit [page]    Open a SECOND view of the same file in a new
+:HexPairVSplit [page]   window, showing [page] - by default the one this
+                        view is showing, so the split starts as a copy and
+                        is navigated from there.  [page] takes the same
+                        forms as |:HexPairPageGoto| and is counted from
+                        THIS view: `:HexPairSplit +1` puts the next page
+                        beside this one, `:HexPairSplit $` the last.
+                        :HexPairVSplit is the same thing in a vertical
+                        split.
+
+                        The two views share nothing but the file.  Each is
+                        its own buffer with its own page, its own cursor
+                        and its own unwritten changes, and a |:w| in either
+                        patches only the page that view holds - so one can
+                        be read while the other is edited, or bytes copied
+                        from one region of a file into another.
+
+                        The second buffer's name is the first's with a
+                        number on it ("disk.img [hexpair page #2]"), which
+                        is what tells them apart in |:ls|; the page banner
+                        in both names the real file.
+
+                        Writing one view does not lock the other out: what
+                        a write checks is whether ITS OWN page changed on
+                        disk, not whether the file did (see below).  Two
+                        views of the SAME page are allowed, and then the
+                        second write is refused, because that page really
+                        did change under it - reload it with
+                        |:HexPairPageGoto|! and redo the edit.
+
+                        A view paged from piped input cannot be split: the
+                        temporary file it pages belongs to that buffer and
+                        goes when it does.  Save it with `:w {file}` first
+                        and split that.
+
                                                         *:HexPairGoOffset*
 :HexPairGoOffset[!] {byte}
                         Jump straight to a byte, decimal or 0x-prefixed,
@@ -678,20 +714,30 @@ confirmation first (|g:hexpair_page_confirm| turns the question off).  The
 first case, the same-length patch, does not ask: it writes only the page.
 
 Before any of them, the dump is validated exactly as in |hexpair-writing|,
-and the file is checked for having changed underneath the page: its size
-and modification time are compared with what they were when the page was
-read, AND the page's own bytes are read back and compared with a hash
-taken at the same moment.  The second check is there because the first
-cannot see everything: a modification time has whole-second resolution,
-so a writer that changes bytes in place, in the same second the page was
-read, is invisible to size and mtime both.  Either way the write is
-refused rather than patched at offsets that may no longer mean anything;
-reload with |:HexPairPageGoto|! and redo the edit.
+and the page is checked for having changed underneath the view.  What
+matters is not that the FILE changed but that THIS PAGE did, so the check
+is made in two steps:
+
+- the file's SIZE must be what it was: a different length moves every
+  page after the change, so nothing about this page's offsets can be
+  trusted any more;
+- the page's own BYTES must be what they were, by a hash taken when the
+  page was read and again now.
+
+A change to the file that leaves both alone - another process rewriting a
+different part of it, or a second view of the same file
+(|hexpair-two-views|) writing its own page - is not a reason to refuse,
+and is not refused.  A change to this page is, whatever the file's
+modification time says about it: mtime has whole-second resolution, so a
+writer that changes bytes in place within the same second is invisible to
+it.  A refused write leaves the file untouched and the edit in the
+buffer; reload with |:HexPairPageGoto|! and redo it.
 
 Reading the page back costs what reading a page costs - hundredths of a
 second, independent of the size of the file.  Where Vim has no |sha256()|
-(a build without |+cryptv|) the hash is skipped and the size and mtime
-check stands alone.
+(a build without |+cryptv|) there is no hash to compare, and the
+modification time is used instead - the weaker guard, and the one that
+cannot tell a change to this page from a change to the rest of the file.
 
 `:w {file}` means something different from a plain |:w|: not "patch this
 page into its own file" but "save what I am looking at, as a whole, over

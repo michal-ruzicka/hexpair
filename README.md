@@ -254,6 +254,7 @@ page. Close and reopen the file for the ordinary view.
 | `:HexPairPages` | Report page X of Y, the offsets covered, the file size and the byte under the cursor |
 | `:HexPairInspect` | Read the bytes at the cursor as numbers: 8/16/32/64-bit, unsigned and signed, both endiannesses, and both IEEE 754 floats |
 | `:HexPairSelection` | Say how many bytes the Visual selection covers, and which |
+| `:HexPairSplit [page]` / `:HexPairVSplit [page]` | A second view of the same file in a new window, showing `[page]` (default: this view's) |
 
 ### Reading the bytes
 
@@ -317,6 +318,34 @@ Where the pages come from depends on what the buffer was:
 - **modified and backed by a file** — refused, because the buffer and
   the file disagree and every way of resolving that loses something
   quietly. Write it first, or use `:HexPairOpen` to see what is on disk.
+
+### Two views of one file
+
+`:HexPairSplit` opens a second window onto the same file at another page,
+and `:HexPairVSplit` does it vertically:
+
+```vim
+:HexPairSplit +1        " the next page beside this one
+:HexPairVSplit $        " the end of the file next to where you are
+:HexPairSplit 7         " page 7
+:HexPairSplit           " the same page again, to navigate away from
+```
+
+`[page]` is counted from the view you are in, exactly as
+`:HexPairPageGoto` counts it. The two views share nothing but the file:
+each is its own buffer with its own page, cursor and unwritten changes,
+and a `:w` in either patches only the page that view holds — so one
+region can be read while another is edited, or bytes copied from one to
+the other. The second buffer is named `disk.img [hexpair page #2]`, which
+is what tells them apart in `:ls`.
+
+Writing one view does not lock the other out: a write asks whether *its
+own page* changed on disk, not whether the file did. Two views of the
+**same** page are allowed too — and then the second write is refused,
+because that page really did change underneath it.
+
+A view paged from piped input cannot be split: the temporary file it
+pages belongs to that buffer alone. Save it with `:w {file}` first.
 
 ### Configuration
 

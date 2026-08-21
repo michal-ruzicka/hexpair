@@ -37,13 +37,27 @@ and this project adheres to
   number, at the command line and at the `<Plug>` prompt alike — and
   therefore in `vimhex` too: `vimhex disk.img '$'` opens the end of a
   file without working out how many pages it has.
+- **`:HexPairSplit [page]` and `:HexPairVSplit [page]`**: a second view
+  of the same file in a new window, showing a page named the way
+  `:HexPairPageGoto` names one and counted from the view you are in. The
+  two views share nothing but the file — each has its own buffer, page,
+  cursor and unwritten changes, and a `:w` in either patches only the
+  page that view holds, so one region can be read while another is
+  edited. Previously a second `:HexPairOpen` of the same file failed with
+  `E95`, because the buffer's name was the file's alone; the second one
+  is now numbered (`disk.img [hexpair page #2]`).
 - **The page's own bytes are hashed** when it is read and again before it
   is patched, so a writer that changes bytes in place within the same
   second — invisible to the file's size and modification time, which is
   all a portable Vim can see — is caught rather than overwritten. It
   costs one page read on either side (a page turn 13 ms → 26 ms, a
   same-length write 129 ms → 144 ms at the default page size, both
-  independent of the size of the file).
+  independent of the size of the file). It also replaces the modification
+  time as the freshness test: what a write now asks is whether **its own
+  page** changed, not whether the file did, so a second view of the same
+  file — or any other process writing elsewhere in it — no longer locks a
+  write out. A file whose *length* changed is still refused outright,
+  since that moves every page after the change.
 
 ### Changed
 - **A page is scanned with whole-page regexes instead of a walk over its

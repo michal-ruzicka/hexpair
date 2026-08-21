@@ -254,6 +254,8 @@ come back**; each names the test that would catch it.
 | The whole-page scan read a line differently from the per-line rule (a `\zs` anchor that consumed the newline; a negated collection that matched the end-of-line only on a long string) | "the whole-page scan says what the per-line rule says" — on a 6250-line page, since neither shows up on a short one |
 | `count()` over a string (patch 8.0.0794) and Blob literals (8.1.0735) broke the documented Vim 8.0 baseline: everything past *displaying* a page failed with E712 | the baseline run below, and no `count()`/`0z` left in the plugin |
 | `g:hexpair_debug` was documented but no longer implemented at all | "the trace says both directions of the mapping" |
+| A second `:HexPairOpen` of one file died with E95: the buffer name was the file's alone | "a split is a second view, on the page it names" |
+| Freshness keyed on the file's mtime, so one view writing locked every other view of that file out of writing | "one view writing does not lock the other out" — and its counter-case, two views of the SAME page |
 | The cursor in the gap between the hex and ASCII columns reported the NEXT line's first byte, because the pairs counted before it were the whole line's | "and it is the byte the layout says" — which pins the gap column too |
 | `count` is a read-only Vim variable (`v:count`), so a local named that aborts the function it is in with E46 | caught by the selection tests; do not name a local `count`, `errmsg`, `line`… |
 
@@ -584,10 +586,26 @@ was designed and built in Stage 2 - see "What Stage 2 decided".
   makes a line contribute no bytes. `s:HexViewLines()` is the one place
   the hex view's shape (banner, ruler, dump, banner) is spelled out, so
   `s:LoadPage()` and `s:ToHexView()` cannot build different views.
-- `s:PageDigest()` — sha256 of the page's own bytes, taken at load and
-  again in `s:CheckFresh()` before a patch. Size and mtime cannot see a
-  writer that changed bytes in place within the same second; this can.
-  Empty (and skipped) where `sha256()` does not exist or the read fails.
+- `s:PageDigest()` / `s:CheckFresh()` — freshness is about THIS PAGE,
+  not about the file: the size must be unchanged (a different length
+  moves every page after the change) and the page's own bytes must hash
+  to what they did when it was read. The modification time is only the
+  fallback for a Vim without `sha256()` — it cannot see a change made
+  within the same second, and it cannot tell a change to this page from
+  a change to the rest of the file, which is what made two views of one
+  file impossible to write from (see below). A successful check adopts
+  the new mtime, so the fallback path does not go on complaining.
+- `s:NamePageBuffer()` / `s:SplitView()` — a second view of one file.
+  The buffer name is the file's plus a tag, numbered when that name is
+  taken; the collision is detected by TRYING the rename and catching
+  E95, because Vim's own rules for when two buffer names are the same
+  (a relative path and its absolute form, case on Windows) are not
+  worth reimplementing. `:HexPairSplit`/`:HexPairVSplit` resolve the
+  requested page in the CURRENT view's terms and hand the new view the
+  byte it starts at, so the two agree even if `g:hexpair_page_size`
+  changed in between; everything that can be refused is refused before
+  the window is split. A spilled (piped) view refuses to split at all:
+  its temp belongs to that buffer and dies with it.
 - `HexPairStatus()` — `'statusline'` support; empty outside hexpair
   buffers so one statusline serves every buffer. Must never walk the
   page: it is called on every cursor movement. On an edited page it
