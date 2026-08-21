@@ -147,6 +147,14 @@ for name in ('ref1.bin', 'ref2.bin', 'ref3.bin', 'ref4.bin', 'ref5.bin'):
 for name in ('paged21.bin', 'paged22.bin', 'paged23.bin', 'paged31.bin', 'paged32.bin', 'undo1.bin', 'layout1.bin', 'jump1.bin', 'paste1.bin', 'abandon1.bin', 'ulocal1.bin', 'src1.bin', 'off1.bin', 'multi.bin', 'multi2.bin', 'same1.bin', 'vis1.bin', 'pos1.bin', 'ip1.bin', 'ip2.bin', 'ip3.bin', 'w1.bin', 'w2.bin', 'w3.bin', 'w4.bin', 'w5.bin', 'sp1.bin', 'sp2.bin', 'sp3.bin', 'sp4.bin', 'tv1.bin', 'tv2.bin', 'tv3.bin', 'tv4.bin'):
     with open(os.path.join(w, name), 'wb') as f:
         f.write(bytes(i % 256 for i in range(5000)))
+# whole-page scan fixtures: big enough for ONE default-size page to hold
+# thousands of dump lines, which is the only scale at which a regex over
+# the whole page can behave differently from the same regex over one line
+for name in ('scan1.bin', 'scan2.bin'):
+    with open(os.path.join(w, name), 'wb') as f:
+        f.write(bytes((i * 7) % 256 for i in range(100000)))
+# and a 32-byte one, for the lines a scan must not be thrown by
+open(os.path.join(w, 'scan3.bin'), 'wb').write(bytes(range(32)))
 # single-page fixture, so a shrinking write can empty the file entirely
 open(os.path.join(w, 'sp5.bin'), 'wb').write(bytes(range(16)))
 # a real file past the 4 GiB mark, where xxd's offset column widens from
@@ -1807,6 +1815,76 @@ check_path "a banner line has no byte to report" \
 check_path "the text view reports it too" \
     "hexpair: page 3 of 10, offsets 1025-1536 of total 5000 bytes ($WORK/pos1.bin); cursor on byte 0x410 (1040)" \
     "$(sed -n 3p "$WORK/tcb.out")"
+
+# ===========================================================================
+# The whole-page scan
+# ===========================================================================
+# Validation, stripping and the cursor's byte all come from ONE pass that
+# regexes the whole page at once instead of walking it line by line. The
+# per-line rule (HexPairPagedStripLine()) stays the reference, so the two
+# have to agree - and they can only disagree on a page of real size, where
+# a regex over the whole of it stops behaving like the same regex over one
+# line (a negated collection matches the end-of-line whatever is listed in
+# it, which turned up as a page validating at 2000 lines and failing at
+# 4000). Hence a fixture measured in thousands of lines, not in ten.
+
+# --- The two rules agree, on a full-size page ------------------------------
+cat > "$WORK/tsc1.vim" <<EOF
+source $PLUGIN
+HexPairOpen $WORK/scan1.bin
+let perline = map(getline(1, '\$'), 'HexPairPagedStripLine(v:val)')
+let whole = HexPairPagedScanLines()
+call writefile([string([line('\$'), whole ==# perline, HexPairPagedValidate()])], '$WORK/tsc1.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tsc1.vim" < /dev/null
+check "the whole-page scan says what the per-line rule says" \
+    "[6252, 1, {}]" "$(cat "$WORK/tsc1.out")"
+
+# --- A clean page of that size is not rejected, and survives a write -------
+# An unedited page written back must reproduce the file bit for bit: the
+# scan, the strip and the patch are the whole round trip.
+SCAN2_ALL=$(hash_range "$WORK/scan2.bin" 0 -1)
+cat > "$WORK/tsc2.vim" <<EOF
+source $PLUGIN
+HexPairOpen $WORK/scan2.bin
+call cursor(5000, 11)
+let at = HexPairPagedByteOffset()
+write
+call writefile([string([at, line('\$'), &l:modified])], '$WORK/tsc2.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tsc2.vim" < /dev/null
+check "the cursor's byte on a deep line of a full page" \
+    "[79968, 6252, 0]" "$(cat "$WORK/tsc2.out")"
+check "writing a full page back unedited changes nothing" \
+    "$SCAN2_ALL" "$(hash_range "$WORK/scan2.bin" 0 -1)"
+check "and does not change its length" "100000" "$(file_size "$WORK/scan2.bin")"
+
+# --- Lines the scan must not be thrown by ---------------------------------
+# An empty line, a bare hex line with no offset column, and an indented
+# one: each is a line the whole-page pass has to treat exactly as the
+# per-line rule does - including leaving the NEXT line's offset column
+# alone, which an anchor that consumes the line break does not.
+cat > "$WORK/tsc3.vim" <<EOF
+$(printf "$HEX")
+HexPairOpen $WORK/scan3.bin 1
+call append(2, ['', '41 42', '   43 44', '00000000: 45 46  EF'])
+let payload = HexPairPagedScanLines()[2:6]
+call cursor(4, 1)
+let at = [HexPairPagedByteOffset()]
+call cursor(7, 11)
+call add(at, HexPairPagedByteOffset())
+call writefile([string(payload), string(at), string(HexPairPagedValidate())], '$WORK/tsc3.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tsc3.vim" < /dev/null
+check "an empty, a bare and an indented line strip as the rule says" \
+    "['', '41 42', '43 44', ' 45 46', ' 10 11 12 13 14 15 16 17 18 19 1a 1b 1c 1d 1e 1f']" \
+    "$(sed -n 1p "$WORK/tsc3.out")"
+check "and the bytes on them count towards the cursor's offset" \
+    "[16, 22]" "$(sed -n 2p "$WORK/tsc3.out")"
+check "with nothing on them read as invalid" "{}" "$(sed -n 3p "$WORK/tsc3.out")"
 
 # ---------------------------------------------------------------------------
 if [ "$FAIL" -eq 0 ]; then

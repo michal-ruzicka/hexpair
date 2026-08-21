@@ -466,45 +466,95 @@ function! s:PagedBadChar(lnum) abort
         \               string(matchstr(line, '.', bad)), a:lnum, bad + 1)}
 endfunction
 
-" ONE pass over the page, answering everything a write needs:
+function! s:PagedPayloadText(text) abort
+  " Anchoring to a line start: the newline is part of the match and is put
+  " back by the replacement (\1), rather than the \zs the per-line rule's
+  " ^ would suggest. Two reasons, both found the hard way: \zs still
+  " CONSUMES the newline it matched, so a line whose strip comes out empty
+  " - a banner line, an empty line - leaves the scan positioned inside the
+  " next line, whose own offset column then survives into the payload; and
+  " a lookbehind, which consumes nothing, is quadratic enough here to take
+  " ten seconds on one page. The first line has no newline before it, so
+  " it gets the same rule ^-anchored once.
+  "
+  " A banner line contributes nothing at all - and it has to go FIRST,
+  " because its own text contains a ':' and would otherwise be mistaken
+  " for an offset column, leaving "page 1/1" behind as hex payload.
+  let t = substitute(a:text, '^"[^\n]*', '', '')
+  let t = substitute(t, '\(\n\)"[^\n]*', '\1', 'g')
+  " The offset column: the indent plus everything up to the first ':', or
+  " just the indent on a line that has none (a bare hex line the user
+  " inserted). One optional group covers both, and neither half may cross
+  " a newline into the next line.
+  let t = substitute(t, '^\s*\%([^:\n]*:\)\=', '', '')
+  let t = substitute(t, '\(\n\)\s*\%([^:\n]*:\)\=', '\1', 'g')
+  " The ASCII column: from the first run of two spaces to the end of the
+  " line. The offset column is already gone, so - exactly as the per-line
+  " rule does by searching from where it ended - a double space inside it
+  " can no longer be mistaken for the start of the ASCII column.
+  return substitute(t, '  [^\n]*', '', 'g')
+endfunction
+
+" The payload of a whole page as ONE flat run: the line breaks holding it
+" together are taken out, so what is left is exactly the hex digits and
+" the spaces between them - and every test on it is then a plain
+" collection, with no end-of-line semantics to get wrong.
 "
-"   err    {} when the page is clean, otherwise {'msg'} plus 'lnum'/'col'
-"          for a locatable offender. Two classes of input would be
-"          mangled silently: a character in the hex area that is neither
-"          a hex digit nor a space (s:PagedStripDumpLine() would drop
-"          it), and an odd TOTAL number of hex digits (xxd -r -p would
-"          drop the last nibble). On an error the other fields are absent.
-"   lines  the stripped hex payload of every line, ready for xxd -r -p
-"   bytes  how many bytes lines 1 .. a:lnum-1 hold (a:lnum = 0: not wanted)
-"
-" One pass rather than three - validate, map the cursor, strip - because
-" every separate walk over a page costs real time at any page size worth
-" having.
-function! s:PagedScan(lnum) abort
-  let lines  = getline(1, '$')
-  let digits = 0
-  let bytes  = 0
-  let i      = 0
-  let total  = len(lines)
-  while i < total
-    let payload = s:PagedPayload(lines[i])
-    if payload =~# '[^0-9a-fA-F ]'
-      return {'err': s:PagedBadChar(i + 1)}
-    endif
-    let lines[i] = payload
-    " Only hex digits and spaces are left, so counting the spaces away
-    " is enough - and cheaper than substituting them out.
-    let n = strlen(payload) - count(payload, ' ')
-    let digits += n
-    if i + 1 < a:lnum
-      let bytes += n / 2
+" The break is removed by the \n ATOM. It must never be put inside a
+" collection instead: "[^0-9a-fA-F \n]" looks like it says "not a hex
+" digit, not a space, not a line break" and does not keep saying it - a
+" negated collection matches the end-of-line whatever is listed in it
+" (|/[\n]|), which shows up as the same page validating fine at 2000
+" lines and being rejected at 4000 (measured on Vim 9.2 - and the reason
+" the whole-page scan is tested against a full-size page, not a handful
+" of lines).
+function! s:PagedFlatten(text) abort
+  return substitute(a:text, '\n', '', 'g')
+endfunction
+
+" Hex digits in a flattened payload, which holds nothing else but spaces.
+function! s:PagedDigits(flat) abort
+  return strlen(substitute(a:flat, ' ', '', 'g'))
+endfunction
+
+" Which line the offender is on, for the error message and the cursor.
+" Walks the page line by line through the per-line rule - the slow way,
+" but only ever on a page that has already been found invalid.
+function! s:PagedFirstBadLine(lines) abort
+  let i = 0
+  while i < len(a:lines)
+    if s:PagedPayload(a:lines[i]) =~# '[^0-9a-fA-F ]'
+      return s:PagedBadChar(i + 1)
     endif
     let i += 1
   endwhile
-  if digits % 2
+  " Unreachable: something in the page failed the whole-page check.
+  return {'msg': 'invalid character in the hex area'}
+endfunction
+
+function! s:PagedScan(lnum) abort
+  let lines = getline(1, '$')
+  " The whole page as ONE string, stripped by ONE regex per rule. The
+  " same work per line costs about four times as much: VimScript's
+  " per-iteration overhead dwarfs the matching itself, and a page is
+  " thousands of lines.
+  let text = s:PagedPayloadText(join(lines, "\n"))
+  let flat = s:PagedFlatten(text)
+  if match(flat, '[^0-9a-fA-F ]') >= 0
+    return {'err': s:PagedFirstBadLine(lines)}
+  endif
+  if s:PagedDigits(flat) % 2
     return {'err': {'msg': 'odd number of hex digits - the last nibble would be dropped'}}
   endif
-  return {'err': {}, 'lines': lines, 'bytes': bytes}
+  " Bytes before a:lnum. Digits pair across line ends, exactly as
+  " `xxd -r -p` pairs them when the page is written back, so the digits
+  " of the preceding lines are counted as one run rather than each line
+  " being rounded down on its own.
+  let bytes = a:lnum > 1
+        \ ? s:PagedDigits(s:PagedFlatten(
+        \     s:PagedPayloadText(join(lines[0 : a:lnum - 2], "\n")))) / 2
+        \ : 0
+  return {'err': {}, 'lines': split(text, "\n", 1), 'bytes': bytes}
 endfunction
 
 " Scan without wanting anything but the verdict.
@@ -521,6 +571,16 @@ endfunction
 
 function! HexPairPagedValidate() abort
   return s:PagedValidateDump()
+endfunction
+
+" And the payload the whole-page scan produces, line by line, so the suite
+" can hold it against the per-line rule the two must agree on (invariant
+" 1). Worth a hook of its own: the two can only drift apart on a page big
+" enough that a regex over the whole of it behaves differently from the
+" same regex over one line, which is not a scale a unit test reaches by
+" accident.
+function! HexPairPagedScanLines() abort
+  return s:PagedScan(0).lines
 endfunction
 
 " Test hooks: the layout of one line, and the absolute file offset the
