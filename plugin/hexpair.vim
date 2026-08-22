@@ -2644,6 +2644,136 @@ function! s:GotoOffset(text, force) abort
 endfunction
 
 " ---------------------------------------------------------------------------
+" Marks
+" ---------------------------------------------------------------------------
+"
+" Vim's own marks are positions in a BUFFER, and a paged buffer holds a
+" different part of the file from one moment to the next, so a mark set in
+" one page means something else in the next. These are positions in the
+" FILE: absolute byte offsets, kept per file rather than per buffer, so
+" every view of that file shares them (|hexpair-two-views|) and a page
+" turn cannot disturb them.
+"
+" They live for as long as the Vim session does. Writing them somewhere
+" would make them outlive it, and that is a decision about the user's
+" filesystem this plugin does not get to make on its own.
+let s:marks = {}
+
+function! s:MarksFor(file) abort
+  if !has_key(s:marks, a:file)
+    let s:marks[a:file] = {}
+  endif
+  return s:marks[a:file]
+endfunction
+
+" Mark names are words, so that a listing can be read and a name can be
+" completed without quoting rules of its own.
+function! HexPairPagedMarkNameError(name) abort
+  if a:name ==# ''
+    return 'hexpair: a mark needs a name'
+  endif
+  if a:name !~# '^\w\+$'
+    return printf('hexpair: %s is not a mark name (letters, digits and '
+          \ . 'underscores)', string(a:name))
+  endif
+  return ''
+endfunction
+
+function! s:SetMark(name) abort
+  if !s:RequirePaged()
+    return
+  endif
+  let err = HexPairPagedMarkNameError(a:name)
+  if !empty(err)
+    echohl ErrorMsg | echomsg err | echohl None
+    return
+  endif
+  if b:hexpair_page_len <= 0
+    echohl ErrorMsg
+    echomsg 'hexpair: this page holds no bytes to mark'
+    echohl None
+    return
+  endif
+  let off = s:IsHexView() ? s:PagedByteOffset() : s:TextByteOffset()
+  let marks = s:MarksFor(b:hexpair_page_file)
+  let marks[a:name] = off
+  echo printf('hexpair: mark %s at byte %d (0x%x)', a:name, off + 1, off + 1)
+endfunction
+
+function! s:DeleteMark(name) abort
+  if !s:RequirePaged()
+    return
+  endif
+  let marks = s:MarksFor(b:hexpair_page_file)
+  if !has_key(marks, a:name)
+    echohl ErrorMsg
+    echomsg printf('hexpair: no mark named %s here', string(a:name))
+    echohl None
+    return
+  endif
+  call remove(marks, a:name)
+  echo printf('hexpair: mark %s dropped', a:name)
+endfunction
+
+function! s:GoMark(name, force) abort
+  if !s:RequirePaged()
+    return
+  endif
+  let marks = s:MarksFor(b:hexpair_page_file)
+  if !has_key(marks, a:name)
+    echohl ErrorMsg
+    echomsg printf('hexpair: no mark named %s here%s', string(a:name),
+          \ empty(marks) ? '' : ' (have: ' . join(sort(keys(marks)), ', ') . ')')
+    echohl None
+    return
+  endif
+  " Through the same road a typed position takes, so a mark on a byte the
+  " file no longer has is refused in the same words.
+  call s:GotoOffset(string(marks[a:name] + 1), a:force)
+endfunction
+
+" The listing, as lines. Pure, so its wording is testable without a file:
+" a:marks is the dict, a:size the page size, a:total the file's length.
+function! HexPairPagedMarkLines(marks, size, total) abort
+  if empty(a:marks)
+    return ['hexpair: no marks in this file']
+  endif
+  let byoffset = []
+  for name in keys(a:marks)
+    call add(byoffset, printf('%020d %s', a:marks[name], name))
+  endfor
+  let out = []
+  for entry in sort(byoffset)
+    let name = entry[21:]
+    let off = a:marks[name]
+    call add(out, printf('  %-16s byte %d (0x%x)%s of %d, page %d',
+          \ name, off + 1, off + 1,
+          \ off >= a:total ? ' - past the end' : '', a:total,
+          \ off / a:size + 1))
+  endfor
+  return ['hexpair: marks in this file:'] + out
+endfunction
+
+function! s:Marks() abort
+  if !s:RequirePaged()
+    return
+  endif
+  for line in HexPairPagedMarkLines(s:MarksFor(b:hexpair_page_file),
+        \ b:hexpair_page_size, b:hexpair_page_total)
+    echo line
+  endfor
+endfunction
+
+" Completion for the commands that take a mark name.
+function! HexPairPagedMarkComplete(lead, cmdline, pos) abort
+  if !get(b:, 'hexpair_page_active', 0)
+    return []
+  endif
+  return sort(filter(keys(s:MarksFor(b:hexpair_page_file)),
+        \ 'v:val[0 : strlen(a:lead) - 1] ==# a:lead'))
+endfunction
+
+" ---------------------------------------------------------------------------
 " A second view of the same file
 " ---------------------------------------------------------------------------
 
@@ -3190,6 +3320,12 @@ command! -bar -bang -nargs=1 HexPairGoOffset
 command! -bar HexPairPages call s:Pages()
 command! -bar HexPairSelection call s:Selection()
 command! -bar HexPairInspect call s:Inspect()
+command! -bar -nargs=1 HexPairMark call s:SetMark(<q-args>)
+command! -bar -nargs=1 -complete=customlist,HexPairPagedMarkComplete
+      \ HexPairMarkDelete call s:DeleteMark(<q-args>)
+command! -bar -bang -nargs=1 -complete=customlist,HexPairPagedMarkComplete
+      \ HexPairGoMark call s:GoMark(<q-args>, '<bang>' ==# '!')
+command! -bar HexPairMarks call s:Marks()
 command! -bar -nargs=? HexPairSplit  call s:SplitView(0, <f-args>)
 command! -bar -nargs=? HexPairVSplit call s:SplitView(1, <f-args>)
 
@@ -3216,6 +3352,7 @@ nnoremap <silent> <Plug>(HexPairPages) :<C-U>HexPairPages<CR>
 xnoremap <silent> <Plug>(HexPairSelection) :<C-U>HexPairSelection<CR>
 nnoremap <silent> <Plug>(HexPairSelection) :<C-U>HexPairSelection<CR>
 nnoremap <silent> <Plug>(HexPairInspect) :<C-U>HexPairInspect<CR>
+nnoremap <silent> <Plug>(HexPairMarks) :<C-U>HexPairMarks<CR>
 
 " No default key mappings are defined; map the <Plug> mappings (or the
 " commands directly) in your vimrc, e.g.:

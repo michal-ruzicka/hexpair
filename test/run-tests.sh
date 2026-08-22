@@ -153,6 +153,8 @@ for name in ('paged21.bin', 'paged22.bin', 'paged23.bin', 'paged31.bin', 'paged3
 for name in ('scan1.bin', 'scan2.bin'):
     with open(os.path.join(w, name), 'wb') as f:
         f.write(bytes((i * 7) % 256 for i in range(100000)))
+# marks fixture
+open(os.path.join(w, 'mark1.bin'), 'wb').write(bytes(i % 256 for i in range(5000)))
 # stepping fixture
 open(os.path.join(w, 'step1.bin'), 'wb').write(bytes(i % 256 for i in range(5000)))
 # two-views fixtures
@@ -2500,6 +2502,61 @@ check "and a step out of the file is refused like a position" \
 # modified buffer in the window is, and Vim refuses that without a !.
 check "the bang opens over a modified buffer, the bare command does not" \
     "['refused', 1, 1]" "$(sed -n 3p "$WORK/tstep.out")"
+
+# ===========================================================================
+# Marks
+# ===========================================================================
+# Positions in the FILE, not in a buffer: a paged buffer holds a different
+# part of the file from one page to the next, so Vim's own marks cannot
+# mean what they say here. These are kept per file, so two views of one
+# file share them.
+cat > "$WORK/tmk.vim" <<EOF
+$(printf "$HEX")
+let out = []
+call add(out, string([HexPairPagedMarkNameError('header'), HexPairPagedMarkNameError(''), HexPairPagedMarkNameError('a b')]))
+call add(out, string(HexPairPagedMarkLines({}, 512, 5000)))
+call add(out, string(HexPairPagedMarkLines({'b': 1056, 'a': 3123, 'gone': 9999}, 512, 5000)))
+HexPairOpen $WORK/mark1.bin 3
+call cursor(4, 11)
+HexPairMark header
+HexPairPageGoto 7
+call cursor(5, 20)
+HexPairMark payload
+HexPairPageGoto 1
+HexPairGoMark header
+call add(out, HexPairStatus())
+call add(out, string(HexPairPagedMarkComplete('h', '', 0)))
+" a second view of the same file sees the same marks
+HexPairSplit 1
+HexPairGoMark payload
+call add(out, HexPairStatus())
+HexPairMarkDelete payload
+redir => msg
+silent! HexPairGoMark payload
+redir END
+call add(out, substitute(substitute(msg, '^[\r\n]*', '', ''), '\n', ' ', 'g'))
+call writefile(out, '$WORK/tmk.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tmk.vim" < /dev/null
+check "a mark name is a word" \
+    "['', 'hexpair: a mark needs a name', 'hexpair: ''a b'' is not a mark name (letters, digits and underscores)']" \
+    "$(sed -n 1p "$WORK/tmk.out")"
+check "no marks says so" "['hexpair: no marks in this file']" \
+    "$(sed -n 2p "$WORK/tmk.out")"
+# Listed by offset, not by name, and a mark left behind by a file that
+# shrank says where it now points.
+check "the listing is by position, and names the page" \
+    "['hexpair: marks in this file:', '  b                byte 1057 (0x421) of 5000, page 3', '  a                byte 3124 (0xc34) of 5000, page 7', '  gone             byte 10000 (0x2710) - past the end of 5000, page 20']" \
+    "$(sed -n 3p "$WORK/tmk.out")"
+check "a mark is a byte to jump back to" "hex 3/10 @0x421" \
+    "$(sed -n 4p "$WORK/tmk.out")"
+check "and completes by name" "['header']" "$(sed -n 5p "$WORK/tmk.out")"
+check "a second view of the file has the same marks" "hex 7/10 @0xc34" \
+    "$(sed -n 6p "$WORK/tmk.out")"
+check "a dropped mark is dropped for both, and says what is left" \
+    "hexpair: no mark named 'payload' here (have: header)" \
+    "$(sed -n 7p "$WORK/tmk.out")"
 
 # ---------------------------------------------------------------------------
 if [ "$FAIL" -eq 0 ]; then
