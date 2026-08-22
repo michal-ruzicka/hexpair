@@ -299,6 +299,14 @@ baseline hashes computed and never compared — which is to say two tests
 that did not check what their own comment said they did. That last class
 is what a manual run before a release is for.
 
+**Read the check COUNT, not just the last line.** The suite is one long
+sequence of blocks, and an edit that replaces a span of it can swallow
+whole blocks that happen to live inside that span - which the suite then
+reports as "All tests passed", because what is gone is not failing, it is
+absent. `test/run-tests.sh | grep -c '^ok'` against the number before the
+change is the tripwire; touching one block at a time is the way not to
+need it.
+
 **The property test** (`test/run-tests.sh`, "Property: any shape of dump
 writes the bytes it spells") renders one page's bytes in six shapes a
 seeded generator invents — offsets or not, ASCII column or not, either
