@@ -2854,6 +2854,88 @@ check "and a replacement cannot have wildcards in it" \
     "hexpair: a replacement cannot have wildcards in it" \
     "$(sed -n 6p "$WORK/trep.out")"
 
+# ===========================================================================
+# Property: any shape of dump writes the bytes it spells
+# ===========================================================================
+# The rules say the offset and ASCII columns are decoration, that lines
+# may be any length, and that only the hex digits count. The tests above
+# check that one case at a time; this checks it on dumps nobody wrote by
+# hand: six rounds of a seeded generator that renders the same bytes in a
+# different shape every time - offsets or not, ASCII column or not, upper
+# or lower case, lines of random length, empty lines through the middle -
+# with a growing number of random single-byte edits in them.
+#
+# The seed is fixed, so a failure is reproducible and its round says which
+# shape did it.
+"$PY" - "$WORK" <<'EOF'
+import os, random, sys
+
+w = sys.argv[1]
+rnd = random.Random(20260822)
+PAGE, BASE = 512, 512          # page 2 at 512 bytes a page
+data = bytes(rnd.randrange(256) for _ in range(3000))
+
+def render(page_bytes, base):
+    """The same bytes as a dump of some arbitrary but legal shape."""
+    hexs = ''.join('%02x' % b for b in page_bytes)
+    if rnd.random() < 0.5:
+        hexs = hexs.upper()
+    lines, i, off = [], 0, base
+    while i < len(hexs):
+        take = rnd.choice([2, 4, 8, 16, 32, 48, 64]) 
+        chunk = hexs[i:i + take]
+        i += take
+        # bytes separated by a single space, or by nothing at all
+        spaced = ' '.join(chunk[k:k + 2] for k in range(0, len(chunk), 2)) \
+                 if rnd.random() < 0.7 else chunk
+        line, offsetted = spaced, False
+        if rnd.random() < 0.5:                 # an offset column to ignore
+            line, offsetted = '%08x: %s' % (off, spaced), True
+        # An ASCII column only where an offset column already is: the rule
+        # is that a line's offset column ends at its first ':', so a BARE
+        # line whose ASCII part contains one (byte 0x3a) would have that
+        # read as the offset column - which is the rule working as
+        # written, and not a shape to generate.
+        if offsetted and rnd.random() < 0.4:
+            line = line + '  ' + ''.join(
+                chr(b) if 0x20 <= b < 0x7f else '.'
+                for b in [int(chunk[k:k + 2], 16)
+                          for k in range(0, len(chunk), 2)])
+        lines.append(line)
+        if rnd.random() < 0.15:                # a line holding nothing
+            lines.append('')
+        off += take // 2
+    return lines
+
+for r in range(1, 7):
+    page = bytearray(data[BASE:BASE + PAGE])
+    for _ in range(r - 1):                     # round 1 changes nothing
+        page[rnd.randrange(PAGE)] = rnd.randrange(256)
+    expect = data[:BASE] + bytes(page) + data[BASE + PAGE:]
+    open(os.path.join(w, 'prop%d.bin' % r), 'wb').write(data)
+    open(os.path.join(w, 'prop%d.expect' % r), 'wb').write(expect)
+    with open(os.path.join(w, 'prop%d.dump' % r), 'w') as f:
+        f.write('\n'.join(render(page, BASE)) + '\n')
+EOF
+for round in 1 2 3 4 5 6; do
+    cat > "$WORK/tprop.vim" <<EOF
+$(printf "$HEX")
+HexPairOpen $WORK/prop$round.bin 2
+let lines = readfile('$WORK/prop$round.dump')
+silent %delete _
+call setline(1, lines)
+write
+call writefile([string([&l:modified, HexPairPagedValidate()])], '$WORK/tprop.out')
+qa!
+EOF
+    "$HEXPAIR_VIM" -es -u NONE -S "$WORK/tprop.vim" < /dev/null
+    check "round $round: the dump wrote the bytes it spells" \
+        "$(hash_range "$WORK/prop$round.expect" 0 -1)" \
+        "$(hash_range "$WORK/prop$round.bin" 0 -1)"
+    check "round $round: and the page came out clean" "[0, {}]" \
+        "$(cat "$WORK/tprop.out")"
+done
+
 # ---------------------------------------------------------------------------
 if [ "$FAIL" -eq 0 ]; then
     echo "All tests passed."
