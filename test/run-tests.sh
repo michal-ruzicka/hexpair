@@ -153,6 +153,15 @@ for name in ('paged21.bin', 'paged22.bin', 'paged23.bin', 'paged31.bin', 'paged3
 for name in ('scan1.bin', 'scan2.bin'):
     with open(os.path.join(w, name), 'wb') as f:
         f.write(bytes((i * 7) % 256 for i in range(100000)))
+# diff fixtures: same bytes but for three, and a longer copy
+_da = bytes(i % 256 for i in range(5000))
+_db = bytearray(_da)
+_db[100] = 0xff
+_db[1500] = 0xee
+_db[4999] = 0x00
+open(os.path.join(w, 'diffa.bin'), 'wb').write(_da)
+open(os.path.join(w, 'diffb.bin'), 'wb').write(bytes(_db))
+open(os.path.join(w, 'diffc.bin'), 'wb').write(_da + b'tail')
 # modified-byte fixture
 open(os.path.join(w, 'mod1.bin'), 'wb').write(bytes(i % 256 for i in range(5000)))
 # marks fixture
@@ -2602,6 +2611,99 @@ check "an inserted line is all new bytes" "[[6, 1, 5]]" \
 check "a banner line has nothing to compare" "[]" "$(sed -n 6p "$WORK/tmod.out")"
 check "and a write clears the marks with the modified flag" "[0, []]" \
     "$(sed -n 7p "$WORK/tmod.out")"
+
+# ===========================================================================
+# Comparing this file with another
+# ===========================================================================
+# Two files, differing in three known bytes: an early one, one on another
+# page, and the very last. Finding a difference is a block read of both
+# sides and then a halving of the block - never a walk over the bytes - so
+# the halving is what is checked first, on strings small enough to read.
+cat > "$WORK/tdf.vim" <<EOF
+$(printf "$HEX")
+let out = []
+call add(out, string([HexPairPagedFirstDifference('abcdef', 'abcdef'), HexPairPagedFirstDifference('abcdef', 'abXdef'), HexPairPagedFirstDifference('abc', 'abcdef'), HexPairPagedFirstDifference('', '')]))
+call add(out, string([HexPairPagedLastDifference('abcdef', 'abcdef'), HexPairPagedLastDifference('abcdef', 'abXdeY'), HexPairPagedLastDifference('abc', 'abcdef')]))
+call add(out, HexPairPagedDiffText('other.bin', 512, 512, 0, -1))
+HexPairOpen $WORK/diffa.bin 1
+redir => msg
+silent HexPairDiff $WORK/diffb.bin
+redir END
+call add(out, substitute(msg, '^[\r\n]*', '', ''))
+call add(out, string(HexPairPagedComparePositions(8, 8, b:hexpair_diff_hex)))
+HexPairGoOffset 1
+HexPairDiffNext
+call add(out, HexPairStatus())
+HexPairDiffNext
+call add(out, HexPairStatus())
+HexPairDiffNext
+call add(out, HexPairStatus())
+redir => msg2
+silent HexPairDiffNext
+redir END
+call add(out, substitute(msg2, '^[\r\n]*', '', ''))
+HexPairDiffPrev
+call add(out, HexPairStatus())
+redir => msg3
+silent! HexPairDiff $WORK/diffa.bin
+redir END
+call add(out, substitute(substitute(msg3, '^[\r\n]*', '', ''), '\n', ' ', 'g'))
+HexPairDiff!
+call add(out, string([get(b:, 'hexpair_diff_file', ''), get(b:, 'hexpair_diff_hex', ''), len(get(w:, 'hexpair_diff_ids', []))]))
+call writefile(out, '$WORK/tdf.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tdf.vim" < /dev/null
+check "the first difference, by halving" "[-1, 2, 3, -1]" \
+    "$(sed -n 1p "$WORK/tdf.out")"
+# One string being a prefix of the other IS a difference, at the point
+# where the shorter one ends.
+check "and the last one" "[-1, 5, 5]" "$(sed -n 2p "$WORK/tdf.out")"
+check "two files that agree over the page say so" \
+    "hexpair: bytes 513-1024 are the same in other.bin" "$(sed -n 3p "$WORK/tdf.out")"
+check_path "and one that does not says how much and where" \
+    "hexpair: 1 of the 512 bytes on this page differ from $WORK/diffb.bin, first at byte 101 (0x65)" \
+    "$(sed -n 4p "$WORK/tdf.out")"
+check "the differing byte is marked in both columns" "[[8, 23, 2], [8, 64, 1]]" \
+    "$(sed -n 5p "$WORK/tdf.out")"
+check "and the jumps walk them, across pages" "hex 1/10 @0x65" \
+    "$(sed -n 6p "$WORK/tdf.out")"
+check "the second is on another page" "hex 3/10 @0x5dd" \
+    "$(sed -n 7p "$WORK/tdf.out")"
+check "the third is the file's last byte" "hex 10/10 @0x1388" \
+    "$(sed -n 8p "$WORK/tdf.out")"
+check "past the last one it says there is none" \
+    "hexpair: no difference after byte 5000" "$(sed -n 9p "$WORK/tdf.out")"
+check "and back again finds the one before" "hex 3/10 @0x5dd" \
+    "$(sed -n 10p "$WORK/tdf.out")"
+check "comparing a view with its own file is refused" \
+    "hexpair: that is this view's own file" "$(sed -n 11p "$WORK/tdf.out")"
+check "and the bang stops comparing" "['', '', 0]" "$(sed -n 12p "$WORK/tdf.out")"
+
+# --- A file that is longer differs from where it grows --------------------
+cat > "$WORK/tdf2.vim" <<EOF
+$(printf "$HEX")
+HexPairOpen $WORK/diffa.bin 10
+redir => msg
+silent HexPairDiff $WORK/diffc.bin
+redir END
+let onpage = substitute(msg, '^[\r\n]*', '', '')
+HexPairGoOffset 4999
+redir => msg2
+silent HexPairDiffNext
+redir END
+call writefile([onpage, substitute(msg2, '^[\r\n]*', '', ''), HexPairStatus()], '$WORK/tdf2.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tdf2.vim" < /dev/null
+check_path "a longer file agrees over the bytes it shares" \
+    "hexpair: bytes 4609-5000 are the same in $WORK/diffc.bin" \
+    "$(sed -n 1p "$WORK/tdf2.out")"
+# The bytes past this file's end are a difference too, and the jump lands
+# on the first of them.
+check_path "but differs from where it grows, with nowhere to put the cursor" \
+    "hexpair: $WORK/diffc.bin is longer: its bytes from 5001 (0x1389) on have nothing here to differ from" \
+    "$(sed -n 2p "$WORK/tdf2.out")"
 
 # ---------------------------------------------------------------------------
 if [ "$FAIL" -eq 0 ]; then

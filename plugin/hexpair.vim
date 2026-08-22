@@ -143,6 +143,10 @@ highlight default link HexPairPageBanner Comment
 " colour scheme has an opinion about and which means the same thing.
 highlight default link HexPairModified DiffText
 
+" Highlight group for bytes that differ from the file being compared
+" against (|:HexPairDiff|), as opposed to from this view's own file.
+highlight default link HexPairDiff DiffAdd
+
 " --------------------------------------------------------------------------
 " Vim version gate
 " --------------------------------------------------------------------------
@@ -194,6 +198,11 @@ function! HexPairPagedSizeError(size, bytesperline) abort
   endif
   return ''
 endfunction
+
+" Blocks the file-wide comparison reads in. Smaller than the write's,
+" because two of them are held as hex at once - a megabyte of file is two
+" megabytes of hex on each side.
+let s:diffblock = 1024 * 1024
 
 " Blocks the length-changing write copies in. Bounded on purpose: the
 " whole point of paging is that memory use does not follow the size of
@@ -855,9 +864,9 @@ endfunction
 " line('w$') comes out BEFORE line('w0') there - so the drawing has to be
 " separable from what it draws, the same split
 " HexPairPagedSelectionPositions() makes for Visual mode.
-function! HexPairPagedModifiedPositions(first, last) abort
+function! HexPairPagedComparePositions(first, last, hex) abort
   let n = b:hexpair_n
-  let orig = b:hexpair_page_hex
+  let orig = a:hex
   let out = []
   for lnum in range(a:first, a:last)
     let line = getline(lnum)
@@ -906,6 +915,12 @@ function! s:ClearModifiedHighlight() abort
   let w:hexpair_mod_state = []
 endfunction
 
+" What the modified-byte marking compares against: the page as it was read.
+function! HexPairPagedModifiedPositions(first, last) abort
+  return HexPairPagedComparePositions(a:first, a:last,
+        \ get(b:, 'hexpair_page_hex', ''))
+endfunction
+
 function! s:ModifiedHighlight() abort
   if !g:hexpair_show_modified || !get(b:, 'hexpair_page_active', 0)
         \ || !s:IsHexView() || get(b:, 'hexpair_page_hex', '') ==# ''
@@ -933,6 +948,7 @@ endfunction
 function! s:PagedHighlight() abort
   call s:PagedClearHighlight()
   call s:ModifiedHighlight()
+  call s:DiffHighlight()
   if !get(b:, 'hexpair_page_active', 0) || !s:IsHexView()
     return
   endif
@@ -1104,8 +1120,13 @@ function! s:LoadPage(pageidx) abort
           \ a:pageidx + 1, b:hexpair_page_file, line('$'), expect)
   endif
 
+  " The other file's bytes for THIS page, when there is one to compare
+  " against; a page turn moves the window on both files at once.
+  call s:LoadDiffHex()
+
   call cursor(1 + b:hexpair_page_header, b:hexpair_page_hexstart)
   call s:ClearModifiedHighlight()
+  call s:ClearDiffHighlight()
   " This window holds a view of its own - see s:WindowView().
   let w:hexpair_own_view = 1
   call s:Debug('page %d/%d loaded: bytes [%d, %d) of %d, %d lines',
@@ -1425,19 +1446,24 @@ endfunction
 " Empty when the local Vim has no sha256() (a build without +cryptv) or
 " when reading the page fails, in which case the size and mtime check
 " stands alone - a weaker guard, never a wrong one.
-" The page's bytes as they are on disk right now, as one flat run of
-" lowercase hex. Empty when the read fails - every caller treats that as
-" "cannot tell", never as "no bytes".
-function! s:PageHex(base, len) abort
+" A byte range of any file, as one flat run of lowercase hex. Empty when
+" the read fails or the range is empty - every caller treats that as
+" "cannot tell", never as "no bytes". The range may run past the end of
+" the file, in which case what comes back is what there was.
+function! s:FileHex(file, off, len) abort
   if a:len <= 0
     return ''
   endif
   try
-    return substitute(s:Run(printf('%s -p -s %d -l %d %s', s:xxd, a:base,
-          \ a:len, shellescape(b:hexpair_page_file))), '[^0-9a-fA-F]', '', 'g')
+    return substitute(s:Run(printf('%s -p -s %d -l %d %s', s:xxd, a:off,
+          \ a:len, shellescape(a:file))), '[^0-9a-fA-F]', '', 'g')
   catch
     return ''
   endtry
+endfunction
+
+function! s:PageHex(base, len) abort
+  return s:FileHex(b:hexpair_page_file, a:base, a:len)
 endfunction
 
 function! s:PageDigest(base, len) abort
@@ -2773,6 +2799,276 @@ function! s:GotoOffset(text, force) abort
 endfunction
 
 " ---------------------------------------------------------------------------
+" Comparing this file with another
+" ---------------------------------------------------------------------------
+"
+" |:HexPairDiff| {file} marks, in both columns, every byte of the page that
+" differs from the same offset of {file} - and |:HexPairDiffNext| walks the
+" whole file for the next offset where the two disagree, however far away
+" that is. Two views side by side (|hexpair-two-views|), each diffing
+" against the other's file, is what `vimhexdiff` sets up.
+"
+" What is compared is what is on SCREEN against the other file, so an edit
+" shows up in the marking at once, the same way the modified-byte marking
+" works.
+
+" The first index at which two strings differ, or -1 when neither is
+" longer and no character does. When one is a prefix of the other, that is
+" where it ends: everything from there on is a difference.
+"
+" By halving rather than by walking: comparing two strings is one
+" C-level operation and a block of a file is megabytes of hex, so the
+" walk is what would cost - about twenty comparisons of shrinking
+" substrings find the byte instead.
+function! HexPairPagedFirstDifference(a, b) abort
+  if a:a ==# a:b
+    return -1
+  endif
+  let short = strlen(a:a) < strlen(a:b) ? strlen(a:a) : strlen(a:b)
+  if strpart(a:a, 0, short) ==# strpart(a:b, 0, short)
+    return short
+  endif
+  let [lo, hi] = [0, short]
+  " Invariant: the two agree over [0, lo) and differ somewhere in [lo, hi).
+  while hi - lo > 1
+    let mid = (lo + hi) / 2
+    if strpart(a:a, lo, mid - lo) ==# strpart(a:b, lo, mid - lo)
+      let lo = mid
+    else
+      let hi = mid
+    endif
+  endwhile
+  return lo
+endfunction
+
+" The same, from the other end: the LAST index at which they differ.
+function! HexPairPagedLastDifference(a, b) abort
+  if a:a ==# a:b
+    return -1
+  endif
+  " A longer string has a character where the other has nothing, and that
+  " is the last difference there is.
+  if strlen(a:a) != strlen(a:b)
+    return (strlen(a:a) > strlen(a:b) ? strlen(a:a) : strlen(a:b)) - 1
+  endif
+  " Invariant: they differ somewhere in [lo, hi) and agree over [hi, end).
+  let [lo, hi] = [0, strlen(a:a)]
+  while hi - lo > 1
+    let mid = (lo + hi) / 2
+    if strpart(a:a, mid) ==# strpart(a:b, mid)
+      let hi = mid
+    else
+      let lo = mid
+    endif
+  endwhile
+  return lo
+endfunction
+
+" Bytes of the other file for the page in view, and what the page's own
+" bytes are held against.
+function! s:DiffHex() abort
+  return get(b:, 'hexpair_diff_hex', '')
+endfunction
+
+function! s:LoadDiffHex() abort
+  if get(b:, 'hexpair_diff_file', '') ==# ''
+    let b:hexpair_diff_hex = ''
+    return
+  endif
+  let b:hexpair_diff_hex = s:FileHex(b:hexpair_diff_file,
+        \ b:hexpair_page_base, b:hexpair_page_len)
+endfunction
+
+function! s:DiffPositions(first, last) abort
+  return HexPairPagedComparePositions(a:first, a:last, s:DiffHex())
+endfunction
+
+function! s:ClearDiffHighlight() abort
+  if exists('w:hexpair_diff_ids')
+    for id in w:hexpair_diff_ids
+      silent! call matchdelete(id)
+    endfor
+  endif
+  let w:hexpair_diff_ids = []
+  let w:hexpair_diff_state = []
+endfunction
+
+function! s:DiffHighlight() abort
+  if !get(b:, 'hexpair_page_active', 0) || !s:IsHexView()
+        \ || s:DiffHex() ==# ''
+    return
+  endif
+  let state = [b:changedtick, line('w0'), line('w$'), b:hexpair_page_index]
+  if get(w:, 'hexpair_diff_state', []) ==# state
+    return
+  endif
+  call s:ClearDiffHighlight()
+  let w:hexpair_diff_state = state
+  let positions = s:DiffPositions(line('w0'), line('w$'))
+  for i in range(0, len(positions) - 1, 8)
+    call add(w:hexpair_diff_ids,
+          \ matchaddpos('HexPairDiff', positions[i : i + 7]))
+  endfor
+endfunction
+
+" How the two files compare over the page in view, as one line.
+function! HexPairPagedDiffText(theirs, base, len, differing, first) abort
+  if a:differing < 0
+    return printf('hexpair: %s cannot be read; nothing to compare against',
+          \ a:theirs)
+  endif
+  if a:differing == 0
+    return printf('hexpair: bytes %d-%d are the same in %s',
+          \ a:base + 1, a:base + a:len, a:theirs)
+  endif
+  return printf('hexpair: %d of the %d bytes on this page differ from %s, '
+        \ . 'first at byte %d (0x%x)',
+        \ a:differing, a:len, a:theirs, a:first + 1, a:first + 1)
+endfunction
+
+" Bytes of the page that differ from a:hex, and the first one's offset.
+" Against the page as it was READ, not as the buffer now holds it: this
+" is the answer to "how do these two files compare", which unwritten
+" edits of mine are no part of. The marking on screen is the live one.
+function! s:DiffCount(hex) abort
+  let mine = get(b:, 'hexpair_page_hex', '')
+  if mine ==# '' || a:hex ==# ''
+    return [-1, -1]
+  endif
+  let differing = 0
+  let first = -1
+  let i = 0
+  let bytes = strlen(mine) / 2
+  while i < bytes
+    if strpart(mine, i * 2, 2) !=# strpart(a:hex, i * 2, 2)
+      let differing += 1
+      if first < 0
+        let first = b:hexpair_page_base + i
+      endif
+    endif
+    let i += 1
+  endwhile
+  return [differing, first]
+endfunction
+
+function! s:Diff(file, clear) abort
+  if !s:RequirePaged()
+    return
+  endif
+  if a:clear
+    let b:hexpair_diff_file = ''
+    let b:hexpair_diff_hex = ''
+    call s:ClearDiffHighlight()
+    echo 'hexpair: no longer comparing'
+    return
+  endif
+  if a:file ==# ''
+    echo get(b:, 'hexpair_diff_file', '') ==# ''
+          \ ? 'hexpair: not comparing with anything'
+          \ : 'hexpair: comparing with ' . b:hexpair_diff_file
+    return
+  endif
+  let file = fnamemodify(a:file, ':p')
+  if !filereadable(file)
+    echohl ErrorMsg
+    echomsg 'hexpair: cannot read ' . a:file
+    echohl None
+    return
+  endif
+  if s:SamePath(file, b:hexpair_page_file)
+    echohl ErrorMsg
+    echomsg 'hexpair: that is this view''s own file'
+    echohl None
+    return
+  endif
+  let b:hexpair_diff_file = file
+  call s:LoadDiffHex()
+  call s:ClearDiffHighlight()
+  call s:DiffHighlight()
+  let [differing, first] = s:DiffCount(s:DiffHex())
+  echo HexPairPagedDiffText(file, b:hexpair_page_base,
+        \ b:hexpair_page_len, differing, first)
+endfunction
+
+" Function form, for the same reason HexPairOpenFile() has one: a name
+" with a space or a literal '$' does not survive <f-args>.
+function! HexPairDiffWith(file) abort
+  call s:Diff(a:file, 0)
+endfunction
+
+" The next (or previous) offset at which the two files differ, from a:from
+" exclusive. Reads both a block at a time, so memory does not follow the
+" size of either, and finds the byte within a block by halving.
+function! s:DiffSearch(from, forward) abort
+  let other = get(b:, 'hexpair_diff_file', '')
+  if other ==# ''
+    throw 'hexpair: not comparing with anything - :HexPairDiff {file} first'
+  endif
+  let mysize = getfsize(b:hexpair_page_file)
+  let theirsize = getfsize(other)
+  let total = mysize > theirsize ? mysize : theirsize
+  let block = s:diffblock
+  if a:forward
+    let off = a:from + 1
+    while off < total
+      let len = block < total - off ? block : total - off
+      let idx = HexPairPagedFirstDifference(
+            \ s:FileHex(b:hexpair_page_file, off, len),
+            \ s:FileHex(other, off, len))
+      if idx >= 0
+        return off + idx / 2
+      endif
+      let off += len
+    endwhile
+    return -1
+  endif
+  let off = a:from
+  while off > 0
+    let len = block < off ? block : off
+    let start = off - len
+    let idx = HexPairPagedLastDifference(
+          \ s:FileHex(b:hexpair_page_file, start, len),
+          \ s:FileHex(other, start, len))
+    if idx >= 0
+      return start + idx / 2
+    endif
+    let off = start
+  endwhile
+  return -1
+endfunction
+
+function! s:DiffJump(forward) abort
+  if !s:RequirePaged()
+    return
+  endif
+  try
+    let here = s:IsHexView() ? s:PagedByteOffset() : s:TextByteOffset()
+    let at = s:DiffSearch(here, a:forward)
+    if at < 0
+      echo printf('hexpair: no difference %s byte %d',
+            \ a:forward ? 'after' : 'before', here + 1)
+      return
+    endif
+    " The difference can be past the end of THIS file - the other one is
+    " longer, and every byte it has beyond ours is one. There is nowhere
+    " to put the cursor for that, so say it rather than jump.
+    if at >= b:hexpair_page_total
+      echo printf('hexpair: %s is longer: its bytes from %d (0x%x) on have '
+            \ . 'nothing here to differ from', b:hexpair_diff_file,
+            \ at + 1, at + 1)
+      return
+    endif
+    call s:GotoOffset(string(at + 1), 0)
+    echo printf('hexpair: byte %d (0x%x) differs from %s',
+          \ at + 1, at + 1, b:hexpair_diff_file)
+  catch /^hexpair:/
+    echohl ErrorMsg
+    echomsg v:exception
+    echohl None
+  endtry
+endfunction
+
+" ---------------------------------------------------------------------------
 " Marks
 " ---------------------------------------------------------------------------
 "
@@ -3143,6 +3439,7 @@ function! s:SetupPagedBuffer() abort
     autocmd CursorMoved,CursorMovedI <buffer> call s:PagedHighlight()
     autocmd BufWinLeave              <buffer> call s:PagedClearHighlight()
     autocmd BufWinLeave              <buffer> call s:ClearModifiedHighlight()
+    autocmd BufWinLeave              <buffer> call s:ClearDiffHighlight()
     " An edit that does not move the cursor - r, x on the last column -
     " raises no CursorMoved, and it is exactly the edit whose byte wants
     " marking.
@@ -3460,6 +3757,10 @@ command! -bar -nargs=1 -complete=customlist,HexPairPagedMarkComplete
 command! -bar -bang -nargs=1 -complete=customlist,HexPairPagedMarkComplete
       \ HexPairGoMark call s:GoMark(<q-args>, '<bang>' ==# '!')
 command! -bar HexPairMarks call s:Marks()
+command! -bar -bang -nargs=? -complete=file HexPairDiff
+      \ call s:Diff(<q-args>, '<bang>' ==# '!')
+command! -bar HexPairDiffNext call s:DiffJump(1)
+command! -bar HexPairDiffPrev call s:DiffJump(0)
 command! -bar -nargs=? HexPairSplit  call s:SplitView(0, <f-args>)
 command! -bar -nargs=? HexPairVSplit call s:SplitView(1, <f-args>)
 
@@ -3487,6 +3788,8 @@ xnoremap <silent> <Plug>(HexPairSelection) :<C-U>HexPairSelection<CR>
 nnoremap <silent> <Plug>(HexPairSelection) :<C-U>HexPairSelection<CR>
 nnoremap <silent> <Plug>(HexPairInspect) :<C-U>HexPairInspect<CR>
 nnoremap <silent> <Plug>(HexPairMarks) :<C-U>HexPairMarks<CR>
+nnoremap <silent> <Plug>(HexPairDiffNext) :<C-U>HexPairDiffNext<CR>
+nnoremap <silent> <Plug>(HexPairDiffPrev) :<C-U>HexPairDiffPrev<CR>
 
 " No default key mappings are defined; map the <Plug> mappings (or the
 " commands directly) in your vimrc, e.g.:

@@ -32,6 +32,19 @@
 # reports for it is 0, and hexpair pages what a file says it holds. Read a
 # slice of it into a file, or pipe one in as above.
 #
+# It also defines a second one:
+#
+#     vimhexdiff FILE1 FILE2   the two files side by side, each marking the
+#                              bytes that differ from the other, cursors on
+#                              the first difference
+#
+#     vimhexdiff old.img new.img
+#
+# The two views navigate independently, as two views of anything do here:
+# :HexPairDiffNext moves the window it is used in, so press it in the other
+# one to follow. They start scroll-bound, so scrolling within a page keeps
+# them level.
+#
 # Only the page on screen is read, so the size of the file does not matter.
 # Set VIMHEX_VIM to use a particular Vim, e.g. VIMHEX_VIM=/usr/bin/vim.
 
@@ -85,4 +98,33 @@ vimhex()
         "${VIMHEX_VIM:-vim}" \
             -c 'autocmd VimEnter * call HexPairOpenFile($HEXPAIR_OPEN_FILE)' \
             -c "autocmd VimEnter * $jump"
+}
+
+vimhexdiff()
+{
+    if [ $# -ne 2 ]; then
+        echo "usage: vimhexdiff FILE1 FILE2" >&2
+        return 1
+    fi
+
+    # HexPairOpenFile() and HexPairDiffWith(), not the :Ex commands, for the
+    # reason given at vimhex above: a name with a space or a literal '$'
+    # does not survive the Ex command line's own argument parsing, and the
+    # environment plus a function call need no escaping at all.
+    #
+    # Everything runs from VimEnter, again for vimhex's reason, and in
+    # order: open the left file, tell it what it is compared against, split
+    # and open the right one in the new window, tell it the same the other
+    # way round, bind the two windows' scrolling, and land on the first
+    # difference.
+    # Three -c options rather than eight: Vim takes at most ten, and an
+    # :autocmd swallows the bars after it, so each step is one autocommand
+    # made of several commands. No :windo either - IT would swallow them
+    # too, and run "wincmd t" once per window. The split is "rightbelow"
+    # so that FILE1 stays on the left whatever 'splitright' says.
+    HEXPAIR_DIFF_A="$1" HEXPAIR_DIFF_B="$2" \
+        "${VIMHEX_VIM:-vim}" \
+            -c 'autocmd VimEnter * call HexPairOpenFile($HEXPAIR_DIFF_A) | call HexPairDiffWith($HEXPAIR_DIFF_B)' \
+            -c 'autocmd VimEnter * rightbelow vsplit | call HexPairOpenFile($HEXPAIR_DIFF_B) | call HexPairDiffWith($HEXPAIR_DIFF_A) | setlocal scrollbind' \
+            -c 'autocmd VimEnter * wincmd t | setlocal scrollbind | HexPairDiffNext'
 }
