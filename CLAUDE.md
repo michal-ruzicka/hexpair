@@ -260,6 +260,9 @@ come back**; each names the test that would catch it.
 | A hex index is a nibble: `match()` on a run of hex finds patterns starting on the wrong half of a byte | "a match must start on a byte, not between two" |
 | The cursor in the gap between the hex and ASCII columns reported the NEXT line's first byte, because the pairs counted before it were the whole line's | "and it is the byte the layout says" — which pins the gap column too |
 | `count` is a read-only Vim variable (`v:count`), so a local named that aborts the function it is in with E46 | caught by the selection tests; do not name a local `count`, `errmsg`, `line`… |
+| A replacement rebuilt the page through the path that LOADS one, which clears the undo history on purpose — so a command's edit could not be undone the way a typed one can | "and one undo takes the whole replacement back" |
+| A window scrolled without being ENTERED (`'scrollbind'`, which `vimhexdiff` sets up) raises no event, so its markings stopped part way down | "refreshing the other windows leaves this one current" |
+| A temp-hygiene test asked how many files `tempname()`'s directory HOLDS; on Windows that is the shared `%TEMP%`, with sixteen of other people's in it | "a page of a file this user cannot write is read-only" — count what a write ADDED |
 
 **The Vim version floor is a claim that has to be run.** The plugin says
 everything but the splice works on Vim 8.0; it did not, for a year, and
@@ -517,7 +520,11 @@ just that write, everything else keeps working), instead of a
 load-time refusal of the entire feature. `HexPairPagedGateMessage()`'s
 existing shape (global, pure, parameterized by an explicit boolean for
 testability) carries over unchanged to wherever this check ends up
-living.
+living. It takes the OPERATION as its second argument for the same
+reason: the message used to state flatly that "only same-length edits
+can be written", which stopped being true the moment an insert started
+moving the tail in place, so each caller names the operation that
+actually needs the newer Vim rather than restating the sentence.
 
 ### Reading a page: the `:HexPairOpen` population path
 

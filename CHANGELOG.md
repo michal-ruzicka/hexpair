@@ -169,19 +169,6 @@ and this project adheres to
   section still describing undo across the conversion boundary and a
   plugin that "operates on the whole buffer", which paging replaced.
 
-### Fixed (during the internal iterations)
-- **A replacement could not be undone.** `:HexPairReplace` and
-  `:HexPairReplaceAllInPage` rebuilt the page through the same path that
-  LOADS one, which clears the undo history on purpose - so an edit made
-  by a command could not be taken back the way a typed one can. They
-  make an ordinary edit now, and one `u` takes the whole replacement
-  back.
-- **The markings stopped part way down a window that was scrolled but
-  not entered** - which is what `'scrollbind'` does, and what
-  `vimhexdiff` sets up: a window that is not entered raises no event, so
-  its matches stayed where they had been drawn. Every window showing a
-  page is refreshed now, from whichever one the cursor is in.
-
 ## [v2.0.0] – 2026-08-21
 
 ### Added
@@ -331,59 +318,6 @@ and this project adheres to
   edit made purely in hex mode now correctly marks the buffer modified
   on toggle-off.
 
-### Fixed (during the internal iterations)
-
-None of these ever reached a release; they are listed because the code
-they were found in is what this release ships.
-
-- The error shown when a write needs `readblob()` on a Vim that lacks it
-  said that "only same-length edits can be written", which stopped being
-  true once inserts started moving the tail in place: an insert with no
-  more than half the file after it needs nothing newer than Vim 8.0. It
-  now names the operation that actually needs the newer Vim, and the
-  save-as path passes its own instead of rewriting the sentence.
-- On Windows a plain `:w` was taken for a `:w {other file}` and went down
-  the save-as path, because the two spellings of the buffer's own path
-  reaching the check — `<amatch>`'s full path and `bufname()`'s short one
-  — differ there in their separators and in the case of the drive letter
-  without naming anything different. The visible symptom was a spurious
-  "changed on disk" refusal on the *second* write; the real danger was
-  that copying a file over itself truncates the source before a byte of
-  it has been read, which would have destroyed a multi-page file. Paths
-  are now compared as paths, and the save-as refuses a target that is
-  the file being paged.
-- `:HexPairGoHex`, `:HexPairGoAscii` and `:HexPairSwap` did nothing in
-  a paged buffer, and `g:hexpair_paste` was not applied to one — both
-  were keyed on the whole-file mode's active flag.
-- `:helptags` failed on `doc/hexpair.txt` with a duplicate
-  `:HexPairRefresh` tag, and since it aborts on the first duplicate and
-  writes no tag file at all, `:help hexpair` did not work after the
-  installation step the README gives.
-- The paged mode's column arithmetic was one column short: `hexstart`
-  counted the offset digits and the `':'` but not the space after it,
-  so the pair highlight covered a space and one hex digit instead of
-  the byte's two, the ASCII counterpart was highlighted one character
-  early, and opening a page left the cursor on the space before the
-  first byte.
-- Undo in a paged buffer could reach across a page boundary: after
-  turning a page, a single `u` restored the previous page's bytes into
-  a buffer that claimed to be the new one. Loading a page now discards
-  the undo history; undo of edits made within a page is unaffected.
-- The page banner's and `:HexPairPages`' byte range used to be
-  0-based and inclusive (`base` to `base + len - 1`), so the last
-  page's shown end was always one short of the file's total size,
-  reading as though the page did not reach the end of the file. Now
-  1-based and inclusive (`base + 1` to `base + len`), so the last
-  page's end always equals the total exactly. Only this decorative
-  text changed — the underlying page bytes read and shown were always
-  correct.
-- `:HexPairOpen` with an out-of-range or non-numeric page number used
-  to still create and rename a scratch buffer (to `<file> [hexpair
-  page]`) before checking whether the page existed, leaving an empty,
-  inactive but real-looking buffer behind. It now validates the page
-  first and leaves the current buffer completely untouched on a bad
-  page number — nothing is created.
-
 ## [v1.1.0] – 2026-07-19
 
 ### Added
@@ -458,19 +392,6 @@ in one place:
   rewritten in pure VimScript; `xxd` resolved from `$VIMRUNTIME` when
   not on `PATH`.
 - Vim help documentation (`:help hexpair`).
-
-### Fixed (during the internal iterations)
-- Forced `noeol` used to hide a genuine final newline from the dump
-  and could drop it on write.
-- Non-binary buffers used to be dumped after read-time conversions
-  (CR stripping, transcoding) without a reload, silently diverging
-  from the on-disk bytes.
-- Cursor placement after a `++bin` reload used raw line/column
-  coordinates and drifted on files with a BOM or transcoded content;
-  replaced by byte-offset anchoring via `line2byte()` over raw bytes.
-- Stale screen state after conversions addressed with an explicit
-  full redraw.
-
 
 [v2.1.0-devel]: https://github.com/michal-ruzicka/hexpair/compare/v2.0.0...devel
 [v2.0.0]: https://github.com/michal-ruzicka/hexpair/compare/v1.1.0...v2.0.0
