@@ -344,8 +344,26 @@ own page* changed on disk, not whether the file did. Two views of the
 **same** page are allowed too — and then the second write is refused,
 because that page really did change underneath it.
 
+A plain `:split` on a hex page is left alone: it does what `:split` means
+everywhere else in Vim — two windows onto **one** buffer, so both show
+the same page and turning it in one turns it in the other. That is worth
+keeping, because a page is thousands of lines and looking at two parts of
+one page is a real use of a split. If you would rather every split be an
+independent view, say so:
+
+```vim
+let g:hexpair_split_views = 1
+```
+
+and then `:split`, `:vsplit`, `:tab split` — any way a page ends up in a
+second window — give you a view of its own, on the same page and the same
+byte, to navigate away from. `:HexPairSplit` does it explicitly either
+way.
+
 A view paged from piped input cannot be split: the temporary file it
-pages belongs to that buffer alone. Save it with `:w {file}` first.
+pages belongs to that buffer alone. Save it with `:w {file}` first. (With
+`g:hexpair_split_views` on, a `:split` of such a view simply stays an
+ordinary split rather than complaining.)
 
 ### Configuration
 
@@ -374,6 +392,12 @@ values shown are the defaults, so uncomment a line only to change one.
 " A ruler line under the banner, numbering the byte columns of the dump.
 " Set it to 1 to get one.
 " let g:hexpair_ruler = 0
+
+" Whether a plain :split (or :vsplit, or :tab split) of a hex page becomes
+" an independent view of the same file - its own page, its own cursor -
+" instead of a second window onto the same buffer. Set it to 1 to get
+" views; :HexPairSplit does the same explicitly whatever this says.
+" let g:hexpair_split_views = 0
 
 " Position-mapping trace for diagnosing a cursor that landed on the wrong
 " byte. Set it to 1 and read the trace with :messages.

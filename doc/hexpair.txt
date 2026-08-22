@@ -365,6 +365,39 @@ g:hexpair_ruler         A ruler line between the top banner and the dump,
                         The text view has no ruler - there are no columns
                         to number in a page of raw bytes.
 
+                                                       *g:hexpair_split_views*
+g:hexpair_split_views   Whether a window that ends up showing a page a
+                        SECOND time becomes an independent view of the
+                        same file - its own buffer, its own page, its own
+                        cursor - instead of a second window onto the same
+                        buffer.  Default: 0. >
+
+    let g:hexpair_split_views = 1
+<
+                        With it off, |:split| on a hex page means what
+                        :split means everywhere else in Vim: two windows
+                        onto one buffer, both showing the same page, and
+                        turning the page in one turns it in the other.
+                        That is the default because a page is thousands of
+                        lines, and looking at two parts of ONE page in two
+                        windows is a real use of a split.
+
+                        With it on, |:split|, |:vsplit|, |:tab| |:split| -
+                        any way a page ends up in a second window - give a
+                        view of its own instead, opened on the same page
+                        and the same byte, and a split of the text view
+                        stays a text view.  Each such view is a buffer of
+                        its own and stays in the buffer list until it is
+                        wiped.
+
+                        |:HexPairSplit| does the same thing explicitly
+                        whatever this is set to, so the option is only
+                        about what the PLAIN split commands do.
+
+                        A view paged from piped input is never converted -
+                        the temporary file it pages belongs to that buffer
+                        - so a :split of one stays an ordinary split.
+
                                                              *g:hexpair_debug*
 g:hexpair_debug         Trace every mapping between a cursor position and
                         a byte offset to |:messages|, for diagnosing a
@@ -617,6 +650,11 @@ HexPairOpenFile({file} [, {page}])
                         temporary file it pages belongs to that buffer and
                         goes when it does.  Save it with `:w {file}` first
                         and split that.
+
+                        A plain |:split| is left alone by default - it
+                        makes two windows onto one buffer, as it does
+                        everywhere else in Vim.  |g:hexpair_split_views|
+                        turns those into views of their own as well.
 
                                                         *:HexPairGoOffset*
 :HexPairGoOffset[!] {byte}

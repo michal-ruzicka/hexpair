@@ -46,6 +46,12 @@ and this project adheres to
   edited. Previously a second `:HexPairOpen` of the same file failed with
   `E95`, because the buffer's name was the file's alone; the second one
   is now numbered (`disk.img [hexpair page #2]`).
+- **`g:hexpair_split_views`** (default 0): with it set, a plain `:split`,
+  `:vsplit` or `:tab split` of a hex page becomes an independent view of
+  the same file too, opened on the same page and byte — and a split of
+  the text view stays a text view. Left off by default, because a page is
+  thousands of lines and looking at two parts of one page in two windows
+  is what `:split` is for everywhere else in Vim.
 - **The page's own bytes are hashed** when it is read and again before it
   is patched, so a writer that changes bytes in place within the same
   second — invisible to the file's size and modification time, which is

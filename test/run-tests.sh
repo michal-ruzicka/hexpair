@@ -154,7 +154,7 @@ for name in ('scan1.bin', 'scan2.bin'):
     with open(os.path.join(w, name), 'wb') as f:
         f.write(bytes((i * 7) % 256 for i in range(100000)))
 # two-views fixtures
-for name in ('split1.bin', 'split2.bin', 'split3.bin'):
+for name in ('split1.bin', 'split2.bin', 'split3.bin', 'split4.bin'):
     with open(os.path.join(w, name), 'wb') as f:
         f.write(bytes(i % 256 for i in range(5000)))
 # data-inspector fixture: a little-endian double and float at known
@@ -2379,6 +2379,60 @@ check "the other view's byte is the one on disk" "f0" \
     "$("$HEXPAIR_XXD" -s 1056 -l 1 -p "$WORK/split3.bin")"
 check "and the refused edit reached nothing" "10" \
     "$("$HEXPAIR_XXD" -s 1040 -l 1 -p "$WORK/split3.bin")"
+
+# --- ... and a plain :split can be one too, if asked ----------------------
+# g:hexpair_split_views makes a window that ends up showing a page a second
+# time into a view of its own. Off by default, because a page is thousands
+# of lines and looking at two parts of ONE page in two windows is what
+# :split is for everywhere else.
+cat > "$WORK/tsv5.vim" <<EOF
+$(printf "$HEX")
+HexPairOpen $WORK/split4.bin 3
+split
+let plain = [winbufnr(1) == winbufnr(2), winnr('\$')]
+only
+let g:hexpair_split_views = 1
+split
+let asked = [winbufnr(1) != winbufnr(2), b:hexpair_page_index + 1, HexPairPagedByteOffset()]
+HexPairPageNext
+let here = b:hexpair_page_index + 1
+wincmd w
+let there = b:hexpair_page_index + 1
+" switching between windows must not keep making views
+let buffers = len(filter(range(1, bufnr('\$')), 'bufexists(v:val)'))
+wincmd w
+wincmd w
+let stable = len(filter(range(1, bufnr('\$')), 'bufexists(v:val)')) == buffers
+" a split of the text view stays a text view
+HexPairToggle
+split
+let astext = [b:hexpair_view, winbufnr(1) != winbufnr(2)]
+call writefile([string(plain), string(asked), string([here, there, stable]), string(astext)], '$WORK/tsv5.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tsv5.vim" < /dev/null
+check "by default :split is two windows on one page, as everywhere else" \
+    "[1, 2]" "$(sed -n 1p "$WORK/tsv5.out")"
+check "asked to, it makes a view of its own on the same byte" \
+    "[1, 3, 1024]" "$(sed -n 2p "$WORK/tsv5.out")"
+check "which then turns its pages alone" "[4, 3, 1]" \
+    "$(sed -n 3p "$WORK/tsv5.out")"
+check "and a split of the text view is a text view" "['text', 1]" \
+    "$(sed -n 4p "$WORK/tsv5.out")"
+
+# --- Piped input has nothing to make a second view from -------------------
+cat > "$WORK/tsv6.vim" <<EOF
+$(printf "$HEX")
+let g:hexpair_split_views = 1
+call setline(1, ['abc', 'def'])
+HexPairToggle
+split
+call writefile([string([winbufnr(1) == winbufnr(2), winnr('\$'), b:hexpair_page_active])], '$WORK/tsv6.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tsv6.vim" < /dev/null
+check "so its :split stays a plain one, without complaint" "[1, 2, 1]" \
+    "$(cat "$WORK/tsv6.out")"
 
 # --- A view paged from piped input has nothing to split -------------------
 # Its temp file belongs to that buffer and goes when the buffer does.

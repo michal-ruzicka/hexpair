@@ -94,6 +94,18 @@ if !exists('g:hexpair_ruler')
   let g:hexpair_ruler = 0
 endif
 
+" Whether a window that ends up showing a page a SECOND time becomes an
+" independent view of the same file - its own buffer, its own page, its
+" own cursor - instead of a second window onto the same buffer, which is
+" what :split means everywhere else in Vim and therefore what it means
+" here by default. Off, because a page is thousands of lines and looking
+" at two parts of ONE page in two windows is a real use of :split, which
+" turning it into a second view would take away. |:HexPairSplit| does the
+" same thing explicitly, whatever this is set to.
+if !exists('g:hexpair_split_views')
+  let g:hexpair_split_views = 0
+endif
+
 " Position-mapping trace, off by default. Every step that turns a cursor
 " position into a byte offset or back says which it made, so :messages
 " holds the whole chain after the fact - which is what a field report
@@ -977,6 +989,8 @@ function! s:LoadPage(pageidx) abort
   endif
 
   call cursor(1 + b:hexpair_page_header, b:hexpair_page_hexstart)
+  " This window holds a view of its own - see s:WindowView().
+  let w:hexpair_own_view = 1
   call s:Debug('page %d/%d loaded: bytes [%d, %d) of %d, %d lines',
         \ a:pageidx + 1, totalpages, base, base + len, total, line('$'))
 
@@ -1670,6 +1684,7 @@ function! s:LoadEmpty() abort
     let &l:undolevels = save_ul
   endtry
   call cursor(1, 1)
+  let w:hexpair_own_view = 1
   setlocal filetype=xxd
   call s:ApplyBannerSyntax()
   setlocal nomodified
@@ -2668,12 +2683,80 @@ function! s:SplitView(vertical, ...) abort
     return
   endif
 
+  let wastext = !s:IsHexView()
   execute a:vertical ? 'vsplit' : 'split'
-  call s:Open(file, string(base / g:hexpair_page_size + 1))
-  if get(b:, 'hexpair_page_active', 0)
-    call s:PagedGotoOffset(base)
+  call s:NewViewHere(file, base / g:hexpair_page_size + 1, base, wastext)
+endfunction
+
+" Turn the CURRENT window into a fresh view of a:file, showing the page
+" a:page holds, with the cursor on the absolute offset a:off and in the
+" same view the window it came from was in - a split of the text view
+" that came back as a dump would be a surprise.
+function! s:NewViewHere(file, page, off, wastext) abort
+  " Whatever this window was, it is a view of its own from here on, and
+  " saying so first is what keeps s:WindowView() from acting on the
+  " window events this very call produces.
+  let w:hexpair_own_view = 1
+  call s:Open(a:file, string(a:page))
+  if !get(b:, 'hexpair_page_active', 0)
+    return 0
+  endif
+  if a:wastext
+    call s:ToText()
+    call s:TextGotoOffset(a:off)
+  else
+    call s:PagedGotoOffset(a:off)
     call s:PagedHighlight()
   endif
+  return 1
+endfunction
+
+" How many windows, across every tab, are showing a:buf.
+function! s:WindowsShowing(buf) abort
+  let n = 0
+  for tab in range(1, tabpagenr('$'))
+    for buf in tabpagebuflist(tab)
+      if buf == a:buf
+        let n += 1
+      endif
+    endfor
+  endfor
+  return n
+endfunction
+
+" WinEnter on a paged buffer: with g:hexpair_split_views set, a window
+" that has just become the SECOND one showing this page turns into a view
+" of its own instead. That covers :split and :vsplit, :tab split, and any
+" other way a buffer ends up in a second window - none of which the
+" plugin has to know about, because what it looks at is the result.
+"
+" Every window that holds a view of its own is marked (w:hexpair_own_view,
+" set here and when a page is loaded), so this runs once per window rather
+" than on every window switch. Window-local variables are not copied to
+" the window a :split creates, which is what makes the mark mean "this
+" window was here before the split".
+function! s:WindowView() abort
+  if !get(b:, 'hexpair_page_active', 0) || get(w:, 'hexpair_own_view', 0)
+    return
+  endif
+  " A view paged from piped input has nothing another view could page:
+  " its temp belongs to this buffer and goes when the buffer does.
+  if !g:hexpair_split_views || get(b:, 'hexpair_page_spill', '') !=# ''
+        \ || s:WindowsShowing(bufnr('%')) < 2
+    let w:hexpair_own_view = 1
+    return
+  endif
+  let file = b:hexpair_page_file
+  let page = b:hexpair_page_index + 1
+  let wastext = !s:IsHexView()
+  let off = wastext ? s:TextByteOffset() : s:PagedByteOffset()
+  try
+    call s:NewViewHere(file, page, off, wastext)
+  catch /^hexpair:/
+    echohl ErrorMsg
+    echomsg v:exception
+    echohl None
+  endtry
 endfunction
 
 function! HexPairOpenFile(file, ...) abort
@@ -2788,6 +2871,7 @@ function! s:SetupPagedBuffer() abort
     autocmd BufWinLeave              <buffer> call s:PagedClearHighlight()
     autocmd BufWriteCmd              <buffer> call s:Write()
     autocmd BufReadCmd               <buffer> call s:Reread()
+    autocmd WinEnter                 <buffer> call s:WindowView()
     autocmd BufEnter                 <buffer> call s:PasteOn()
     autocmd BufLeave                 <buffer> call s:PasteOff()
     autocmd BufWipeout               <buffer> call s:DropSpill()

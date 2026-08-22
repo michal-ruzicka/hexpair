@@ -595,6 +595,21 @@ was designed and built in Stage 2 - see "What Stage 2 decided".
   a change to the rest of the file, which is what made two views of one
   file impossible to write from (see below). A successful check adopts
   the new mtime, so the fallback path does not go on complaining.
+- `s:WindowView()` — the `WinEnter` half of the same feature, behind
+  `g:hexpair_split_views` (default 0): a window that has just become the
+  SECOND one showing a page turns into a view of its own. `WinEnter`
+  rather than `WinNew` (8.1.1058, past the baseline) or `BufWinEnter`
+  (does not fire when an already-displayed buffer is shown again —
+  measured). It runs once per window because every window holding a view
+  is marked `w:hexpair_own_view`, and **window-local variables are not
+  copied into the window a `:split` creates** — measured too, and the
+  whole reason the mark can mean "this window was here first". The
+  windows are counted across all tabs (`tabpagebuflist()`), so
+  `:tab split` counts.
+- `s:NewViewHere()` — the one place a window becomes a fresh view:
+  marks the window first (so the events its own `s:Open()` raises cannot
+  re-enter `s:WindowView()`), then reopens and puts the cursor back on
+  the byte, in the same view (hex/text) the window came from.
 - `s:NamePageBuffer()` / `s:SplitView()` — a second view of one file.
   The buffer name is the file's plus a tag, numbered when that name is
   taken; the collision is detected by TRYING the rename and catching
