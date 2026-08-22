@@ -2275,6 +2275,10 @@ check "the other writer's bytes are still on disk" "ffffffff" \
 # driven over a real page, from both views.
 cat > "$WORK/tins.vim" <<EOF
 $(printf "$HEX")
+" The character next to a code point is shown only where 'encoding' is
+" utf-8, so the assertions below pin it rather than inheriting whatever
+" the platform starts with - a Vim on Windows starts with its codepage.
+set encoding=utf-8
 let out = []
 call add(out, HexPairPagedBinaryText(173) . ' ' . HexPairPagedBinaryText(0) . ' ' . HexPairPagedBinaryText(255))
 call add(out, HexPairPagedU64Text(-1) . ' ' . HexPairPagedU64Text(0) . ' ' . HexPairPagedU64Text(-1068498944))
@@ -2338,6 +2342,20 @@ check "and every way it can fail to be utf-8" \
 check "utf-16 both ways round, and a surrogate pair" \
     "['U+4241 ''䉁'' (2 bytes)', 'U+4142 ''䅂'' (2 bytes)', 'U+1F600 ''😀'' (4 bytes)', 'U+D83D - a high surrogate, U+0041 is not low']" \
     "$(sed -n 8p "$WORK/tins.out")"
+# And with an 'encoding' that is not utf-8 there is no character to show:
+# the code point still reads out, the glyph does not. Asserted as yes/no
+# and on an ASCII-only string, so the comparison itself cannot depend on
+# an encoding either.
+cat > "$WORK/tins2.vim" <<EOF
+$(printf "$HEX")
+set encoding=latin1
+call writefile([string([HexPairPagedUtf8Text([0x41, 0x42]) ==# 'U+0041 (1 byte)', HexPairPagedUtf8Text([0xc3, 0xa9, 0x41]) ==# 'U+00E9 (2 bytes)', HexPairPagedUtf32Text([0x00, 0x01, 0xf6, 0x00], 0) ==# 'U+1F600'])], '$WORK/tins2.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tins2.vim" < /dev/null
+check "and no character at all where the encoding has none to give" \
+    "[1, 1, 1]" "$(cat "$WORK/tins2.out")"
+
 check "utf-32, where most four bytes are not a character" \
     "['U+1F600 ''😀''', 'U+41424344 - past U+10FFFF', 'U+D800 - a surrogate']" \
     "$(sed -n 9p "$WORK/tins.out")"

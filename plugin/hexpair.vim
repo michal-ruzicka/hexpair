@@ -2568,11 +2568,15 @@ endfunction
 " A code point, as the inspector prints one: the number, the character
 " itself where it can be shown, and how many bytes it took.
 "
-" The glyph is left out unless 'encoding' is utf-8 - nr2char() would hand
-" back utf-8 bytes for a message area that is not reading them that way -
-" and for anything with no glyph to show anyway: below a space, the C1
-" range, and the private use areas, where whatever appears means nothing
-" without the font that was meant to come with it.
+" The glyph is left out for anything with none to show: below a space,
+" the C1 range, and the private use areas, where whatever appears means
+" nothing without the font that was meant to come with it - and on a Vim
+" whose 'encoding' is not utf-8, for every code point, because there it
+" cannot be built at all: nr2char(cp, 1) is documented to give the utf-8
+" form, and on a latin1 Vim it hands back ONE byte - U+4241 comes out as
+" "A", the low half of the number (measured). A wrong character is worse
+" than none, and a Vim with a codepage 'encoding' - which is what Windows
+" starts with - could not draw the right one anyway.
 function! s:CodePointText(cp, used) abort
   let glyph = ''
   if &encoding ==# 'utf-8' && a:cp >= 0x20
