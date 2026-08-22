@@ -98,7 +98,9 @@ code, releases and issue tracker.
   `:HexPairDiffNext` walks the whole file for the next disagreement. The
   bundled `vimhexdiff a b` opens both files side by side that way.
 - **Marks that survive page turns.** `:HexPairMark header` remembers a
-  byte of the *file*, not a line of a buffer.
+  byte of the *file*, not a line of a buffer — and the byte it stands on
+  is underlined on the page (`HexPairMark`), so a place worth coming back
+  to is visible while you are there.
 - **A data inspector.** `:HexPairInspect` reads the bytes at the cursor
   as the numbers they could be — 8, 16, 32 and 64 bits wide, unsigned
   and signed, little- and big-endian, plus `float32` and `float64` —
@@ -421,7 +423,12 @@ in the **file**:
 ```
 
 They are kept per file, so two views of one file share them, and they
-last as long as the Vim session does.
+last as long as the Vim session does. A mark on the page in view
+underlines the byte it stands on, in both columns — underline rather
+than a colour, because a mark says *this place* while the three
+colourings around it (edited, differing, found) say *these bytes*, and
+where they land on the same byte the colouring wins. `g:hexpair_show_marks`
+turns the underlining off.
 
 ### Two views of one file
 
@@ -511,6 +518,9 @@ values shown are the defaults, so uncomment a line only to change one.
 " edited and not yet written - are highlighted. Set it to 0 to stop.
 " let g:hexpair_show_modified = 1
 
+" Whether the byte a mark stands on is underlined on the page.
+" let g:hexpair_show_marks = 1
+
 " Highlight overrides: the byte under the cursor, its counterpart in the
 " other column, the banner (and ruler) lines, the bytes changed since the
 " page was read, the bytes that differ from the file being compared
@@ -524,6 +534,7 @@ values shown are the defaults, so uncomment a line only to change one.
 " highlight link HexPairModified DiffChange
 " highlight link HexPairDiff DiffAdd
 " highlight link HexPairFind Search
+" highlight HexPairMark term=underline,bold cterm=underline,bold gui=underline,bold
 
 " The page and the byte under the cursor, in the statusline. Empty in
 " every buffer hexpair has not touched, so one statusline serves both.

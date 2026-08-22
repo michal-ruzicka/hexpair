@@ -107,6 +107,14 @@ if !exists('g:hexpair_show_modified')
   let g:hexpair_show_modified = 1
 endif
 
+" Whether the bytes that have a mark on them (|:HexPairMark|) are
+" highlighted (HexPairMark). Marks are sparse and the marking is one byte
+" wide, so this costs a walk over the file's marks whenever the page
+" changes or scrolls, and nothing at all in between.
+if !exists('g:hexpair_show_marks')
+  let g:hexpair_show_marks = 1
+endif
+
 " Whether a window that ends up showing a page a SECOND time becomes an
 " independent view of the same file - its own buffer, its own page, its
 " own cursor - instead of a second window onto the same buffer, which is
@@ -166,6 +174,16 @@ highlight default link HexPairDiff DiffAdd
 " Highlight group for what |:HexPairFind| is looking for, wherever it is
 " on the page - the byte equivalent of 'hlsearch'.
 highlight default link HexPairFind Search
+
+" Highlight group for a byte a mark stands on (|:HexPairMark|). Underline
+" and bold rather than a colour, deliberately: a mark says "this place",
+" not "these bytes are different", and the three colourings around it -
+" edited, differing, found - are about the bytes. Underlining coexists
+" with a colour scheme instead of competing with it, and a mark sitting
+" on a byte that is also edited or found yields to that, since the
+" markings do not blend (see the priorities in s:MarkHighlight()).
+highlight default HexPairMark term=underline,bold cterm=underline,bold
+      \ gui=underline,bold
 
 " --------------------------------------------------------------------------
 " Vim version gate
@@ -970,6 +988,7 @@ function! s:PagedHighlight() abort
   call s:ModifiedHighlight()
   call s:DiffHighlight()
   call s:FindHighlight()
+  call s:MarkHighlight()
   if !get(b:, 'hexpair_page_active', 0) || !s:IsHexView()
     return
   endif
@@ -1149,6 +1168,7 @@ function! s:LoadPage(pageidx) abort
   call s:ClearModifiedHighlight()
   call s:ClearDiffHighlight()
   call s:ClearFindHighlight()
+  call s:ClearMarkHighlight()
   " This window holds a view of its own - see s:WindowView().
   let w:hexpair_own_view = 1
   call s:Debug('page %d/%d loaded: bytes [%d, %d) of %d, %d lines',
@@ -3710,11 +3730,85 @@ endfunction
 " filesystem this plugin does not get to make on its own.
 let s:marks = {}
 
+" Bumped whenever a mark is set or dropped, so the marking on screen knows
+" it has to be worked out again - the same job b:changedtick does for the
+" page's own bytes.
+let s:marks_tick = 0
+
 function! s:MarksFor(file) abort
   if !has_key(s:marks, a:file)
     let s:marks[a:file] = {}
   endif
   return s:marks[a:file]
+endfunction
+
+" The same, for a caller that only wants to look: the marking runs on
+" every page and must not leave an empty dict behind for each file it saw.
+function! s:MarksOf(file) abort
+  return get(s:marks, a:file, {})
+endfunction
+
+" Where the marks of this page are, as matchaddpos() positions for both
+" columns. By the canonical layout, like everything else that marks bytes
+" here: on a page nobody has edited that is exactly where the byte is,
+" and on one that has been, it is where the byte WAS - which is the same
+" answer the modified-byte marking gives.
+function! HexPairPagedMarkPositions(first, last) abort
+  let out = []
+  let marks = s:MarksOf(b:hexpair_page_file)
+  if empty(marks) || b:hexpair_page_len <= 0
+    return out
+  endif
+  let n = b:hexpair_n
+  for name in keys(marks)
+    let off = marks[name] - b:hexpair_page_base
+    if off < 0 || off >= b:hexpair_page_len
+      continue
+    endif
+    let lnum = off / n + 1 + s:HeaderLines()
+    if lnum < a:first || lnum > a:last
+      continue
+    endif
+    let [n, hexstart, hexend, asciistart] = s:PagedLineLayout(lnum)
+    let idx = off % n
+    call add(out, [lnum, hexstart + idx * 3, 2])
+    if strlen(getline(lnum)) >= asciistart
+      call add(out, [lnum, asciistart + idx, 1])
+    endif
+  endfor
+  return out
+endfunction
+
+function! s:ClearMarkHighlight() abort
+  if exists('w:hexpair_mark_ids')
+    for id in w:hexpair_mark_ids
+      silent! call matchdelete(id)
+    endfor
+  endif
+  let w:hexpair_mark_ids = []
+  let w:hexpair_mark_state = []
+endfunction
+
+function! s:MarkHighlight() abort
+  if !g:hexpair_show_marks || !get(b:, 'hexpair_page_active', 0)
+        \ || !s:IsHexView()
+    return
+  endif
+  let state = [s:marks_tick, b:hexpair_page_base, line('w0'), line('w$')]
+  if get(w:, 'hexpair_mark_state', []) ==# state
+    return
+  endif
+  call s:ClearMarkHighlight()
+  let w:hexpair_mark_state = state
+  " Priority 5, below the 10 the other markings take: where a mark sits on
+  " a byte that is also edited, differing or found, what is true of the
+  " BYTE wins - the mark is about the place, and the place is still findable
+  " through |:HexPairMarks|.
+  let positions = HexPairPagedMarkPositions(line('w0'), line('w$'))
+  for i in range(0, len(positions) - 1, 8)
+    call add(w:hexpair_mark_ids,
+          \ matchaddpos('HexPairMark', positions[i : i + 7], 5))
+  endfor
 endfunction
 
 " Mark names are words, so that a listing can be read and a name can be
@@ -3748,6 +3842,8 @@ function! s:SetMark(name) abort
   let off = s:IsHexView() ? s:PagedByteOffset() : s:TextByteOffset()
   let marks = s:MarksFor(b:hexpair_page_file)
   let marks[a:name] = off
+  let s:marks_tick += 1
+  call s:MarkHighlight()
   echo printf('hexpair: mark %s at byte %d (0x%x)', a:name, off + 1, off + 1)
 endfunction
 
@@ -3763,6 +3859,8 @@ function! s:DeleteMark(name) abort
     return
   endif
   call remove(marks, a:name)
+  let s:marks_tick += 1
+  call s:MarkHighlight()
   echo printf('hexpair: mark %s dropped', a:name)
 endfunction
 
@@ -4067,6 +4165,7 @@ function! s:SetupPagedBuffer() abort
     autocmd BufWinLeave              <buffer> call s:ClearModifiedHighlight()
     autocmd BufWinLeave              <buffer> call s:ClearDiffHighlight()
     autocmd BufWinLeave              <buffer> call s:ClearFindHighlight()
+    autocmd BufWinLeave              <buffer> call s:ClearMarkHighlight()
     " An edit that does not move the cursor - r, x on the last column -
     " raises no CursorMoved, and it is exactly the edit whose byte wants
     " marking.

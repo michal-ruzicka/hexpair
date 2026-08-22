@@ -32,7 +32,9 @@ and this project adheres to
   which opens both side by side, each marking what differs from the
   other, cursors on the first difference and the windows scroll-bound.
 - **Marks in the file**: `:HexPairMark {name}`, `:HexPairGoMark {name}`,
-  `:HexPairMarks`, `:HexPairMarkDelete {name}`. Vim's own marks are
+  `:HexPairMarks`, `:HexPairMarkDelete {name}`, and the byte a mark
+  stands on underlined on the page (`HexPairMark`,
+  `g:hexpair_show_marks`). Vim's own marks are
   positions in a buffer, and a paged buffer holds a different part of the
   file from one page to the next; these are absolute byte offsets kept
   per file, shared by every view of it.

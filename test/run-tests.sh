@@ -173,8 +173,9 @@ open(os.path.join(w, 'diffb.bin'), 'wb').write(bytes(_db))
 open(os.path.join(w, 'diffc.bin'), 'wb').write(_da + b'tail')
 # modified-byte fixture
 open(os.path.join(w, 'mod1.bin'), 'wb').write(bytes(i % 256 for i in range(5000)))
-# marks fixture
-open(os.path.join(w, 'mark1.bin'), 'wb').write(bytes(i % 256 for i in range(5000)))
+# marks fixtures
+for name in ('mark1.bin', 'mark2.bin'):
+    open(os.path.join(w, name), 'wb').write(bytes(i % 256 for i in range(5000)))
 # stepping fixture
 open(os.path.join(w, 'step1.bin'), 'wb').write(bytes(i % 256 for i in range(5000)))
 # two-views fixtures
@@ -2632,6 +2633,42 @@ check "a second view of the file has the same marks" "hex 7/10 @0xc34 (3124)" \
 check "a dropped mark is dropped for both, and says what is left" \
     "hexpair: no mark named 'payload' here (have: header)" \
     "$(sed -n 7p "$WORK/tmk.out")"
+
+# --- A mark shows where it is ---------------------------------------------
+# One byte wide, in both columns, and only for the marks that fall on the
+# page in view. Underline and bold rather than a colour: a mark says
+# "this place", the three colourings around it say "these bytes".
+cat > "$WORK/tmkh.vim" <<EOF
+$(printf "$HEX")
+HexPairOpen $WORK/mark2.bin 2
+let out = []
+call add(out, string(HexPairPagedMarkPositions(2, 33)))
+call cursor(4, 14)
+HexPairMark hdr
+call add(out, string(HexPairPagedMarkPositions(2, 33)))
+call cursor(6, 60)
+HexPairMark data
+call add(out, string(HexPairPagedMarkPositions(4, 4)))
+HexPairPageGoto 5
+call add(out, string(HexPairPagedMarkPositions(2, 33)))
+HexPairPageGoto 2
+HexPairMarkDelete hdr
+call add(out, string(HexPairPagedMarkPositions(2, 33)))
+call writefile(out, '$WORK/tmkh.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tmkh.vim" < /dev/null
+check "an unmarked page has nothing to show" "[]" "$(sed -n 1p "$WORK/tmkh.out")"
+check "a mark is one byte, in both columns" "[[4, 14, 2], [4, 61, 1]]" \
+    "$(sed -n 2p "$WORK/tmkh.out")"
+check "and only the lines asked about are answered for" \
+    "[[4, 14, 2], [4, 61, 1]]" "$(sed -n 3p "$WORK/tmkh.out")"
+# The marks belong to the file, but only those inside the page can be
+# pointed at on it.
+check "a mark on another page shows on that one, not this" "[]" \
+    "$(sed -n 4p "$WORK/tmkh.out")"
+check "and dropping one takes its marking with it" "[[6, 11, 2], [6, 60, 1]]" \
+    "$(sed -n 5p "$WORK/tmkh.out")"
 
 # ===========================================================================
 # The bytes that differ from the file

@@ -388,6 +388,13 @@ g:hexpair_ruler         A ruler line between the top banner and the dump,
                         The text view has no ruler - there are no columns
                         to number in a page of raw bytes.
 
+                                                      *g:hexpair_show_marks*
+g:hexpair_show_marks    Whether the byte a mark stands on is underlined
+                        on the page it falls on (|HexPairMark-highlight|).
+                        Default: 1. >
+
+    let g:hexpair_show_marks = 0
+<
                                                     *g:hexpair_show_modified*
 g:hexpair_show_modified Whether the bytes that differ from the ones on
                         disk - what has been edited and not yet written -
@@ -479,14 +486,22 @@ HexPairStatus()         The view, the page and the byte under the cursor,
                         cursor moves what follows; |:HexPairPages| counts
                         the digits actually there and is the exact answer.
 
-                   *HexPairModified* *HexPairDiff* *HexPairFind-highlight*
-The three markings that are about bytes rather than about the cursor,
-with their defaults: >
+     *HexPairModified* *HexPairDiff* *HexPairFind-highlight*
+                                             *HexPairMark-highlight*
+The markings that are about bytes rather than about the cursor, with
+their defaults: >
 
     highlight link HexPairModified DiffChange " edited, not yet written
     highlight link HexPairDiff     DiffAdd    " differs from |:HexPairDiff|'s file
     highlight link HexPairFind     Search     " a match of |:HexPairFind|
+    highlight HexPairMark term=underline,bold cterm=underline,bold gui=underline,bold
 <
+The fourth one is deliberately not a colour: a mark says "this place"
+while the other three say "these bytes are different", underlining
+coexists with a colour scheme instead of competing with it, and where a
+mark lands on a byte that is also edited, differing or found, the
+colouring wins - the markings do not blend, so one of them has to.
+
 An override wants a foreground AND a background: >
 
     highlight HexPairModified ctermbg=224 ctermfg=88 guibg=#ffd7d7 guifg=#870000
@@ -786,6 +801,11 @@ HexPairOpenFile({file} [, {page}])
                         page turn cannot disturb them, and one left
                         pointing past the end - the file shrank under it -
                         is listed as such and refused on the jump.
+
+                        A mark that falls on the page in view underlines
+                        the byte it stands on, in both columns
+                        (|HexPairMark-highlight|); |g:hexpair_show_marks|
+                        turns that off.
 
                         They last as long as the Vim session does.
 
