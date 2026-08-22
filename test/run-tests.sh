@@ -153,6 +153,8 @@ for name in ('paged21.bin', 'paged22.bin', 'paged23.bin', 'paged31.bin', 'paged3
 for name in ('scan1.bin', 'scan2.bin'):
     with open(os.path.join(w, name), 'wb') as f:
         f.write(bytes((i * 7) % 256 for i in range(100000)))
+# modified-byte fixture
+open(os.path.join(w, 'mod1.bin'), 'wb').write(bytes(i % 256 for i in range(5000)))
 # marks fixture
 open(os.path.join(w, 'mark1.bin'), 'wb').write(bytes(i % 256 for i in range(5000)))
 # stepping fixture
@@ -2557,6 +2559,49 @@ check "a second view of the file has the same marks" "hex 7/10 @0xc34" \
 check "a dropped mark is dropped for both, and says what is left" \
     "hexpair: no mark named 'payload' here (have: header)" \
     "$(sed -n 7p "$WORK/tmk.out")"
+
+# ===========================================================================
+# The bytes that differ from the file
+# ===========================================================================
+# What has been edited and not yet written, marked in both columns. The
+# positions are computed apart from the drawing, because `vim -es` has no
+# window to read a visible range from - line('w$') comes out before
+# line('w0') here - which is the same reason the Visual mirror is split.
+cat > "$WORK/tmod.vim" <<EOF
+$(printf "$HEX")
+HexPairOpen $WORK/mod1.bin 2
+let out = []
+call add(out, string(HexPairPagedModifiedPositions(2, 5)))
+call cursor(3, 11)
+normal! rf
+call add(out, string(HexPairPagedModifiedPositions(2, 5)))
+call setline(4, substitute(getline(4), '^\(.\{10\}\)........', '\1aa bb cc', ''))
+call add(out, string(HexPairPagedModifiedPositions(4, 4)))
+call setline(5, toupper(getline(5)))
+call add(out, string(HexPairPagedModifiedPositions(5, 5)))
+call append(5, '41 42')
+call add(out, string(HexPairPagedModifiedPositions(6, 6)))
+call add(out, string(HexPairPagedModifiedPositions(1, 1)))
+write
+call add(out, string([&l:modified, HexPairPagedModifiedPositions(2, 6)]))
+call writefile(out, '$WORK/tmod.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tmod.vim" < /dev/null
+check "an untouched page has nothing to mark" "[]" "$(sed -n 1p "$WORK/tmod.out")"
+check "an edited byte is marked in both columns" "[[3, 11, 2], [3, 60, 1]]" \
+    "$(sed -n 2p "$WORK/tmod.out")"
+# Adjacent bytes make ONE run per column, not one match each.
+check "a run of them is one match per column" "[[4, 11, 8], [4, 60, 3]]" \
+    "$(sed -n 3p "$WORK/tmod.out")"
+check "case is not a change of bytes" "[]" "$(sed -n 4p "$WORK/tmod.out")"
+# A bare line the user typed has no ASCII column to mark, and every byte
+# on it is new.
+check "an inserted line is all new bytes" "[[6, 1, 5]]" \
+    "$(sed -n 5p "$WORK/tmod.out")"
+check "a banner line has nothing to compare" "[]" "$(sed -n 6p "$WORK/tmod.out")"
+check "and a write clears the marks with the modified flag" "[0, []]" \
+    "$(sed -n 7p "$WORK/tmod.out")"
 
 # ---------------------------------------------------------------------------
 if [ "$FAIL" -eq 0 ]; then

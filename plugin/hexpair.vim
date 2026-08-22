@@ -94,6 +94,14 @@ if !exists('g:hexpair_ruler')
   let g:hexpair_ruler = 0
 endif
 
+" Whether the bytes of the page that differ from the ones on disk are
+" highlighted (HexPairModified). What it costs is a comparison of the
+" lines on screen whenever the page changes or scrolls, and one copy of
+" the page's bytes as hex - 256 KB for the default 128 KiB page.
+if !exists('g:hexpair_show_modified')
+  let g:hexpair_show_modified = 1
+endif
+
 " Whether a window that ends up showing a page a SECOND time becomes an
 " independent view of the same file - its own buffer, its own page, its
 " own cursor - instead of a second window onto the same buffer, which is
@@ -129,6 +137,11 @@ highlight default link HexPairMirror IncSearch
 " this is the plugin's own, following the HexPairActive/HexPairMirror
 " precedent above.
 highlight default link HexPairPageBanner Comment
+
+" Highlight group for bytes that differ from what the file holds at that
+" position - the edits not yet written. Linked to DiffText, which every
+" colour scheme has an opinion about and which means the same thing.
+highlight default link HexPairModified DiffText
 
 " --------------------------------------------------------------------------
 " Vim version gate
@@ -820,8 +833,106 @@ function! s:HighlightSelection() abort
   endfor
 endfunction
 
+" ---------------------------------------------------------------------------
+" The bytes that differ from the file
+" ---------------------------------------------------------------------------
+"
+" What has been edited and not yet written, marked in both columns. The
+" comparison is against the page's bytes as they were READ (kept in
+" b:hexpair_page_hex), at the position the layout puts each line at - so a
+" byte is marked when what is on the screen at that offset is not what the
+" file holds there. After an insertion that means everything after it, and
+" that is the truth: those offsets really do hold something else now.
+"
+" Only the lines on screen are compared, and only when the page has
+" changed or scrolled - the matches are left alone on a plain cursor
+" movement, which is the thing that happens most.
+
+" Byte runs that differ, as matchaddpos() positions for both columns.
+"
+" Global and given the range to look at, rather than reading the window's
+" own: `vim -es`, this project's test harness, has no window to speak of -
+" line('w$') comes out BEFORE line('w0') there - so the drawing has to be
+" separable from what it draws, the same split
+" HexPairPagedSelectionPositions() makes for Visual mode.
+function! HexPairPagedModifiedPositions(first, last) abort
+  let n = b:hexpair_n
+  let orig = b:hexpair_page_hex
+  let out = []
+  for lnum in range(a:first, a:last)
+    let line = getline(lnum)
+    if s:IsBannerLine(line)
+      continue
+    endif
+    let idx = lnum - 1 - s:HeaderLines()
+    if idx < 0
+      continue
+    endif
+    let cur = tolower(s:PagedLineDigits(line))
+    let bytes = strlen(cur) / 2
+    if bytes <= 0
+      continue
+    endif
+    let [n, hexstart, hexend, asciistart] = s:PagedLineLayout(lnum)
+    let hasascii = strlen(line) >= asciistart
+    let lo = -1
+    let i = 0
+    while i <= bytes
+      " One past the end closes a run that reaches the end of the line.
+      let differs = i < bytes && strpart(cur, i * 2, 2)
+            \ !=# strpart(orig, (idx * n + i) * 2, 2)
+      if differs && lo < 0
+        let lo = i
+      elseif !differs && lo >= 0
+        call add(out, [lnum, hexstart + lo * 3, (i - lo) * 3 - 1])
+        if hasascii
+          call add(out, [lnum, asciistart + lo, i - lo])
+        endif
+        let lo = -1
+      endif
+      let i += 1
+    endwhile
+  endfor
+  return out
+endfunction
+
+function! s:ClearModifiedHighlight() abort
+  if exists('w:hexpair_mod_ids')
+    for id in w:hexpair_mod_ids
+      silent! call matchdelete(id)
+    endfor
+  endif
+  let w:hexpair_mod_ids = []
+  let w:hexpair_mod_state = []
+endfunction
+
+function! s:ModifiedHighlight() abort
+  if !g:hexpair_show_modified || !get(b:, 'hexpair_page_active', 0)
+        \ || !s:IsHexView() || get(b:, 'hexpair_page_hex', '') ==# ''
+    return
+  endif
+  " Nothing to recompute while the page, the window's view of it and the
+  " modified flag are all as they were.
+  let state = [b:changedtick, line('w0'), line('w$'), &l:modified]
+  if get(w:, 'hexpair_mod_state', []) ==# state
+    return
+  endif
+  call s:ClearModifiedHighlight()
+  let w:hexpair_mod_state = state
+  if !&l:modified
+    return
+  endif
+  let positions = HexPairPagedModifiedPositions(line('w0'), line('w$'))
+  " matchaddpos() takes eight positions at a time.
+  for i in range(0, len(positions) - 1, 8)
+    call add(w:hexpair_mod_ids,
+          \ matchaddpos('HexPairModified', positions[i : i + 7]))
+  endfor
+endfunction
+
 function! s:PagedHighlight() abort
   call s:PagedClearHighlight()
+  call s:ModifiedHighlight()
   if !get(b:, 'hexpair_page_active', 0) || !s:IsHexView()
     return
   endif
@@ -936,7 +1047,12 @@ function! s:LoadPage(pageidx) abort
   let b:hexpair_page_total      = total
   let b:hexpair_page_totalpages = totalpages
   let b:hexpair_page_ftime      = getftime(b:hexpair_page_file)
-  let b:hexpair_page_digest     = s:PageDigest(base, len)
+  " One read, two uses: the bytes are what the modified-byte highlight
+  " compares against, and their hash is what a write checks the page
+  " against (s:CheckFresh()).
+  let b:hexpair_page_hex        = s:PageHex(base, len)
+  let b:hexpair_page_digest     = b:hexpair_page_hex ==# '' || !exists('*sha256')
+        \ ? '' : sha256(b:hexpair_page_hex)
   let b:hexpair_n               = g:hexpair_bytes_per_line
   " Where the page's FIRST line starts its hex column; later lines
   " derive their own (s:PagedLineLayout()), which differs only on a
@@ -989,6 +1105,7 @@ function! s:LoadPage(pageidx) abort
   endif
 
   call cursor(1 + b:hexpair_page_header, b:hexpair_page_hexstart)
+  call s:ClearModifiedHighlight()
   " This window holds a view of its own - see s:WindowView().
   let w:hexpair_own_view = 1
   call s:Debug('page %d/%d loaded: bytes [%d, %d) of %d, %d lines',
@@ -1308,16 +1425,27 @@ endfunction
 " Empty when the local Vim has no sha256() (a build without +cryptv) or
 " when reading the page fails, in which case the size and mtime check
 " stands alone - a weaker guard, never a wrong one.
-function! s:PageDigest(base, len) abort
-  if !exists('*sha256') || a:len <= 0
+" The page's bytes as they are on disk right now, as one flat run of
+" lowercase hex. Empty when the read fails - every caller treats that as
+" "cannot tell", never as "no bytes".
+function! s:PageHex(base, len) abort
+  if a:len <= 0
     return ''
   endif
   try
-    return sha256(s:Run(printf('%s -p -s %d -l %d %s', s:xxd, a:base, a:len,
-          \ shellescape(b:hexpair_page_file))))
+    return substitute(s:Run(printf('%s -p -s %d -l %d %s', s:xxd, a:base,
+          \ a:len, shellescape(b:hexpair_page_file))), '[^0-9a-fA-F]', '', 'g')
   catch
     return ''
   endtry
+endfunction
+
+function! s:PageDigest(base, len) abort
+  if !exists('*sha256')
+    return ''
+  endif
+  let hex = s:PageHex(a:base, a:len)
+  return hex ==# '' ? '' : sha256(hex)
 endfunction
 
 " Refuse to touch a file that changed underneath us.
@@ -1669,6 +1797,7 @@ function! s:LoadEmpty() abort
   let b:hexpair_page_totalpages = 0
   let b:hexpair_page_ftime      = getftime(b:hexpair_page_file)
   let b:hexpair_page_digest     = ''
+  let b:hexpair_page_hex        = ''
   let b:hexpair_n               = g:hexpair_bytes_per_line
   let b:hexpair_page_hexstart   = s:HexStart(0)
   " No dump lines to number, so no ruler whatever the option says.
@@ -3013,6 +3142,11 @@ function! s:SetupPagedBuffer() abort
     autocmd! * <buffer>
     autocmd CursorMoved,CursorMovedI <buffer> call s:PagedHighlight()
     autocmd BufWinLeave              <buffer> call s:PagedClearHighlight()
+    autocmd BufWinLeave              <buffer> call s:ClearModifiedHighlight()
+    " An edit that does not move the cursor - r, x on the last column -
+    " raises no CursorMoved, and it is exactly the edit whose byte wants
+    " marking.
+    autocmd TextChanged,TextChangedI <buffer> call s:ModifiedHighlight()
     autocmd BufWriteCmd              <buffer> call s:Write()
     autocmd BufReadCmd               <buffer> call s:Reread()
     autocmd WinEnter                 <buffer> call s:WindowView()
