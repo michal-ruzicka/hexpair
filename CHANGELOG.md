@@ -47,7 +47,10 @@ and this project adheres to
   reads the bytes at the cursor as the numbers they could be: 8, 16, 32
   and 64 bits wide, unsigned and signed, little- and big-endian, plus
   `float32` and `float64`, with the byte itself also shown as a
-  character, in binary and in octal. The bytes are the page's, as the
+  character, in binary and in octal - and what the bytes would be as
+  text: UTF-8, UTF-16 and UTF-32, each saying what is wrong with the
+  bytes (an overlong sequence, a lone surrogate, a value past U+10FFFF)
+  rather than reporting a code point for something that is not one. The bytes are the page's, as the
   buffer holds them — edits included — and stop at its end, where the
   wider rows say how many are left rather than reaching into a page that
   is not on screen.

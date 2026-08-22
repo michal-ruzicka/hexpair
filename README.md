@@ -301,10 +301,18 @@ hexpair: byte 66 (0x42) of 512: 41 42 43 44 45 46 47 48
   64-bit   5208208757389214273         4702394921427289928
   float32  781.035217                  12.141422
   float64  1.58398e40                  2393736.541207
+  utf-8    U+0041 'A' (1 byte)
+  utf-16   U+4241 '䉁' (2 bytes)       U+4142 '䅂' (2 bytes)
+  utf-32   U+44434241 - past U+10FFFF  U+41424344 - past U+10FFFF
 ```
 
 The signed reading follows the unsigned one where the two differ
-(`43981 / -21555`). The bytes are this page's, as the buffer holds them
+(`43981 / -21555`). The three text rows say what the bytes would be as
+characters — UTF-8 has no byte order to get wrong, the other two are read
+each way round like the numbers above them — and every way an encoding
+can be wrong is its own answer rather than a code point: an overlong
+UTF-8 sequence, a lone surrogate or a value past U+10FFFF is not a
+character, and saying so is the point. The bytes are this page's, as the buffer holds them
 — edits included — so at the end of a page the wider rows say how many
 are left instead of reaching into a page that is not on screen.
 

@@ -2253,6 +2253,10 @@ call add(out, HexPairPagedU64Text(-1) . ' ' . HexPairPagedU64Text(0) . ' ' . Hex
 call add(out, HexPairPagedDecSub('1000', '1') . ' ' . HexPairPagedDecSub('100', '100'))
 call add(out, HexPairPagedIeeeText([0x40,0x93,0x4a,0x45,0x6d,0x5c,0xfa,0xad]) . ' ' . HexPairPagedIeeeText([0xc0,0x50,0x00,0x00]))
 call add(out, HexPairPagedIeeeText([0x7f,0x80,0,0]) . ' ' . HexPairPagedIeeeText([0xff,0x80,0,0]) . ' ' . HexPairPagedIeeeText([0x7f,0xc0,0,0]) . ' ' . HexPairPagedIeeeText([0,0,0,0]) . ' ' . HexPairPagedIeeeText([0,0,0,1]))
+call add(out, string([HexPairPagedUtf8Text([0x41, 0x42]), HexPairPagedUtf8Text([0xc3, 0xa9, 0x41]), HexPairPagedUtf8Text([0xe2, 0x82, 0xac]), HexPairPagedUtf8Text([0xf0, 0x9f, 0x98, 0x80])]))
+call add(out, string([HexPairPagedUtf8Text([0x80]), HexPairPagedUtf8Text([0xc3]), HexPairPagedUtf8Text([0xe0, 0x80, 0xaf]), HexPairPagedUtf8Text([0xed, 0xa0, 0x80])]))
+call add(out, string([HexPairPagedUtf16Text([0x41, 0x42], 1), HexPairPagedUtf16Text([0x41, 0x42], 0), HexPairPagedUtf16Text([0x3d, 0xd8, 0x00, 0xde], 1), HexPairPagedUtf16Text([0x3d, 0xd8, 0x41, 0x00], 1)]))
+call add(out, string([HexPairPagedUtf32Text([0x00, 0x01, 0xf6, 0x00], 0), HexPairPagedUtf32Text([0x41, 0x42, 0x43, 0x44], 0), HexPairPagedUtf32Text([0x00, 0x00, 0xd8, 0x00], 0)]))
 HexPairOpen $WORK/insp1.bin 1
 HexPairGoOffset 66
 redir => m1
@@ -2295,24 +2299,40 @@ check "decimal subtraction, including down to zero" "999 0" "$(sed -n 3p "$WORK/
 check "IEEE 754 from the bytes python packed" "1234.5678 -3.25" "$(sed -n 4p "$WORK/tins.out")"
 check "and the ends of the range" "inf -inf nan 0.0 1.401298e-45" \
     "$(sed -n 5p "$WORK/tins.out")"
+check "utf-8, of one, two, three and four bytes" \
+    "['U+0041 ''A'' (1 byte)', 'U+00E9 ''é'' (2 bytes)', 'U+20AC ''€'' (3 bytes)', 'U+1F600 ''😀'' (4 bytes)']" \
+    "$(sed -n 6p "$WORK/tins.out")"
+# Every way UTF-8 can be wrong is its own answer: reporting a code point
+# for an overlong sequence or a surrogate would be inventing one.
+check "and every way it can fail to be utf-8" \
+    "['not utf-8 (byte 80 cannot start one)', 'needs 2 bytes, 1 left', 'not utf-8 (overlong: U+002F in 3 bytes)', 'not utf-8 (U+D800 is a surrogate)']" \
+    "$(sed -n 7p "$WORK/tins.out")"
+check "utf-16 both ways round, and a surrogate pair" \
+    "['U+4241 ''䉁'' (2 bytes)', 'U+4142 ''䅂'' (2 bytes)', 'U+1F600 ''😀'' (4 bytes)', 'U+D83D - a high surrogate, U+0041 is not low']" \
+    "$(sed -n 8p "$WORK/tins.out")"
+check "utf-32, where most four bytes are not a character" \
+    "['U+1F600 ''😀''', 'U+41424344 - past U+10FFFF', 'U+D800 - a surrogate']" \
+    "$(sed -n 9p "$WORK/tins.out")"
 check "the inspector reads the bytes at the cursor" \
     "hexpair: byte 66 (0x42) of 512: 41 42 43 44 45 46 47 48" \
-    "$(sed -n 6p "$WORK/tins.out")"
+    "$(sed -n 10p "$WORK/tins.out")"
 check "one byte, as a character and as bits" \
     "  8-bit    65                          char 'A'  bin 01000001  oct 0101" \
-    "$(sed -n 7p "$WORK/tins.out")"
+    "$(sed -n 11p "$WORK/tins.out")"
 check "the widths, both ways round" \
-    "  16-bit   16961                       16706" "$(sed -n 9p "$WORK/tins.out")"
+    "  16-bit   16961                       16706" "$(sed -n 13p "$WORK/tins.out")"
 check "including the 64-bit one" \
     "  64-bit   5208208757389214273         4702394921427289928" \
-    "$(sed -n 11p "$WORK/tins.out")"
+    "$(sed -n 15p "$WORK/tins.out")"
 check "and the floats" \
-    "  float32  781.035217                  12.141422" "$(sed -n 12p "$WORK/tins.out")"
+    "  float32  781.035217                  12.141422" "$(sed -n 16p "$WORK/tins.out")"
+check "and what the bytes are as text" \
+    "  utf-8    U+0041 'A' (1 byte)" "$(sed -n 18p "$WORK/tins.out")"
 check "a width that does not fit in what is left of the page says so" \
-    "  16-bit   (only 1 byte left on this page)" "$(sed -n 14p "$WORK/tins.out")"
-check "both views read the same bytes" "1" "$(sed -n 15p "$WORK/tins.out")"
+    "  16-bit   (only 1 byte left on this page)" "$(sed -n 21p "$WORK/tins.out")"
+check "both views read the same bytes" "1" "$(sed -n 22p "$WORK/tins.out")"
 check "and a banner line has nothing to read" "hexpair: no byte here to read" \
-    "$(sed -n 16p "$WORK/tins.out")"
+    "$(sed -n 23p "$WORK/tins.out")"
 
 # ===========================================================================
 # Two views of one file

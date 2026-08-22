@@ -2526,6 +2526,121 @@ function! HexPairPagedIeeeText(bytes) abort
   return printf('%g', value)
 endfunction
 
+" A code point, as the inspector prints one: the number, the character
+" itself where it can be shown, and how many bytes it took.
+"
+" The glyph is left out unless 'encoding' is utf-8 - nr2char() would hand
+" back utf-8 bytes for a message area that is not reading them that way -
+" and for anything with no glyph to show anyway: below a space, the C1
+" range, and the private use areas, where whatever appears means nothing
+" without the font that was meant to come with it.
+function! s:CodePointText(cp, used) abort
+  let glyph = ''
+  if &encoding ==# 'utf-8' && a:cp >= 0x20
+        \ && !(a:cp >= 0x7f && a:cp <= 0xa0)
+        \ && !(a:cp >= 0xe000 && a:cp <= 0xf8ff)
+        \ && !(a:cp >= 0xf0000 && a:cp <= 0x10fffd)
+    let glyph = " '" . nr2char(a:cp, 1) . "'"
+  endif
+  return a:used > 0
+        \ ? printf('U+%04X%s (%d byte%s)', a:cp, glyph, a:used,
+        \          a:used == 1 ? '' : 's')
+        \ : printf('U+%04X%s', a:cp, glyph)
+endfunction
+
+function! s:NeedsBytes(want, have) abort
+  return printf('needs %d bytes, %d left', a:want, a:have)
+endfunction
+
+" What the bytes at the cursor are as UTF-8. Every way the encoding can
+" be wrong is a different answer, because a data inspector that reported
+" a code point for an overlong sequence or a surrogate would be inventing
+" one: those byte sequences are not characters at all.
+function! HexPairPagedUtf8Text(bytes) abort
+  if empty(a:bytes)
+    return '-'
+  endif
+  let b0 = a:bytes[0]
+  if b0 < 0x80
+    return s:CodePointText(b0, 1)
+  endif
+  " 0x80-0xbf is a continuation byte with nothing in front of it, and
+  " 0xc0/0xc1 could only ever start an overlong two-byte sequence.
+  if b0 < 0xc2 || b0 > 0xf4
+    return 'not utf-8 (byte ' . printf('%02x', b0) . ' cannot start one)'
+  endif
+  let want = b0 < 0xe0 ? 2 : (b0 < 0xf0 ? 3 : 4)
+  if len(a:bytes) < want
+    return s:NeedsBytes(want, len(a:bytes))
+  endif
+  let cp = b0 % (want == 2 ? 32 : (want == 3 ? 16 : 8))
+  let i = 1
+  while i < want
+    let b = a:bytes[i]
+    if b / 64 != 2
+      return 'not utf-8 (byte ' . printf('%02x', b) . ' is not a continuation)'
+    endif
+    let cp = cp * 64 + b % 64
+    let i += 1
+  endwhile
+  " An overlong sequence spells a code point that a shorter one already
+  " spells, and is not that character however it looks.
+  let least = want == 2 ? 0x80 : (want == 3 ? 0x800 : 0x10000)
+  if cp < least
+    return printf('not utf-8 (overlong: U+%04X in %d bytes)', cp, want)
+  endif
+  if cp >= 0xd800 && cp <= 0xdfff
+    return printf('not utf-8 (U+%04X is a surrogate)', cp)
+  endif
+  if cp > 0x10ffff
+    return printf('not utf-8 (U+%04X is past the last code point)', cp)
+  endif
+  return s:CodePointText(cp, want)
+endfunction
+
+" The same as UTF-16, in the byte order a:little asks for. A high
+" surrogate takes the next unit with it; a lone one is not a character.
+function! HexPairPagedUtf16Text(bytes, little) abort
+  if len(a:bytes) < 2
+    return s:NeedsBytes(2, len(a:bytes))
+  endif
+  let unit = a:little ? a:bytes[1] * 256 + a:bytes[0]
+        \             : a:bytes[0] * 256 + a:bytes[1]
+  if unit >= 0xdc00 && unit <= 0xdfff
+    return printf('U+%04X - a low surrogate, nothing before it', unit)
+  endif
+  if unit < 0xd800 || unit > 0xdbff
+    return s:CodePointText(unit, 2)
+  endif
+  if len(a:bytes) < 4
+    return s:NeedsBytes(4, len(a:bytes))
+  endif
+  let low = a:little ? a:bytes[3] * 256 + a:bytes[2]
+        \            : a:bytes[2] * 256 + a:bytes[3]
+  if low < 0xdc00 || low > 0xdfff
+    return printf('U+%04X - a high surrogate, U+%04X is not low',
+          \ unit, low)
+  endif
+  return s:CodePointText(0x10000 + (unit - 0xd800) * 0x400 + (low - 0xdc00), 4)
+endfunction
+
+" And as UTF-32, where every four bytes are one code point - or are not a
+" character at all, which is most of them.
+function! HexPairPagedUtf32Text(bytes, little) abort
+  if len(a:bytes) < 4
+    return s:NeedsBytes(4, len(a:bytes))
+  endif
+  let b = a:little ? reverse(copy(a:bytes[0:3])) : a:bytes[0:3]
+  let cp = ((b[0] * 256 + b[1]) * 256 + b[2]) * 256 + b[3]
+  if cp > 0x10ffff
+    return printf('U+%04X - past U+10FFFF', cp)
+  endif
+  if cp >= 0xd800 && cp <= 0xdfff
+    return printf('U+%04X - a surrogate', cp)
+  endif
+  return s:CodePointText(cp, 0)
+endfunction
+
 " A byte as eight bits. printf() has no %b on the Vim this plugin
 " supports, so the bits are spelled out.
 function! HexPairPagedBinaryText(byte) abort
@@ -2597,6 +2712,14 @@ function! HexPairPagedInspectLines(bytes, at, total) abort
     call add(out, printf('  %-8s %-26s  %s', name,
           \ HexPairPagedIeeeText(le), HexPairPagedIeeeText(be)))
   endfor
+  " What the bytes are as text. UTF-8 has no byte order to get wrong, so
+  " it takes the width of both columns; the other two are read each way
+  " round like the numbers above them.
+  call add(out, printf('  %-8s %s', 'utf-8', HexPairPagedUtf8Text(a:bytes)))
+  call add(out, printf('  %-8s %-26s  %s', 'utf-16',
+        \ HexPairPagedUtf16Text(a:bytes, 1), HexPairPagedUtf16Text(a:bytes, 0)))
+  call add(out, printf('  %-8s %-26s  %s', 'utf-32',
+        \ HexPairPagedUtf32Text(a:bytes, 1), HexPairPagedUtf32Text(a:bytes, 0)))
   if !has('num64')
     call add(out, '  (32- and 64-bit values need a Vim with +num64)')
   endif
