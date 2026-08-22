@@ -205,8 +205,10 @@ developer's machine.
    - **Does the entry describe the release, or its history?** Nothing may
      announce a feature as unfinished that a later bullet then finishes,
      or credit a file that no release ever contained. One section per
-     type; `Fixed` splits into what was in the previous release and what
-     was found and fixed within this cycle.
+     type, and `Fixed` is what a *released* version did wrong: a bug
+     introduced and fixed inside one cycle names code no release ever
+     shipped, so it belongs in `CLAUDE.md`'s bug table, next to the test
+     that keeps it from coming back.
    - **Is every runtime message still true?** They outlive the behaviour
      they describe. Grep the strings the plugin can print and read them
      against what the code now does.
