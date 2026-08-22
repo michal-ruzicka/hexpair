@@ -44,6 +44,11 @@
 " formatting) live in the bundled ftplugin/xxd.vim; see
 " :help hexpair-ftplugin for how to overrule them.
 
+" This file has a multibyte character in it (the maintainer's name), so it
+" says which encoding that is in: without this, a Vim whose 'encoding' is
+" not utf-8 reads those bytes as whatever its own encoding makes of them.
+scriptencoding utf-8
+
 if exists('g:loaded_hexpair')
   finish
 endif

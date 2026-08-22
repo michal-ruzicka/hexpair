@@ -14,7 +14,7 @@
 # ===========================================================================
 set -u
 
-cd "$(dirname "$0")"
+cd "$(dirname "$0")" || exit 1
 
 # Python is python3 everywhere except Windows, where the installers name it
 # python - and where a `python3` that merely opens the Microsoft Store is a
@@ -1058,20 +1058,24 @@ check "the refused write left the file alone"    "$W4_ALL" "$(hash_range "$WORK/
 # Not the page on its own: the buffer shows one page, but what the user
 # means by "save it over there" is the thing they are looking into. The
 # original is left exactly as it was.
-W5_BEFORE=$(hash_range "$WORK/w5.bin" 0 -1)
 cat > "$WORK/tw5.vim" <<EOF
 $(printf "$PAGEDW")
 HexPairOpen $WORK/w5.bin 2
 call setline(2, substitute(getline(2), '00 01', 'de ad', ''))
 write $WORK/elsewhere.bin
+" Whether the original was left alone can only be asked HERE: the plain
+" :w below is meant to change it, so by the end of the script it has.
+let untouched = [substitute(system('$HEXPAIR_XXD -s 512 -l 4 -p $WORK/w5.bin'), '[^0-9a-f]', '', 'g'), getfsize('$WORK/w5.bin')]
 let state = string([&l:modified, HexPairPagedSamePath(b:hexpair_page_file, '$WORK/w5.bin', has('fname_case'), exists('+shellslash'))])
 write
-call writefile([state, string([&l:modified])], '$WORK/tw5.out')
+call writefile([state, string([&l:modified]), string(untouched)], '$WORK/tw5.out')
 qa!
 EOF
 "$HEXPAIR_VIM" -es -u NONE -S "$WORK/tw5.vim" < /dev/null
 check "':w other' leaves the buffer and its own file alone" "[1, 1]" \
     "$(sed -n 1p "$WORK/tw5.out")"
+check "and the edit did not reach the original" "['00010203', 5000]" \
+    "$(sed -n 3p "$WORK/tw5.out")"
 check "the copy is the whole file, not just the page" "5000" \
     "$(file_size "$WORK/elsewhere.bin")"
 check "with the page's edit in it" \
@@ -2344,6 +2348,8 @@ check "a split is a second view, on the page it names" \
     "[[1, 5, 2], [10, 3, 1], 1]" "$(cat "$WORK/tsv.out")"
 
 # --- Both views can write, because they hold different pages --------------
+# Neither view holds the first 1024 bytes, so nothing either of them
+# writes may reach them.
 SV2_HEAD=$(hash_range "$WORK/split2.bin" 0 1024)
 cat > "$WORK/tsv2.vim" <<EOF
 $(printf "$HEX")
@@ -2373,6 +2379,8 @@ check "one view writing does not lock the other out" \
     "['wrote page 7', 'wrote page 3', 0]" "$(cat "$WORK/tsv2.out")"
 check "and both edits are in the file" "e0 f0" \
     "$("$HEXPAIR_XXD" -s 1040 -l 1 -p "$WORK/split2.bin") $("$HEXPAIR_XXD" -s 3088 -l 1 -p "$WORK/split2.bin")"
+check "and what neither of them holds is untouched" "$SV2_HEAD" \
+    "$(hash_range "$WORK/split2.bin" 0 1024)"
 
 # --- ... but a view whose own page was overwritten is still refused -------
 cat > "$WORK/tsv3.vim" <<EOF

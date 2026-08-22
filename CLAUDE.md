@@ -278,11 +278,26 @@ make -j4 vim     # `make` alone stops at xxd/xxd.c, whose K&R prototypes
 HEXPAIR_VIM=$PWD/src/vim VIMRUNTIME=$PWD/runtime test/run-tests.sh
 ```
  The expected result
-is 32 failures, all of them the splice paths — shortening a file,
-`:w {file}`, and a grow whose tail is more than half the file — each
-refused with the `readblob()` gate message. Anything else failing there
-is a regression in the baseline. The suite itself must stay 8.0-clean
+is 33 failures, all of them inside the splice and save-as scripts —
+shortening a file, `:w {file}`, and a grow whose tail is more than half
+the file — each refused with the `readblob()` gate message, plus the
+assertions that follow such a refusal in the same script. Anything else
+failing there is a regression in the baseline; the count itself moves
+whenever a test is added to one of those scripts, so read the names, not
+the number. The suite itself must stay 8.0-clean
 too: no `trim()`, no Blob literal, no `count()` over a string.
+
+**Linting is worth doing by hand, and is not worth automating** (the
+maintainer's call, and the numbers back it): `vint` over the two
+`.vim` files gives one finding, and it is a false positive — a string
+that must be double-quoted because it contains `\n`. `shellcheck -s sh`
+over `test/run-tests.sh` and `pack-release` gives 84, of which 81 are
+this suite's own deliberate idiom (`printf "$HEX"`, where the format
+string IS data with escapes in it) or escaped quotes inside `tr`. The
+three that were real have been fixed: a `cd` without `|| exit`, and two
+baseline hashes computed and never compared — which is to say two tests
+that did not check what their own comment said they did. That last class
+is what a manual run before a release is for.
 
 **The property test** (`test/run-tests.sh`, "Property: any shape of dump
 writes the bytes it spells") renders one page's bytes in six shapes a
