@@ -456,12 +456,19 @@ HexPairStatus()         The view, the page and the byte under the cursor,
 
     set statusline=%f\ %h%w%m%r\ %{HexPairStatus()}%=%l,%c%V\ %P
 <
-                        gives "hex 3/21 @0x4a2001" in a hex page and
-                        "txt 3/21 @0x4a2001" in the text view, and an
-                        EMPTY string in every buffer hexpair has not
-                        touched - so one statusline serves both.  The
-                        byte is in the form |:HexPairGoOffset| and
-                        vimhex's @BYTE take.
+                        gives "hex 3/21 @0x4a2001 (4857857)" in a hex
+                        page and "txt 3/21 @0x4a2001 (4857857)" in the
+                        text view, and an EMPTY string in every buffer
+                        hexpair has not touched - so one statusline
+                        serves both.  The byte comes in both bases: hex
+                        is what the dump's own offset column speaks and
+                        the form |:HexPairGoOffset| and vimhex's @BYTE
+                        take, decimal is what everything else does.
+
+                        A cursor standing in the OFFSET column is on that
+                        line's first byte - which is what the column
+                        says.  Its digits are not payload and are not
+                        counted as bytes, here or in |:HexPairInspect|.
 
                         A statusline function is called on every cursor
                         movement, so this one never walks the page: the

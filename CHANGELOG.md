@@ -63,10 +63,10 @@ and this project adheres to
   straight into `:HexPairGoOffset`. A blockwise selection, whose bytes
   are not one run, leads with the count and says how many lines and how
   many per line.
-- **`HexPairStatus()`** for `'statusline'`: `hex 3/21 @0x4a2001` in the
-  hex view, `txt 3/21 @0x4a2001` in the text view, and an empty string
-  in every buffer hexpair has not touched, so one statusline serves
-  both. It never walks the page — it is called on every cursor movement
+- **`HexPairStatus()`** for `'statusline'`: `hex 3/21 @0x4a2001 (4857857)`
+  in the hex view, `txt 3/21 @0x4a2001 (4857857)` in the text view, and
+  an empty string in every buffer hexpair has not touched, so one
+  statusline serves both. It never walks the page — it is called on every cursor movement
   — and marks a page with unwritten edits with a `+`.
 - **`g:hexpair_ruler`** (default 0): a ruler line between the banner and
   the dump, numbering the byte columns — two digits over each hex byte,

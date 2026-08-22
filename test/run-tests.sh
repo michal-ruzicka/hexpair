@@ -2088,8 +2088,35 @@ call writefile([string([plain, hex, agrees, banner, edited, text])], '$WORK/tst.
 qa!
 EOF
 "$HEXPAIR_VIM" -es -u NONE -S "$WORK/tst.vim" < /dev/null
+# The offset column is not payload, and its digits are not bytes: a
+# cursor standing in it is on the line's FIRST byte. Every column of it
+# has to say so - and so does the first hex digit, which is that byte.
+cat > "$WORK/tsto.vim" <<EOF
+$(printf "$HEX")
+HexPairOpen $WORK/status1.bin 2
+let out = []
+for col in [1, 5, 9, 10, 11, 14]
+  call cursor(3, col)
+  call add(out, HexPairStatus())
+endfor
+call cursor(3, 5)
+redir => msg
+silent HexPairInspect
+redir END
+call add(out, filter(split(msg, "\n"), 'v:val =~# "8-bit"')[0])
+call writefile([string(out[0 : 5]), out[6]], '$WORK/tsto.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tsto.vim" < /dev/null
+check "a cursor in the offset column is on the line's first byte" \
+    "['hex 2/10 @0x211 (529)', 'hex 2/10 @0x211 (529)', 'hex 2/10 @0x211 (529)', 'hex 2/10 @0x211 (529)', 'hex 2/10 @0x211 (529)', 'hex 2/10 @0x212 (530)']" \
+    "$(sed -n 1p "$WORK/tsto.out")"
+check "and the inspector reads that byte, not the offset's digits" \
+    "  8-bit    16                          char  -   bin 00010000  oct 020" \
+    "$(sed -n 2p "$WORK/tsto.out")"
+
 check "the statusline says view, page and byte, and nothing elsewhere" \
-    "['', 'hex 3/10 @0x424', 1, 'hex 3/10', 'hex 3/10+ @0x424', 'txt 3/10 @0x410']" \
+    "['', 'hex 3/10 @0x424 (1060)', 1, 'hex 3/10', 'hex 3/10+ @0x424 (1060)', 'txt 3/10 @0x410 (1040)']" \
     "$(cat "$WORK/tst.out")"
 
 # ===========================================================================
@@ -2597,10 +2624,10 @@ check "no marks says so" "['hexpair: no marks in this file']" \
 check "the listing is by position, and names the page" \
     "['hexpair: marks in this file:', '  b                byte 1057 (0x421) of 5000, page 3', '  a                byte 3124 (0xc34) of 5000, page 7', '  gone             byte 10000 (0x2710) - past the end of 5000, page 20']" \
     "$(sed -n 3p "$WORK/tmk.out")"
-check "a mark is a byte to jump back to" "hex 3/10 @0x421" \
+check "a mark is a byte to jump back to" "hex 3/10 @0x421 (1057)" \
     "$(sed -n 4p "$WORK/tmk.out")"
 check "and completes by name" "['header']" "$(sed -n 5p "$WORK/tmk.out")"
-check "a second view of the file has the same marks" "hex 7/10 @0xc34" \
+check "a second view of the file has the same marks" "hex 7/10 @0xc34 (3124)" \
     "$(sed -n 6p "$WORK/tmk.out")"
 check "a dropped mark is dropped for both, and says what is left" \
     "hexpair: no mark named 'payload' here (have: header)" \
@@ -2705,15 +2732,15 @@ check_path "and one that does not says how much and where" \
     "$(sed -n 4p "$WORK/tdf.out")"
 check "the differing byte is marked in both columns" "[[8, 23, 2], [8, 64, 1]]" \
     "$(sed -n 5p "$WORK/tdf.out")"
-check "and the jumps walk them, across pages" "hex 1/10 @0x65" \
+check "and the jumps walk them, across pages" "hex 1/10 @0x65 (101)" \
     "$(sed -n 6p "$WORK/tdf.out")"
-check "the second is on another page" "hex 3/10 @0x5dd" \
+check "the second is on another page" "hex 3/10 @0x5dd (1501)" \
     "$(sed -n 7p "$WORK/tdf.out")"
-check "the third is the file's last byte" "hex 10/10 @0x1388" \
+check "the third is the file's last byte" "hex 10/10 @0x1388 (5000)" \
     "$(sed -n 8p "$WORK/tdf.out")"
 check "past the last one it says there is none" \
     "hexpair: no difference after byte 5000" "$(sed -n 9p "$WORK/tdf.out")"
-check "and back again finds the one before" "hex 3/10 @0x5dd" \
+check "and back again finds the one before" "hex 3/10 @0x5dd (1501)" \
     "$(sed -n 10p "$WORK/tdf.out")"
 check "comparing a view with its own file is refused" \
     "hexpair: that is this view's own file" "$(sed -n 11p "$WORK/tdf.out")"
@@ -2800,20 +2827,20 @@ check "a match must start on a byte, not between two" "[2, -1, 8, 0]" \
 check "and the two halves of a replace-all are told apart by the slash" \
     "{'pattern': 'de ad ', 'replacement': ' 11 22'}" "$(sed -n 5p "$WORK/tfind.out")"
 check_path "the first match is found and jumped to" \
-    "hexpair: bytes de ad be ef at byte 301 (0x12d) | hex 1/10 @0x12d" \
+    "hexpair: bytes de ad be ef at byte 301 (0x12d) | hex 1/10 @0x12d (301)" \
     "$(sed -n 6p "$WORK/tfind.out")"
 check "and marked wherever it is on the page" "[[20, 47, 11], [20, 72, 4]]" \
     "$(sed -n 7p "$WORK/tfind.out")"
-check "the next one is on another page" "hex 4/10 @0x7d1" \
+check "the next one is on another page" "hex 4/10 @0x7d1 (2001)" \
     "$(sed -n 8p "$WORK/tfind.out")"
-check "and the last one is at the end of the file" "hex 10/10 @0x1385" \
+check "and the last one is at the end of the file" "hex 10/10 @0x1385 (4997)" \
     "$(sed -n 9p "$WORK/tfind.out")"
 # 'wrapscan' is Vim's own option, and this obeys it like Vim's searches do.
 check "past the last, it wraps and says so" \
-    "hexpair: bytes de ad be ef at byte 301 (0x12d) (wrapped) | hex 1/10 @0x12d" \
+    "hexpair: bytes de ad be ef at byte 301 (0x12d) (wrapped) | hex 1/10 @0x12d (301)" \
     "$(sed -n 10p "$WORK/tfind.out")"
 check "text is found the same way" \
-    "hexpair: text 'hello' at byte 701 (0x2bd) | hex 2/10 @0x2bd" \
+    "hexpair: text 'hello' at byte 701 (0x2bd) | hex 2/10 @0x2bd (701)" \
     "$(sed -n 11p "$WORK/tfind.out")"
 check "and what is not there says so" \
     "hexpair: bytes ff ff ff ff ff not found in this file" \

@@ -1306,6 +1306,14 @@ endfunction
 " the stripper uses - is the index mapped by layout.
 function! s:PagedLineIndexAt(lnum, col) abort
   let line   = getline(a:lnum)
+  let [n, hexstart, hexend, asciistart] = s:PagedLineLayout(a:lnum)
+  " The offset column is not payload, and its digits are not bytes: a
+  " cursor standing in it is on the line's FIRST byte, which is what the
+  " column says. Without this the digits before the cursor get counted
+  " like any others, so "00000200:" reads as four bytes of nothing.
+  if a:col < hexstart
+    return 0
+  endif
   let prefix = strpart(line, 0, a:col - 1)
   if prefix =~# '  '
     return s:PagedByteIndexAt(a:lnum, a:col)
@@ -2791,7 +2799,10 @@ function! HexPairStatus() abort
         \   + (line('.') - 1 - s:HeaderLines()) * b:hexpair_n
         \   + s:PagedCursorLineIndex()
         \ : s:TextByteOffset()
-  return printf('%s @0x%x', where, at + 1)
+  " Both bases, as |:HexPairPages| and the inspector give them: hex is
+  " what the dump's own offset column speaks, decimal is what everything
+  " else does.
+  return printf('%s @0x%x (%d)', where, at + 1, at + 1)
 endfunction
 
 function! s:PagesText() abort

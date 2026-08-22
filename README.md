@@ -539,11 +539,14 @@ carries no bytes and is never written:
 00000200: 00 01 02 03 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f  ................
 ```
 
-`HexPairStatus()` gives `hex 3/21 @0x4a2001` in the hex view and
-`txt 3/21 @0x4a2001` in the text view; a page with unwritten edits is
-marked `hex 3/21+ @…`, and the byte is then where the layout puts it —
-use `:HexPairPages` for the counted answer once you have inserted or
-deleted digits.
+`HexPairStatus()` gives `hex 3/21 @0x4a2001 (4857857)` in the hex view
+and `txt 3/21 @0x4a2001 (4857857)` in the text view — the byte in both
+bases, hex as the dump's own offset column speaks it and decimal as
+everything else does. A page with unwritten edits is marked
+`hex 3/21+ @…`, and the byte is then where the layout puts it — use
+`:HexPairPages` for the counted answer once you have inserted or deleted
+digits. A cursor standing in the offset column is on that line's first
+byte, which is what the column says.
 
 The plugin also bundles a filetype plugin (`ftplugin/xxd.vim`) with
 editing defaults for the dump: `tabstop=10`, `expandtab`,
