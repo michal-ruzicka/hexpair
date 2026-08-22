@@ -153,6 +153,15 @@ for name in ('paged21.bin', 'paged22.bin', 'paged23.bin', 'paged31.bin', 'paged3
 for name in ('scan1.bin', 'scan2.bin'):
     with open(os.path.join(w, name), 'wb') as f:
         f.write(bytes((i * 7) % 256 for i in range(100000)))
+# search fixtures: a needle three times over, and some text
+_fd = bytearray(bytes(i % 256 for i in range(5000)))
+_fd[300:304] = b'\xde\xad\xbe\xef'
+_fd[2000:2004] = b'\xde\xad\xbe\xef'
+_fd[4996:5000] = b'\xde\xad\xbe\xef'
+_fd[700:705] = b'hello'
+open(os.path.join(w, 'find1.bin'), 'wb').write(bytes(_fd))
+open(os.path.join(w, 'rep1.bin'), 'wb').write(bytes(_fd))
+open(os.path.join(w, 'rep2.bin'), 'wb').write(bytes(_fd))
 # diff fixtures: same bytes but for three, and a longer copy
 _da = bytes(i % 256 for i in range(5000))
 _db = bytearray(_da)
@@ -2706,6 +2715,144 @@ check_path "a longer file agrees over the bytes it shares" \
 check_path "but differs from where it grows, with nowhere to put the cursor" \
     "hexpair: $WORK/diffc.bin is longer: its bytes from 5001 (0x1389) on have nothing here to differ from" \
     "$(sed -n 2p "$WORK/tdf2.out")"
+
+# ===========================================================================
+# Finding bytes, and replacing them
+# ===========================================================================
+# The fixture has "de ad be ef" three times - early, on another page, and
+# at the very end - and the text "hello" once.
+cat > "$WORK/tfind.vim" <<EOF
+$(printf "$HEX")
+function! Msg(m) abort
+  let lines = filter(split(a:m, "\n"), 'v:val =~# "hexpair:"')
+  return empty(lines) ? '' : matchstr(lines[-1], 'hexpair:.*')
+endfunction
+let out = []
+call add(out, string([HexPairPagedParseFindPattern('de ad be ef'), HexPairPagedParseFindPattern('de ?? be')]))
+call add(out, string([HexPairPagedParseFindPattern('xyz').msg, HexPairPagedParseFindPattern('abc').msg, HexPairPagedParseFindPattern('  ').msg]))
+call add(out, HexPairPagedTextToHex('hello'))
+" A hex index is a nibble, and half of them are the wrong half of a byte.
+call add(out, string([HexPairPagedFindInHex('00deadbeef', 'deadbeef', 0, 1), HexPairPagedFindInHex('0deadbeef0', 'deadbeef', 0, 1), HexPairPagedFindInHex('deadbeefdeadbeef', 'deadbeef', 16, 0), HexPairPagedFindInHex('deadbeefdeadbeef', 'deadbeef', 8, 0)]))
+call add(out, string(HexPairPagedSplitReplaceArgs('de ad / 11 22')))
+HexPairOpen $WORK/find1.bin 1
+redir => m1
+silent HexPairFind de ad be ef
+redir END
+call add(out, Msg(m1) . ' | ' . HexPairStatus())
+call add(out, string(HexPairPagedFindPositions(2, 33)))
+HexPairFindNext
+call add(out, HexPairStatus())
+HexPairFindNext
+call add(out, HexPairStatus())
+redir => m2
+silent HexPairFindNext
+redir END
+call add(out, Msg(m2) . ' | ' . HexPairStatus())
+redir => m3
+silent HexPairFindText hello
+redir END
+call add(out, Msg(m3) . ' | ' . HexPairStatus())
+redir => m4
+silent! HexPairFind ff ff ff ff ff
+redir END
+call add(out, Msg(m4))
+call writefile(out, '$WORK/tfind.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tfind.vim" < /dev/null
+check "a pattern is bytes, and ? is any nibble" \
+    "[{'bytes': 4, 'hex': 'deadbeef'}, {'bytes': 3, 'hex': 'de..be'}]" \
+    "$(sed -n 1p "$WORK/tfind.out")"
+check "and anything else is refused, with the reason" \
+    "['hexpair: ''xyz'' is not a byte pattern (hex digits, ? for any nibble)', 'hexpair: ''abc'' is 3 hex digits - a byte is two, so a pattern is an even number of them', 'hexpair: nothing to find']" \
+    "$(sed -n 2p "$WORK/tfind.out")"
+check "text is searched for as its bytes" "68656c6c6f" "$(sed -n 3p "$WORK/tfind.out")"
+check "a match must start on a byte, not between two" "[2, -1, 8, 0]" \
+    "$(sed -n 4p "$WORK/tfind.out")"
+check "and the two halves of a replace-all are told apart by the slash" \
+    "{'pattern': 'de ad ', 'replacement': ' 11 22'}" "$(sed -n 5p "$WORK/tfind.out")"
+check_path "the first match is found and jumped to" \
+    "hexpair: bytes de ad be ef at byte 301 (0x12d) | hex 1/10 @0x12d" \
+    "$(sed -n 6p "$WORK/tfind.out")"
+check "and marked wherever it is on the page" "[[20, 47, 11], [20, 72, 4]]" \
+    "$(sed -n 7p "$WORK/tfind.out")"
+check "the next one is on another page" "hex 4/10 @0x7d1" \
+    "$(sed -n 8p "$WORK/tfind.out")"
+check "and the last one is at the end of the file" "hex 10/10 @0x1385" \
+    "$(sed -n 9p "$WORK/tfind.out")"
+# 'wrapscan' is Vim's own option, and this obeys it like Vim's searches do.
+check "past the last, it wraps and says so" \
+    "hexpair: bytes de ad be ef at byte 301 (0x12d) (wrapped) | hex 1/10 @0x12d" \
+    "$(sed -n 10p "$WORK/tfind.out")"
+check "text is found the same way" \
+    "hexpair: text 'hello' at byte 701 (0x2bd) | hex 2/10 @0x2bd" \
+    "$(sed -n 11p "$WORK/tfind.out")"
+check "and what is not there says so" \
+    "hexpair: bytes ff ff ff ff ff not found in this file" \
+    "$(sed -n 12p "$WORK/tfind.out")"
+
+# --- Replacing what was found ---------------------------------------------
+# Both commands edit the PAGE, exactly as typing over the dump would: the
+# bytes are marked as changed and nothing reaches the file until :w does.
+cat > "$WORK/trep.vim" <<EOF
+$(printf "$HEX")
+function! Msg(m) abort
+  let lines = filter(split(a:m, "\n"), 'v:val =~# "hexpair:"')
+  return empty(lines) ? '' : matchstr(lines[-1], 'hexpair:.*')
+endfunction
+HexPairOpen $WORK/rep1.bin 1
+let out = []
+silent HexPairFind de ad be ef
+redir => m1
+silent HexPairReplace 11 22 33 44
+redir END
+call add(out, Msg(m1) . ' | modified=' . &l:modified)
+call add(out, string(HexPairPagedModifiedPositions(20, 20)))
+write
+bwipeout!
+HexPairOpen $WORK/rep2.bin 1
+redir => m2
+silent HexPairReplaceAll de ad be ef / aa bb cc dd
+redir END
+call add(out, Msg(m2))
+write
+" A shorter replacement shortens the PAGE; making the FILE shorter is the
+" write path's business, and this stops before it.
+silent HexPairFind aa bb cc dd
+silent HexPairReplace 99
+call add(out, string([strlen(substitute(join(HexPairPagedScanLines(), ''), '[^0-9a-fA-F]', '', 'g')) / 2, &l:modified]))
+redir => m3
+silent! HexPairReplace 11
+redir END
+call add(out, Msg(m3))
+redir => m4
+silent! HexPairReplaceAll de ad / 11 ??
+redir END
+call add(out, Msg(m4))
+call writefile(out, '$WORK/trep.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/trep.vim" < /dev/null
+check "the match under the cursor is what gets replaced" \
+    "hexpair: 4 bytes replaced at 301 (0x12d) | modified=1" \
+    "$(sed -n 1p "$WORK/trep.out")"
+check "and the new bytes are marked as changed" "[[20, 47, 11], [20, 72, 4]]" \
+    "$(sed -n 2p "$WORK/trep.out")"
+check "a written replacement is in the file" "11223344" \
+    "$("$HEXPAIR_XXD" -s 300 -l 4 -p "$WORK/rep1.bin")"
+check "replace-all counts what it did" \
+    "hexpair: 1 occurrence replaced on this page" "$(sed -n 3p "$WORK/trep.out")"
+check "and that reached its file too" "aabbccdd" \
+    "$("$HEXPAIR_XXD" -s 300 -l 4 -p "$WORK/rep2.bin")"
+# Four bytes became one, so the page holds 509 of its 512.
+check "a shorter replacement shortens the page" "[509, 1]" \
+    "$(sed -n 4p "$WORK/trep.out")"
+check "the cursor has to be on a match to replace it" \
+    "hexpair: the cursor is not on a match - :HexPairFindNext first" \
+    "$(sed -n 5p "$WORK/trep.out")"
+check "and a replacement cannot have wildcards in it" \
+    "hexpair: a replacement cannot have wildcards in it" \
+    "$(sed -n 6p "$WORK/trep.out")"
 
 # ---------------------------------------------------------------------------
 if [ "$FAIL" -eq 0 ]; then

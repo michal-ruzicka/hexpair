@@ -147,6 +147,10 @@ highlight default link HexPairModified DiffText
 " against (|:HexPairDiff|), as opposed to from this view's own file.
 highlight default link HexPairDiff DiffAdd
 
+" Highlight group for what |:HexPairFind| is looking for, wherever it is
+" on the page - the byte equivalent of 'hlsearch'.
+highlight default link HexPairFind Search
+
 " --------------------------------------------------------------------------
 " Vim version gate
 " --------------------------------------------------------------------------
@@ -949,6 +953,7 @@ function! s:PagedHighlight() abort
   call s:PagedClearHighlight()
   call s:ModifiedHighlight()
   call s:DiffHighlight()
+  call s:FindHighlight()
   if !get(b:, 'hexpair_page_active', 0) || !s:IsHexView()
     return
   endif
@@ -1127,6 +1132,7 @@ function! s:LoadPage(pageidx) abort
   call cursor(1 + b:hexpair_page_header, b:hexpair_page_hexstart)
   call s:ClearModifiedHighlight()
   call s:ClearDiffHighlight()
+  call s:ClearFindHighlight()
   " This window holds a view of its own - see s:WindowView().
   let w:hexpair_own_view = 1
   call s:Debug('page %d/%d loaded: bytes [%d, %d) of %d, %d lines',
@@ -2799,6 +2805,476 @@ function! s:GotoOffset(text, force) abort
 endfunction
 
 " ---------------------------------------------------------------------------
+" Finding bytes, and replacing them
+" ---------------------------------------------------------------------------
+"
+" |/| searches the page on screen, which is a window on the file - so it
+" cannot find what is on any other page, and searching a dump for a
+" sequence of bytes means matching text that has spaces, line breaks and
+" an ASCII column in the middle of it. |:HexPairFind| searches the FILE
+" instead, a block at a time, and lands the cursor on the byte it found,
+" turning the page on the way.
+"
+" What is searched is the file on disk. Unwritten edits are on the screen,
+" where |/| and the eye can find them; everywhere else, the file is what
+" there is to search.
+
+let s:find = {'hex': '', 'bytes': 0, 'what': ''}
+
+" A pattern is bytes, two hex digits each, and a '?' stands for any
+" nibble: "de ad be ef", "deadbeef" and "de ?? be ef" are all patterns,
+" and spaces between the bytes are decoration. What comes back is the
+" regexp that matches it in a run of hex, which is the same string with
+" the wildcards turned into '.'.
+function! HexPairPagedParseFindPattern(text) abort
+  let squashed = substitute(a:text, '\s\+', '', 'g')
+  if squashed ==# ''
+    return {'msg': 'hexpair: nothing to find'}
+  endif
+  if squashed =~# '[^0-9a-fA-F?]'
+    return {'msg': printf('hexpair: %s is not a byte pattern (hex digits, '
+          \ . '? for any nibble)', string(a:text))}
+  endif
+  if strlen(squashed) % 2
+    return {'msg': printf('hexpair: %s is %d hex digits - a byte is two, '
+          \ . 'so a pattern is an even number of them',
+          \ string(a:text), strlen(squashed))}
+  endif
+  return {'hex': tolower(substitute(squashed, '?', '.', 'g')),
+        \ 'bytes': strlen(squashed) / 2}
+endfunction
+
+" The bytes of a literal string, as hex - what |:HexPairFindText| searches
+" for. The string is taken as the bytes Vim holds it as, so what it finds
+" is what the same text would look like in the file.
+function! HexPairPagedTextToHex(text) abort
+  let out = ''
+  let i = 0
+  while i < strlen(a:text)
+    let out .= printf('%02x', char2nr(strpart(a:text, i, 1)))
+    let i += 1
+  endwhile
+  return out
+endfunction
+
+" Where a:pat matches in a run of hex, at or after a:from, on a BYTE
+" boundary - an index into a hex string is a nibble, and half of them are
+" the wrong half. Backwards, it is the last match that starts before
+" a:from.
+function! HexPairPagedFindInHex(hay, pat, from, forward) abort
+  if a:forward
+    let at = a:from
+    while 1
+      let idx = match(a:hay, a:pat, at)
+      if idx < 0
+        return -1
+      endif
+      if idx % 2 == 0
+        return idx
+      endif
+      let at = idx + 1
+    endwhile
+  endif
+  let best = -1
+  let at = 0
+  while 1
+    let idx = match(a:hay, a:pat, at)
+    if idx < 0 || idx >= a:from
+      return best
+    endif
+    if idx % 2 == 0
+      let best = idx
+    endif
+    let at = idx + 1
+  endwhile
+endfunction
+
+" The file, a block at a time, for the next (or previous) match. Blocks
+" overlap by the pattern's length less one byte, so a match lying across
+" a seam is still whole in one of them.
+function! s:FindScan(from, forward) abort
+  let file = b:hexpair_page_file
+  let total = b:hexpair_page_total
+  let pat = s:find.hex
+  let span = s:find.bytes - 1
+  if a:forward
+    let off = a:from
+    while off < total
+      let len = s:diffblock < total - off ? s:diffblock : total - off
+      let idx = HexPairPagedFindInHex(s:FileHex(file, off, len), pat, 0, 1)
+      if idx >= 0
+        return off + idx / 2
+      endif
+      if len < s:diffblock
+        return -1
+      endif
+      let off += len - span
+    endwhile
+    return -1
+  endif
+  let end = a:from
+  while end > 0
+    let start = end - s:diffblock
+    let start = start < 0 ? 0 : start
+    " Read past the block's end by the pattern's span, so a match that
+    " starts inside it and reaches beyond is found whole.
+    let hex = s:FileHex(file, start, end - start + span)
+    let idx = HexPairPagedFindInHex(hex, pat, (end - start) * 2, 0)
+    if idx >= 0
+      return start + idx / 2
+    endif
+    let end = start
+  endwhile
+  return -1
+endfunction
+
+" Matches of the current pattern within the page, as byte offsets from the
+" page's base. Computed from the page's own bytes as they were READ, once
+" per page and pattern - which is what makes highlighting them cost
+" nothing per redraw, and what keeps the marking about the FILE: an edit
+" of yours shows up as a changed byte (HexPairModified), not as a match
+" appearing or vanishing under the cursor.
+function! s:FindMatchesOnPage() abort
+  let state = [s:find.hex, b:hexpair_page_base]
+  if get(b:, 'hexpair_find_state', []) ==# state
+    return b:hexpair_find_matches
+  endif
+  let b:hexpair_find_state = state
+  let b:hexpair_find_matches = []
+  let hex = get(b:, 'hexpair_page_hex', '')
+  if s:find.hex ==# '' || hex ==# ''
+    return b:hexpair_find_matches
+  endif
+  let at = 0
+  while 1
+    let idx = HexPairPagedFindInHex(hex, s:find.hex, at, 1)
+    if idx < 0
+      break
+    endif
+    call add(b:hexpair_find_matches, idx / 2)
+    let at = idx + 2
+  endwhile
+  return b:hexpair_find_matches
+endfunction
+
+" Those matches, as matchaddpos() positions for the lines a:first to
+" a:last. A match that runs over the end of a line is marked on each line
+" it covers.
+function! HexPairPagedFindPositions(first, last) abort
+  let out = []
+  let n = b:hexpair_n
+  let span = s:find.bytes
+  if span <= 0
+    return out
+  endif
+  for at in s:FindMatchesOnPage()
+    for lnum in range(a:first, a:last)
+      if s:IsBannerLine(getline(lnum))
+        continue
+      endif
+      let idx = lnum - 1 - s:HeaderLines()
+      if idx < 0
+        continue
+      endif
+      let lo = at - idx * n
+      let hi = lo + span - 1
+      let lo = lo < 0 ? 0 : lo
+      let hi = hi > n - 1 ? n - 1 : hi
+      if hi < lo || lo > n - 1 || at + span - 1 < idx * n
+        continue
+      endif
+      let [n, hexstart, hexend, asciistart] = s:PagedLineLayout(lnum)
+      call add(out, [lnum, hexstart + lo * 3, (hi - lo + 1) * 3 - 1])
+      if strlen(getline(lnum)) >= asciistart
+        call add(out, [lnum, asciistart + lo, hi - lo + 1])
+      endif
+    endfor
+  endfor
+  return out
+endfunction
+
+function! s:ClearFindHighlight() abort
+  if exists('w:hexpair_find_ids')
+    for id in w:hexpair_find_ids
+      silent! call matchdelete(id)
+    endfor
+  endif
+  let w:hexpair_find_ids = []
+  let w:hexpair_find_hlstate = []
+endfunction
+
+function! s:FindHighlight() abort
+  if !get(b:, 'hexpair_page_active', 0) || !s:IsHexView()
+    return
+  endif
+  let state = [s:find.hex, b:hexpair_page_base, line('w0'), line('w$')]
+  if get(w:, 'hexpair_find_hlstate', []) ==# state
+    return
+  endif
+  call s:ClearFindHighlight()
+  let w:hexpair_find_hlstate = state
+  if s:find.hex ==# ''
+    return
+  endif
+  let positions = HexPairPagedFindPositions(line('w0'), line('w$'))
+  for i in range(0, len(positions) - 1, 8)
+    call add(w:hexpair_find_ids,
+          \ matchaddpos('HexPairFind', positions[i : i + 7]))
+  endfor
+endfunction
+
+" Jump to a:at, and say what was found there.
+function! s:FindLand(at, wrapped) abort
+  call s:GotoOffset(string(a:at + 1), 0)
+  call s:FindHighlight()
+  echo printf('hexpair: %s at byte %d (0x%x)%s', s:find.what,
+        \ a:at + 1, a:at + 1, a:wrapped ? ' (wrapped)' : '')
+endfunction
+
+function! s:FindFrom(from, forward) abort
+  if s:find.hex ==# ''
+    echohl ErrorMsg
+    echomsg 'hexpair: nothing to find yet - :HexPairFind {bytes} first'
+    echohl None
+    return
+  endif
+  let at = s:FindScan(a:from, a:forward)
+  if at >= 0
+    call s:FindLand(at, 0)
+    return
+  endif
+  " |'wrapscan'|, the same option Vim's own searches obey.
+  if &wrapscan
+    let at = s:FindScan(a:forward ? 0 : b:hexpair_page_total, a:forward)
+    if at >= 0
+      call s:FindLand(at, 1)
+      return
+    endif
+  endif
+  echohl ErrorMsg
+  echomsg printf('hexpair: %s not found%s', s:find.what,
+        \ &wrapscan ? ' in this file' : ' after here (''nowrapscan'')')
+  echohl None
+endfunction
+
+function! s:SetPattern(parsed, what) abort
+  let s:find.hex = a:parsed.hex
+  let s:find.bytes = a:parsed.bytes
+  let s:find.what = a:what
+  call s:ClearFindHighlight()
+endfunction
+
+function! s:Find(text, clear) abort
+  if !s:RequirePaged()
+    return
+  endif
+  if a:clear
+    let s:find.hex = ''
+    let s:find.bytes = 0
+    call s:ClearFindHighlight()
+    echo 'hexpair: no pattern'
+    return
+  endif
+  if a:text ==# ''
+    echo s:find.hex ==# '' ? 'hexpair: no pattern'
+          \ : printf('hexpair: looking for %s', s:find.what)
+    return
+  endif
+  let parsed = HexPairPagedParseFindPattern(a:text)
+  if has_key(parsed, 'msg')
+    echohl ErrorMsg | echomsg parsed.msg | echohl None
+    return
+  endif
+  call s:SetPattern(parsed, printf('bytes %s', a:text))
+  call s:FindFrom(s:Here() + 1, 1)
+endfunction
+
+function! s:FindText(text) abort
+  if !s:RequirePaged()
+    return
+  endif
+  let hex = HexPairPagedTextToHex(a:text)
+  if hex ==# ''
+    echohl ErrorMsg | echomsg 'hexpair: nothing to find' | echohl None
+    return
+  endif
+  call s:SetPattern({'hex': hex, 'bytes': strlen(hex) / 2},
+        \ printf('text %s', string(a:text)))
+  call s:FindFrom(s:Here() + 1, 1)
+endfunction
+
+function! s:FindRepeat(forward) abort
+  if !s:RequirePaged()
+    return
+  endif
+  call s:FindFrom(a:forward ? s:Here() + 1 : s:Here(), a:forward)
+endfunction
+
+" The byte the cursor is on, in either view.
+function! s:Here() abort
+  return s:IsHexView() ? s:PagedByteOffset() : s:TextByteOffset()
+endfunction
+
+" ---------------------------------------------------------------------------
+" Replacing what was found
+" ---------------------------------------------------------------------------
+"
+" Both commands edit the PAGE, exactly as typing over the dump would:
+" nothing is written until |:w| writes it, the changed bytes are marked
+" like any other edit, and a replacement of a different length goes
+" through the same length-changing write - which says what it will cost
+" and asks - as any other insertion or deletion.
+
+" Put a:hex in place of a:len bytes at page offset a:at, and rebuild the
+" view from the result.
+function! s:SpliceIntoPage(at, len, hex) abort
+  let scan = s:PagedScan(0)
+  if !empty(scan.err)
+    throw 'hexpair: ' . scan.err.msg . '; nothing was replaced'
+  endif
+  let flat = substitute(join(scan.lines, ''), '[^0-9a-fA-F]', '', 'g')
+  if a:at < 0 || (a:at + a:len) * 2 > strlen(flat)
+    throw 'hexpair: that is not on this page any more; find it again'
+  endif
+  let new = strpart(flat, 0, a:at * 2) . a:hex
+        \ . strpart(flat, (a:at + a:len) * 2)
+  let hex = tempname()
+  let raw = tempname()
+  let dump = tempname()
+  try
+    call writefile([new], hex)
+    call s:Run(printf('%s -r -p %s %s', s:xxd,
+          \ shellescape(hex), shellescape(raw)))
+    call s:CanonicalDump(raw, b:hexpair_page_base, dump)
+    call s:SetLines(s:HexViewLines(readfile(dump)))
+  finally
+    call delete(hex)
+    call delete(raw)
+    call delete(dump)
+  endtry
+  setlocal modified
+  call s:PagedGotoOffset(b:hexpair_page_base + a:at)
+  call s:PagedHighlight()
+endfunction
+
+function! s:Replace(text) abort
+  if !s:RequirePaged()
+    return
+  endif
+  try
+    if !s:IsHexView()
+      throw 'hexpair: replacing works in the hex view; :HexPairToggle first'
+    endif
+    if s:find.hex ==# ''
+      throw 'hexpair: nothing has been found to replace'
+    endif
+    let parsed = HexPairPagedParseFindPattern(a:text)
+    if has_key(parsed, 'msg')
+      throw parsed.msg
+    endif
+    if parsed.hex =~# '\.'
+      throw 'hexpair: a replacement cannot have wildcards in it'
+    endif
+    " What is under the cursor has to BE a match, or the command would
+    " overwrite whatever the cursor happens to sit on - and the bytes that
+    " decide are the ones in the BUFFER, not the ones the page was read
+    " with. They part company as soon as anything is replaced: the file
+    " still holds the pattern where this buffer no longer does, and a
+    " second :HexPairReplace on the spot would then overwrite bytes that
+    " are no longer a match.
+    let at = s:Here() - b:hexpair_page_base
+    let scan = s:PagedScan(0)
+    if !empty(scan.err)
+      throw 'hexpair: ' . scan.err.msg . '; nothing was replaced'
+    endif
+    let flat = substitute(join(scan.lines, ''), '[^0-9a-fA-F]', '', 'g')
+    if strpart(flat, at * 2, s:find.bytes * 2) !~# '^' . s:find.hex . '$'
+      throw 'hexpair: the cursor is not on a match - :HexPairFindNext first'
+    endif
+    call s:SpliceIntoPage(at, s:find.bytes, parsed.hex)
+    echo printf('hexpair: %d byte%s replaced at %d (0x%x)', parsed.bytes,
+          \ parsed.bytes == 1 ? '' : 's',
+          \ b:hexpair_page_base + at + 1, b:hexpair_page_base + at + 1)
+  catch /^hexpair:/
+    echohl ErrorMsg
+    echomsg v:exception
+    echohl None
+  endtry
+endfunction
+
+" {pattern} / {replacement} - the slash keeps the two apart without
+" quoting rules of their own, since a pattern is hex digits, spaces and
+" '?' and can never contain one.
+function! HexPairPagedSplitReplaceArgs(text) abort
+  let parts = split(a:text, '/', 1)
+  if len(parts) != 2
+    return {'msg': 'hexpair: :HexPairReplaceAll takes {pattern} / {bytes}'}
+  endif
+  return {'pattern': parts[0], 'replacement': parts[1]}
+endfunction
+
+function! s:ReplaceAll(text) abort
+  if !s:RequirePaged()
+    return
+  endif
+  try
+    if !s:IsHexView()
+      throw 'hexpair: replacing works in the hex view; :HexPairToggle first'
+    endif
+    let args = HexPairPagedSplitReplaceArgs(a:text)
+    if has_key(args, 'msg')
+      throw args.msg
+    endif
+    let pattern = HexPairPagedParseFindPattern(args.pattern)
+    if has_key(pattern, 'msg')
+      throw pattern.msg
+    endif
+    let replacement = HexPairPagedParseFindPattern(args.replacement)
+    if has_key(replacement, 'msg')
+      throw replacement.msg
+    endif
+    if replacement.hex =~# '\.'
+      throw 'hexpair: a replacement cannot have wildcards in it'
+    endif
+    call s:SetPattern(pattern, printf('bytes %s', args.pattern))
+    " On the page's CURRENT bytes, so a replacement composes with edits
+    " already made, and from the back, so replacing one does not move the
+    " ones not yet replaced.
+    let scan = s:PagedScan(0)
+    if !empty(scan.err)
+      throw 'hexpair: ' . scan.err.msg . '; nothing was replaced'
+    endif
+    let flat = substitute(join(scan.lines, ''), '[^0-9a-fA-F]', '', 'g')
+    let at = 0
+    let found = []
+    while 1
+      let idx = HexPairPagedFindInHex(flat, pattern.hex, at, 1)
+      if idx < 0
+        break
+      endif
+      call add(found, idx)
+      let at = idx + pattern.bytes * 2
+    endwhile
+    if empty(found)
+      echo printf('hexpair: %s is not on this page', s:find.what)
+      return
+    endif
+    let new = flat
+    for idx in reverse(copy(found))
+      let new = strpart(new, 0, idx) . replacement.hex
+            \ . strpart(new, idx + pattern.bytes * 2)
+    endfor
+    call s:SpliceIntoPage(0, strlen(flat) / 2, new)
+    echo printf('hexpair: %d occurrence%s replaced on this page',
+          \ len(found), len(found) == 1 ? '' : 's')
+  catch /^hexpair:/
+    echohl ErrorMsg
+    echomsg v:exception
+    echohl None
+  endtry
+endfunction
+
+" ---------------------------------------------------------------------------
 " Comparing this file with another
 " ---------------------------------------------------------------------------
 "
@@ -3440,6 +3916,7 @@ function! s:SetupPagedBuffer() abort
     autocmd BufWinLeave              <buffer> call s:PagedClearHighlight()
     autocmd BufWinLeave              <buffer> call s:ClearModifiedHighlight()
     autocmd BufWinLeave              <buffer> call s:ClearDiffHighlight()
+    autocmd BufWinLeave              <buffer> call s:ClearFindHighlight()
     " An edit that does not move the cursor - r, x on the last column -
     " raises no CursorMoved, and it is exactly the edit whose byte wants
     " marking.
@@ -3759,6 +4236,12 @@ command! -bar -bang -nargs=1 -complete=customlist,HexPairPagedMarkComplete
 command! -bar HexPairMarks call s:Marks()
 command! -bar -bang -nargs=? -complete=file HexPairDiff
       \ call s:Diff(<q-args>, '<bang>' ==# '!')
+command! -bar -bang -nargs=* HexPairFind call s:Find(<q-args>, '<bang>' ==# '!')
+command! -bar -nargs=+ HexPairFindText call s:FindText(<q-args>)
+command! -bar HexPairFindNext call s:FindRepeat(1)
+command! -bar HexPairFindPrev call s:FindRepeat(0)
+command! -bar -nargs=+ HexPairReplace call s:Replace(<q-args>)
+command! -bar -nargs=+ HexPairReplaceAll call s:ReplaceAll(<q-args>)
 command! -bar HexPairDiffNext call s:DiffJump(1)
 command! -bar HexPairDiffPrev call s:DiffJump(0)
 command! -bar -nargs=? HexPairSplit  call s:SplitView(0, <f-args>)
@@ -3788,6 +4271,8 @@ xnoremap <silent> <Plug>(HexPairSelection) :<C-U>HexPairSelection<CR>
 nnoremap <silent> <Plug>(HexPairSelection) :<C-U>HexPairSelection<CR>
 nnoremap <silent> <Plug>(HexPairInspect) :<C-U>HexPairInspect<CR>
 nnoremap <silent> <Plug>(HexPairMarks) :<C-U>HexPairMarks<CR>
+nnoremap <silent> <Plug>(HexPairFindNext) :<C-U>HexPairFindNext<CR>
+nnoremap <silent> <Plug>(HexPairFindPrev) :<C-U>HexPairFindPrev<CR>
 nnoremap <silent> <Plug>(HexPairDiffNext) :<C-U>HexPairDiffNext<CR>
 nnoremap <silent> <Plug>(HexPairDiffPrev) :<C-U>HexPairDiffPrev<CR>
 
