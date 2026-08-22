@@ -126,6 +126,13 @@ if !exists('g:hexpair_show_modified')
   let g:hexpair_show_modified = 1
 endif
 
+" Whether every command is also defined under a short "HP" name -
+" :HPFind for :HexPairFind, and so on. Set it to 0 to leave that
+" namespace alone.
+if !exists('g:hexpair_short_commands')
+  let g:hexpair_short_commands = 1
+endif
+
 " Whether the bytes that have a mark on them (|:HexPairMark|) are
 " highlighted (HexPairMark). Marks are sparse and the marking is one byte
 " wide, so this costs a walk over the file's marks whenever the page
@@ -1002,12 +1009,45 @@ function! s:ModifiedHighlight() abort
   endfor
 endfunction
 
+" Every marking is a window-local match, and a window that is SCROLLED
+" without being entered - which is what 'scrollbind' does, and what
+" vimhexdiff sets up - raises no event of its own, so its markings stay
+" where they were drawn and simply stop part way down. Each window that
+" shows a paged buffer is therefore refreshed from here; the state check
+" inside each marking makes that free for the windows that did not move.
+"
+" noautocmd, so hopping between them raises nothing (least of all another
+" CursorMoved), and the window that was current is current again at the
+" end whatever happens in between.
+function! s:RefreshOtherWindows() abort
+  if winnr('$') < 2
+    return
+  endif
+  let here = winnr()
+  try
+    let w = 1
+    while w <= winnr('$')
+      if w != here && getbufvar(winbufnr(w), 'hexpair_page_active', 0)
+        noautocmd execute w . 'wincmd w'
+        call s:ModifiedHighlight()
+        call s:DiffHighlight()
+        call s:FindHighlight()
+        call s:MarkHighlight()
+      endif
+      let w += 1
+    endwhile
+  finally
+    noautocmd execute here . 'wincmd w'
+  endtry
+endfunction
+
 function! s:PagedHighlight() abort
   call s:PagedClearHighlight()
   call s:ModifiedHighlight()
   call s:DiffHighlight()
   call s:FindHighlight()
   call s:MarkHighlight()
+  call s:RefreshOtherWindows()
   if !get(b:, 'hexpair_page_active', 0) || !s:IsHexView()
     return
   endif
@@ -2425,16 +2465,24 @@ function! HexPairPagedSelectionText(sel, total) abort
         \ a:sel.count, a:sel.count == 1 ? '' : 's', where)
 endfunction
 
-function! s:Selection() abort
+" a:reselect puts the Visual selection back before saying anything about
+" it: the report has to be asked for from the command line, which ends
+" Visual mode, and losing the selection to look at it is not a trade
+" worth making. The gv comes first and the message last, so the message
+" is what stays on the screen rather than "-- VISUAL --".
+function! s:Selection(...) abort
   if !s:RequirePaged()
     return
   endif
-  if b:hexpair_page_len <= 0
-    echo 'hexpair: this page holds no bytes'
-    return
+  let sel = b:hexpair_page_len > 0
+        \ ? HexPairPagedSelectionBytes(getpos("'<"), getpos("'>"), visualmode())
+        \ : {}
+  if a:0 && a:1
+    normal! gv
   endif
-  let sel = HexPairPagedSelectionBytes(getpos("'<"), getpos("'>"), visualmode())
-  echo HexPairPagedSelectionText(sel, b:hexpair_page_total)
+  echo b:hexpair_page_len > 0
+        \ ? HexPairPagedSelectionText(sel, b:hexpair_page_total)
+        \ : 'hexpair: this page holds no bytes'
 endfunction
 
 " ---------------------------------------------------------------------------
@@ -3339,7 +3387,7 @@ function! s:SpliceIntoPage(at, len, hex) abort
     call s:Run(printf('%s -r -p %s %s', s:xxd,
           \ shellescape(hex), shellescape(raw)))
     call s:CanonicalDump(raw, b:hexpair_page_base, dump)
-    call s:SetLines(s:HexViewLines(readfile(dump)))
+    call s:SetLinesUndoable(s:HexViewLines(readfile(dump)))
   finally
     call delete(hex)
     call delete(raw)
@@ -3926,6 +3974,51 @@ function! HexPairPagedMarkLines(marks, size, total) abort
   return ['hexpair: marks in this file:'] + out
 endfunction
 
+" Prompt for a mark to go to, completing the names as they are typed -
+" the <Plug> equivalent of |:HexPairGoMark|, which needs a typed name a
+" bare <Plug> target cannot carry. Deliberately untested, for the reason
+" given at s:PageGotoPrompt(): input() does not behave usably under this
+" project's `vim -es` harness. Everything it decides is one line.
+function! s:GoMarkPrompt(force) abort
+  if !s:RequirePaged()
+    return
+  endif
+  if empty(s:MarksOf(b:hexpair_page_file))
+    echo 'hexpair: no marks in this file'
+    return
+  endif
+  let name = input('hexpair: go to mark: ', '',
+        \ 'customlist,HexPairPagedMarkComplete')
+  redraw
+  if !empty(name)
+    call s:GoMark(name, a:force)
+  endif
+endfunction
+
+" The same for the two searches: |:HexPairFind| and |:HexPairFindText|
+" take what they look for as an argument, so their <Plug> targets ask.
+function! s:FindPrompt() abort
+  if !s:RequirePaged()
+    return
+  endif
+  let text = input('hexpair: find bytes (? = any nibble): ')
+  redraw
+  if !empty(text)
+    call s:Find(text, 0)
+  endif
+endfunction
+
+function! s:FindTextPrompt() abort
+  if !s:RequirePaged()
+    return
+  endif
+  let text = input('hexpair: find text: ')
+  redraw
+  if !empty(text)
+    call s:FindText(text)
+  endif
+endfunction
+
 function! s:Marks() abort
   if !s:RequirePaged()
     return
@@ -4346,6 +4439,24 @@ function! s:SetLines(lines) abort
   endtry
 endfunction
 
+" The same lines, as an ORDINARY edit: one undo step, and the history
+" before it kept. s:SetLines() clears that history on purpose, because it
+" is how a page is REPLACED (s:LoadPage() says why) - but a replacement
+" is an edit like any other and has to be undoable like one.
+"
+" The delete and the setline are joined into one undo block, or a single
+" u would put back an empty buffer. undojoin refuses right after an undo,
+" which is not an error worth stopping for.
+function! s:SetLinesUndoable(lines) abort
+  setlocal noreadonly modifiable
+  silent %delete _
+  try
+    undojoin
+  catch /E790/
+  endtry
+  call setline(1, a:lines)
+endfunction
+
 " The text view: the page's bytes between the two banner lines. No ruler
 " here - there are no columns to number in a page of raw text, and the
 " banner is matched by its exact text (s:TextBodyRange()), so the view
@@ -4519,6 +4630,63 @@ command! -bar HexPairDiffPrev call s:DiffJump(0)
 command! -bar -nargs=? HexPairSplit  call s:SplitView(0, <f-args>)
 command! -bar -nargs=? HexPairVSplit call s:SplitView(1, <f-args>)
 
+" ---------------------------------------------------------------------------
+" The same commands under a shorter name
+" ---------------------------------------------------------------------------
+"
+" ":HexPairReplaceAllInPage" is a lot to type at a : prompt, and the long
+" names are the documented ones precisely because they say what they do -
+" so every command gets an "HP" alias as well, with the same arguments,
+" the same bang and the same completion. Each alias is a one-line command
+" that runs the long one, so there is one implementation and no way for
+" the two to drift.
+"
+" g:hexpair_short_commands = 0 leaves the namespace alone, for anyone
+" whose own commands start with HP.
+if g:hexpair_short_commands
+  for [s:flags, s:short, s:long] in [
+        \ ['-bar', 'HPToggle', 'HexPairToggle'],
+        \ ['-bar', 'HPGoHex', 'HexPairGoHex'],
+        \ ['-bar', 'HPGoAscii', 'HexPairGoAscii'],
+        \ ['-bar', 'HPSwap', 'HexPairSwap'],
+        \ ['-bar', 'HPRefresh', 'HexPairRefresh'],
+        \ ['-bar -bang -nargs=+ -complete=file', 'HPOpen', 'HexPairOpen'],
+        \ ['-bar -bang', 'HPPageNext', 'HexPairPageNext'],
+        \ ['-bar -bang', 'HPPagePrev', 'HexPairPagePrev'],
+        \ ['-bar -bang -nargs=1', 'HPPageGoto', 'HexPairPageGoto'],
+        \ ['-bar -bang -nargs=1', 'HPGoOffset', 'HexPairGoOffset'],
+        \ ['-bar', 'HPPages', 'HexPairPages'],
+        \ ['-bar', 'HPSelection', 'HexPairSelection'],
+        \ ['-bar', 'HPInspect', 'HexPairInspect'],
+        \ ['-bar -nargs=1', 'HPMark', 'HexPairMark'],
+        \ ['-bar -nargs=1 -complete=customlist,HexPairPagedMarkComplete',
+        \  'HPMarkDelete', 'HexPairMarkDelete'],
+        \ ['-bar -bang -nargs=1 -complete=customlist,HexPairPagedMarkComplete',
+        \  'HPGoMark', 'HexPairGoMark'],
+        \ ['-bar', 'HPMarks', 'HexPairMarks'],
+        \ ['-bar -bang -nargs=? -complete=file', 'HPDiff', 'HexPairDiff'],
+        \ ['-bar', 'HPDiffNext', 'HexPairDiffNext'],
+        \ ['-bar', 'HPDiffPrev', 'HexPairDiffPrev'],
+        \ ['-bar -bang -nargs=*', 'HPFind', 'HexPairFind'],
+        \ ['-bar -nargs=+', 'HPFindText', 'HexPairFindText'],
+        \ ['-bar', 'HPFindNext', 'HexPairFindNext'],
+        \ ['-bar', 'HPFindPrev', 'HexPairFindPrev'],
+        \ ['-bar -nargs=+', 'HPReplace', 'HexPairReplace'],
+        \ ['-bar -nargs=+', 'HPReplaceAllInPage', 'HexPairReplaceAllInPage'],
+        \ ['-bar -nargs=?', 'HPSplit', 'HexPairSplit'],
+        \ ['-bar -nargs=?', 'HPVSplit', 'HexPairVSplit'],
+        \ ]
+    " <bang> and <args> are only substituted where the flags allow them,
+    " so the body is built to match what this command takes.
+    let s:body = s:long
+          \ . (s:flags =~# '-bang' ? '<bang>' : '')
+          \ . (s:flags =~# '-nargs' ? ' <args>' : '')
+    execute printf('command! %s %s %s', s:flags, s:short, s:body)
+  endfor
+  unlet! s:flags s:short s:long s:body
+endif
+
+
 " No default key mappings are defined; map the <Plug> mappings (or the
 " commands directly) in your vimrc, e.g.:
 "   nmap <Leader>j <Plug>(HexPairPageNext)
@@ -4539,10 +4707,17 @@ nnoremap <silent> <Plug>(HexPairPages) :<C-U>HexPairPages<CR>
 " Both modes: from Visual mode it reports the selection being made (the
 " :<C-U> leaves Visual mode, which is what sets '< and '>), from Normal
 " mode the one made last.
-xnoremap <silent> <Plug>(HexPairSelection) :<C-U>HexPairSelection<CR>
+" The Visual one puts the selection back; the Normal one reports the
+" selection made last.
+xnoremap <silent> <Plug>(HexPairSelection) :<C-U>call <SID>Selection(1)<CR>
 nnoremap <silent> <Plug>(HexPairSelection) :<C-U>HexPairSelection<CR>
 nnoremap <silent> <Plug>(HexPairInspect) :<C-U>HexPairInspect<CR>
 nnoremap <silent> <Plug>(HexPairMarks) :<C-U>HexPairMarks<CR>
+" The prompting counterparts of the commands that need an argument.
+nnoremap <silent> <Plug>(HexPairGoMark) :<C-U>call <SID>GoMarkPrompt(0)<CR>
+nnoremap <silent> <Plug>(HexPairGoMarkForce) :<C-U>call <SID>GoMarkPrompt(1)<CR>
+nnoremap <silent> <Plug>(HexPairFind) :<C-U>call <SID>FindPrompt()<CR>
+nnoremap <silent> <Plug>(HexPairFindText) :<C-U>call <SID>FindTextPrompt()<CR>
 nnoremap <silent> <Plug>(HexPairFindNext) :<C-U>HexPairFindNext<CR>
 nnoremap <silent> <Plug>(HexPairFindPrev) :<C-U>HexPairFindPrev<CR>
 nnoremap <silent> <Plug>(HexPairDiffNext) :<C-U>HexPairDiffNext<CR>

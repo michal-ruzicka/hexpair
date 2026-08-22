@@ -45,6 +45,18 @@ and this project adheres to
   to `DiffChange` rather than the closer-sounding `DiffText`, whose own
   default is a red background with no foreground — black on red for
   anyone with a light background.
+- **Every command under a short name too**: `:HPFind`, `:HPToggle`,
+  `:HPReplaceAllInPage` - same arguments, same bang, same completion,
+  because `:HexPair…` is a lot to type at a `:` prompt.
+  `g:hexpair_short_commands = 0` leaves that namespace alone.
+- **Prompting `<Plug>` targets** for the three commands that take
+  something typed: `<Plug>(HexPairGoMark)` (with the mark names
+  completed), `<Plug>(HexPairFind)` and `<Plug>(HexPairFindText)` - the
+  same shape `<Plug>(HexPairPageGoto)` has had. The Visual-mode
+  `<Plug>(HexPairSelection)` also puts the selection back when it has
+  reported on it: asking about a selection from the `:` line is what
+  ends Visual mode, and losing it to look at it is not a trade worth
+  making.
 - **`:HexPairGoOffset +N` / `-N`** steps from the byte the cursor is on,
   crossing pages like a position does.
 - **`:HexPairOpen!`** abandons a modified buffer in the window, the bang
@@ -156,6 +168,19 @@ and this project adheres to
   by lambda expressions the plugin no longer uses, and a Limitations
   section still describing undo across the conversion boundary and a
   plugin that "operates on the whole buffer", which paging replaced.
+
+### Fixed (during the internal iterations)
+- **A replacement could not be undone.** `:HexPairReplace` and
+  `:HexPairReplaceAllInPage` rebuilt the page through the same path that
+  LOADS one, which clears the undo history on purpose - so an edit made
+  by a command could not be taken back the way a typed one can. They
+  make an ordinary edit now, and one `u` takes the whole replacement
+  back.
+- **The markings stopped part way down a window that was scrolled but
+  not entered** - which is what `'scrollbind'` does, and what
+  `vimhexdiff` sets up: a window that is not entered raises no event, so
+  its matches stayed where they had been drawn. Every window showing a
+  page is refreshed now, from whichever one the cursor is in.
 
 ## [v2.0.0] – 2026-08-21
 

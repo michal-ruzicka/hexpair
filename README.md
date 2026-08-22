@@ -173,10 +173,13 @@ nmap <Leader>? <Plug>(HexPairPages)         " where am I: page, range, cursor by
 " Reading the bytes
 nmap <Leader>i <Plug>(HexPairInspect)       " the bytes at the cursor as numbers
 nmap <Leader>s <Plug>(HexPairSelection)     " how many bytes the last selection was
-xmap <Leader>s <Plug>(HexPairSelection)     " ... and the one being made now
+xmap <Leader>s <Plug>(HexPairSelection)     " ... and the one being made now (kept)
 nmap <Leader>m <Plug>(HexPairMarks)         " list the marks in this file
+nmap <Leader>M <Plug>(HexPairGoMark)        " prompt for a mark to go to
 
 " Searching, and comparing with another file
+nmap <Leader>/ <Plug>(HexPairFind)          " prompt for bytes to find
+nmap <Leader>t <Plug>(HexPairFindText)      " prompt for text to find
 nmap <Leader>n <Plug>(HexPairFindNext)      " next match of the last pattern
 nmap <Leader>N <Plug>(HexPairFindPrev)      " previous match
 nmap <Leader>] <Plug>(HexPairDiffNext)      " next byte that differs
@@ -192,7 +195,8 @@ nmap <Leader>B <Plug>(HexPairGoOffsetForce)
 
 Note the `xmap` in the third block: it is the same `<Plug>` target in
 **Visual** mode, where it reports the selection you are making rather
-than the last one. Every other target is Normal-mode only. The commands
+than the last one — and puts the selection back afterwards, since asking
+about it from the `:` line is what ends Visual mode. Every other target is Normal-mode only. The commands
 that take an argument — `:HexPairFind`, `:HexPairReplace`,
 `:HexPairDiff`, `:HexPairMark`, `:HexPairSplit`, `:HexPairOpen` — have no
 `<Plug>` target, so there is nothing to map for them.
@@ -288,6 +292,11 @@ page. Close and reopen the file for the ordinary view.
 | `:HexPairDiffNext` / `:HexPairDiffPrev` | Walk to the next/previous byte where the two files differ |
 | `:HexPairMark {name}` / `:HexPairGoMark[!] {name}` / `:HexPairMarks` / `:HexPairMarkDelete {name}` | Remember a byte of the file, jump back to it, list them, drop one |
 | `:HexPairSplit [page]` / `:HexPairVSplit [page]` | A second view of the same file in a new window, showing `[page]` (default: this view's) |
+
+Every command answers to a short name as well — `:HPFind`,
+`:HPReplaceAllInPage`, `:HPToggle` — because `:HexPair…` is a lot to type
+at a `:` prompt. Same arguments, same bang, same completion;
+`g:hexpair_short_commands = 0` leaves that namespace alone.
 
 ### Reading the bytes
 
@@ -520,6 +529,10 @@ values shown are the defaults, so uncomment a line only to change one.
 
 " Whether the byte a mark stands on is underlined on the page.
 " let g:hexpair_show_marks = 1
+
+" Whether every command is also defined under a short "HP" name -
+" :HPFind for :HexPairFind, and so on.
+" let g:hexpair_short_commands = 1
 
 " Highlight overrides: the byte under the cursor, its counterpart in the
 " other column, the banner (and ruler) lines, the bytes changed since the

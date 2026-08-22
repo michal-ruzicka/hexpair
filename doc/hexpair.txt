@@ -257,6 +257,8 @@ last byte, and on a short last line on its last existing byte.
                             *<Plug>(HexPairGoOffset)* *<Plug>(HexPairGoOffsetForce)*
                                                           *<Plug>(HexPairPages)*
                        *<Plug>(HexPairInspect)* *<Plug>(HexPairSelection)*
+             *<Plug>(HexPairGoMark)* *<Plug>(HexPairGoMarkForce)*
+                             *<Plug>(HexPairFind)* *<Plug>(HexPairFindText)*
 The plugin defines NO key mappings by default; it only provides the
 commands above and <Plug> mappings.  Choose your own keys in your vimrc.
 Every command that takes no argument has a target; the whole set, on a
@@ -280,6 +282,14 @@ Every command that takes no argument has a target; the whole set, on a
     nmap <Leader>i <Plug>(HexPairInspect)
     nmap <Leader>s <Plug>(HexPairSelection)
     xmap <Leader>s <Plug>(HexPairSelection)
+    nmap <Leader>m <Plug>(HexPairMarks)
+    nmap <Leader>M <Plug>(HexPairGoMark)
+
+    " Searching
+    nmap <Leader>/ <Plug>(HexPairFind)
+    nmap <Leader>t <Plug>(HexPairFindText)
+    nmap <Leader>n <Plug>(HexPairFindNext)
+    nmap <Leader>N <Plug>(HexPairFindPrev)
 
     " The same, discarding unwritten changes without asking - as the !
     " commands do; handy for reading through a file rather than editing it
@@ -299,6 +309,16 @@ offset (decimal, or 0x-prefixed), Enter.  An empty answer cancels.
 |<Plug>(HexPairSelection)| is the one target worth mapping in TWO modes:
 in Visual mode it reports the selection you are making, in Normal mode
 the one you made last.  Map it with both `xmap` and `nmap`, as above.
+The Visual one puts the selection back when it is done - asking about a
+selection from the `:` line is what ends it, and losing it to look at it
+is not a trade worth making.
+
+|<Plug>(HexPairGoMark)|, |<Plug>(HexPairFind)| and
+|<Plug>(HexPairFindText)| prompt for what their commands take as an
+argument, the way |<Plug>(HexPairPageGoto)| does: press the key, type a
+mark name (completed as you type), a byte pattern or a string, Enter.
+An empty answer cancels.  |<Plug>(HexPairGoMarkForce)| is the mark
+prompt that discards unwritten changes, like |:HexPairGoMark|!.
 
 Or map the commands directly: >
 
@@ -412,6 +432,22 @@ g:hexpair_show_modified Whether the bytes that differ from the ones on
                         It costs one copy of the page's bytes as hex -
                         256 KB for the default 128 KiB page - which is the
                         same read the freshness check already needed.
+
+                                                  *g:hexpair_short_commands*
+g:hexpair_short_commands
+                        Whether every command is also defined under a
+                        short "HP" name - |:HPFind| for |:HexPairFind|,
+                        :HPReplaceAllInPage for
+                        |:HexPairReplaceAllInPage|, and so on for all of
+                        them.  Default: 1. >
+
+    let g:hexpair_short_commands = 0
+<
+                        Each short name is a one-line command that runs
+                        the long one, so the arguments, the bang and the
+                        completion come along and there is nothing for
+                        the two to disagree about.  Set it to 0 if
+                        commands of your own start with HP.
 
                                                        *g:hexpair_split_views*
 g:hexpair_split_views   Whether a window that ends up showing a page a
@@ -749,7 +785,8 @@ HexPairOpenFile({file} [, {page}])
 <
                         Both edit the PAGE, exactly as typing over the
                         dump would: the new bytes are marked as changed
-                        (|HexPairModified|), nothing reaches the file
+                        (|HexPairModified|), one |u| takes the whole
+                        replacement back, nothing reaches the file
                         until |:w| does, and a replacement of a different
                         length goes through the same length-changing
                         write - with the same question about what it will

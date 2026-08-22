@@ -78,6 +78,13 @@ else
 fi
 
 FAIL=0
+# Counted and named, for the summary at the end: a CI log is read from
+# the bottom and is often truncated in the middle, so "which ones failed"
+# has to be there rather than only next to each failure. The count is
+# the other half of it - a block of tests that stops being generated
+# fails nothing and is simply absent, which only a number can show.
+CHECKS=0
+FAILED=
 
 # Same, for an expected string carrying a path: Windows spells the
 # separator the other way round - fnamemodify(':p') returns backslashes
@@ -88,12 +95,15 @@ check_path() { # name expected actual
 }
 
 check() { # name expected actual
+    CHECKS=$((CHECKS + 1))
     if [ "$2" = "$3" ]; then
         echo "ok   - $1"
     else
         echo "FAIL - $1"
         echo "       expected: $2"
         echo "       actual:   $3"
+        FAILED="$FAILED$1
+"
         FAIL=1
     fi
 }
@@ -153,6 +163,13 @@ for name in ('paged21.bin', 'paged22.bin', 'paged23.bin', 'paged31.bin', 'paged3
 for name in ('scan1.bin', 'scan2.bin'):
     with open(os.path.join(w, name), 'wb') as f:
         f.write(bytes((i * 7) % 256 for i in range(100000)))
+# replace-and-undo fixture: a two-byte sequence once, and twice in a row
+_ru = bytearray(b'A' * 512)
+_ru[8:10] = b'\xc5\xa1'
+_ru[37:41] = b'\xc5\xa1\xc5\xa1'
+open(os.path.join(w, 'repu1.bin'), 'wb').write(bytes(_ru))
+# short-name fixture
+open(os.path.join(w, 'short1.bin'), 'wb').write(bytes(i % 256 for i in range(5000)))
 # text-view fixtures: the same needle, and a copy differing on page 4
 _tv = bytearray(bytes(i % 256 for i in range(5000)))
 _tv[300:304] = b'\xde\xad\xbe\xef'
@@ -1214,6 +1231,7 @@ $(printf "$PAGEDW")
 let dir = fnamemodify(tempname(), ':h')
 HexPairOpen $WORK/sp4.bin 2
 let ro = &l:readonly
+let before = len(glob(dir . '/*', 0, 1))
 call append(1, 'aa bb cc')
 let refused = ''
 try
@@ -1221,7 +1239,10 @@ try
 catch
   let refused = 'refused'
 endtry
-let temps = len(glob(dir . '/*', 0, 1))
+" What the refused write ADDED, never what the directory holds: on
+" Windows tempname() names files straight in the shared %TEMP%, which is
+" full of other people's - measured there as 16 of them.
+let temps = len(glob(dir . '/*', 0, 1)) - before
 let failed = ''
 try
   write!
@@ -3099,10 +3120,101 @@ check "replacing says which view it wants" \
     "hexpair: replacing works in the hex view; :HexPairToggle first" \
     "$(sed -n 6p "$WORK/ttv5.out")"
 
+# ===========================================================================
+# Replacing is an edit, and the short names are the same commands
+# ===========================================================================
+# What a replacement does to the page is an edit like any typed one, so a
+# single u has to take it back - the page-loading path clears the undo
+# history on purpose, and a replacement must not go through that.
+cat > "$WORK/trepu.vim" <<EOF
+$(printf "$HEX")
+HexPairOpen $WORK/repu1.bin 1
+let out = []
+redir => msg
+silent HexPairReplaceAllInPage c5 a1 / 69
+redir END
+call add(out, matchstr(msg, 'hexpair:.*'))
+let flat = substitute(join(HexPairPagedScanLines(), ''), '[^0-9a-fA-F]', '', 'g')
+call add(out, string([strlen(flat) / 2, strpart(flat, 16, 16), strpart(flat, 72, 16), &l:modified]))
+undo
+let back = substitute(join(HexPairPagedScanLines(), ''), '[^0-9a-fA-F]', '', 'g')
+call add(out, string([strlen(back) / 2, strpart(back, 16, 16), &l:modified]))
+call writefile(out, '$WORK/trepu.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/trepu.vim" < /dev/null
+check "every occurrence is replaced, and each one on its own" \
+    "hexpair: 3 occurrences replaced on this page" "$(sed -n 1p "$WORK/trepu.out")"
+# Two bytes became one, three times - so 512 bytes became 509. Where two
+# occurrences sat next to each other, two single bytes come out of it:
+# that is two replacements, not one gone wrong.
+check "two bytes become one, and two next to each other become two" \
+    "[509, '6941414141414141', '6969414141414141', 1]" \
+    "$(sed -n 2p "$WORK/trepu.out")"
+check "and one undo takes the whole replacement back" \
+    "[512, 'c5a1414141414141', 0]" "$(sed -n 3p "$WORK/trepu.out")"
+
+# --- The HP names are the HexPair ones ------------------------------------
+# One implementation, two names: the short one is a command whose body is
+# the long one, so bang, arguments and completion come along.
+cat > "$WORK/tshort.vim" <<EOF
+$(printf "$HEX")
+HPOpen $WORK/short1.bin 3
+let out = [HexPairStatus()]
+HPPageGoto \$
+call add(out, HexPairStatus())
+HPGoOffset +16
+call add(out, HexPairStatus())
+HPMark here
+redir => msg
+silent HPMarks
+redir END
+call add(out, matchstr(msg, 'here[^\n]*'))
+silent HPFind 00 01 02
+call add(out, HexPairStatus())
+call add(out, [exists(':HPFind'), exists(':HPReplaceAllInPage'), exists(':HexPairFind')])
+call writefile([string(out)], '$WORK/tshort.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tshort.vim" < /dev/null
+check "the short names take the same pages, steps, marks and patterns" \
+    "['hex 3/10 @0x401 (1025)', 'hex 10/10 @0x1201 (4609)', 'hex 10/10 @0x1211 (4625)', 'here             byte 4625 (0x1211) of 5000, page 10', 'hex 10/10 @0x1301 (4865)', [2, 2, 2]]" \
+    "$(cat "$WORK/tshort.out")"
+
+# ... and the namespace can be left alone, for anyone whose own commands
+# start with HP.
+cat > "$WORK/tshort2.vim" <<EOF
+let g:hexpair_short_commands = 0
+source $PLUGIN
+call writefile([string([exists(':HPFind'), exists(':HexPairFind')])], '$WORK/tshort2.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tshort2.vim" < /dev/null
+check "and can be turned off without touching the long ones" "[0, 2]" \
+    "$(cat "$WORK/tshort2.out")"
+
+# --- Another window's markings are refreshed from this one ----------------
+# A window that is scrolled without being entered - 'scrollbind' - raises
+# no event of its own. Refreshing the others must leave the current window
+# current, whatever it finds in them.
+cat > "$WORK/twin.vim" <<EOF
+$(printf "$HEX")
+HexPairOpen $WORK/short1.bin 3
+HexPairSplit 5
+let here = winnr()
+call cursor(4, 11)
+call writefile([string([here, winnr(), winnr('\$'), b:hexpair_page_index + 1])], '$WORK/twin.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/twin.vim" < /dev/null
+check "refreshing the other windows leaves this one current" "[1, 1, 2, 5]" \
+    "$(cat "$WORK/twin.out")"
+
 # ---------------------------------------------------------------------------
 if [ "$FAIL" -eq 0 ]; then
-    echo "All tests passed."
+    echo "All tests passed ($CHECKS checks)."
 else
-    echo "Some tests FAILED." >&2
+    echo "Some tests FAILED ($CHECKS checks):" >&2
+    printf '%s' "$FAILED" | sed 's/^/  FAILED: /' >&2
 fi
 exit $FAIL
