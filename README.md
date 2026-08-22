@@ -85,6 +85,20 @@ code, releases and issue tracker.
 - **Column navigation.** Commands to jump between the HEX and ASCII
   representation of the byte under the cursor, or to swap to the
   opposite column.
+- **Search that knows the file, not the page.** `:HexPairFind de ad be ef`
+  looks through the whole file a block at a time and lands on the byte it
+  found, turning the page on the way; `?` stands for any nibble, and
+  `:HexPairFindText` takes a string. `:HexPairReplace` and
+  `:HexPairReplaceAll` put new bytes over what was found.
+- **Changed bytes are visible.** Everything edited and not yet written is
+  marked in both columns (`HexPairModified`), so an edit in a dump does
+  not look exactly like everything around it.
+- **Compare with another file.** `:HexPairDiff other.bin` marks every byte
+  of the page that differs from the same offset of `other.bin`, and
+  `:HexPairDiffNext` walks the whole file for the next disagreement. The
+  bundled `vimhexdiff a b` opens both files side by side that way.
+- **Marks that survive page turns.** `:HexPairMark header` remembers a
+  byte of the *file*, not a line of a buffer.
 - **A data inspector.** `:HexPairInspect` reads the bytes at the cursor
   as the numbers they could be — 8, 16, 32 and 64 bits wide, unsigned
   and signed, little- and big-endian, plus `float32` and `float64` —
@@ -158,6 +172,13 @@ nmap <Leader>? <Plug>(HexPairPages)         " where am I: page, range, cursor by
 nmap <Leader>i <Plug>(HexPairInspect)       " the bytes at the cursor as numbers
 nmap <Leader>s <Plug>(HexPairSelection)     " how many bytes the last selection was
 xmap <Leader>s <Plug>(HexPairSelection)     " ... and the one being made now
+nmap <Leader>m <Plug>(HexPairMarks)         " list the marks in this file
+
+" Searching, and comparing with another file
+nmap <Leader>n <Plug>(HexPairFindNext)      " next match of the last pattern
+nmap <Leader>N <Plug>(HexPairFindPrev)      " previous match
+nmap <Leader>] <Plug>(HexPairDiffNext)      " next byte that differs
+nmap <Leader>[ <Plug>(HexPairDiffPrev)      " previous one
 
 " Uppercase variants: the same, but discard unwritten changes without
 " asking (like the ! commands) - handy for skimming through a file.
@@ -167,10 +188,12 @@ nmap <Leader>G <Plug>(HexPairPageGotoForce)
 nmap <Leader>B <Plug>(HexPairGoOffsetForce)
 ```
 
-Note the `xmap` on the last line of the third block: it is the same
-`<Plug>` target in **Visual** mode, where it reports the selection you
-are making rather than the last one. The other targets are Normal-mode
-only.
+Note the `xmap` in the third block: it is the same `<Plug>` target in
+**Visual** mode, where it reports the selection you are making rather
+than the last one. Every other target is Normal-mode only. The commands
+that take an argument — `:HexPairFind`, `:HexPairReplace`,
+`:HexPairDiff`, `:HexPairMark`, `:HexPairSplit`, `:HexPairOpen` — have no
+`<Plug>` target, so there is nothing to map for them.
 
 `:HexPairOpen {file}` takes an argument, so it has no `<Plug>` target;
 it is meant for the command line or a shell wrapper (see below).
@@ -250,10 +273,18 @@ page. Close and reopen the file for the ordinary view.
 | `:HexPairRefresh` | Regenerate the offset and ASCII columns from the current hex payload, without writing |
 | `:HexPairOpen {file} [page]` | Open `{file}` paged, without loading it; `[page]` takes `$` and `+N`/`-N` too |
 | `:HexPairPageNext[!]` / `:HexPairPagePrev[!]` / `:HexPairPageGoto[!] {page}` | Turn pages (`!` discards unwritten changes); `{page}` is a number, `+N`/`-N` to step, or `$` for the last one |
-| `:HexPairGoOffset[!] {byte}` | Jump to a byte, decimal or `0x`-prefixed, turning the page if needed; 1-based, like the banner |
+| `:HexPairGoOffset[!] {byte}` | Jump to a byte, decimal or `0x`-prefixed, turning the page if needed; 1-based, like the banner. `+N` / `-N` step from where the cursor is |
 | `:HexPairPages` | Report page X of Y, the offsets covered, the file size and the byte under the cursor |
 | `:HexPairInspect` | Read the bytes at the cursor as numbers: 8/16/32/64-bit, unsigned and signed, both endiannesses, and both IEEE 754 floats |
 | `:HexPairSelection` | Say how many bytes the Visual selection covers, and which |
+| `:HexPairFind[!] {bytes}` | Find those bytes in the file (`?` = any nibble); `!` forgets the pattern |
+| `:HexPairFindText {string}` | The same, for the bytes of a string |
+| `:HexPairFindNext` / `:HexPairFindPrev` | Repeat the search either way (obeys `'wrapscan'`) |
+| `:HexPairReplace {bytes}` | Put those bytes over the match under the cursor |
+| `:HexPairReplaceAll {pattern} / {bytes}` | ... over every match on this page |
+| `:HexPairDiff[!] [file]` | Compare with `{file}`, marking the bytes that differ; `!` stops |
+| `:HexPairDiffNext` / `:HexPairDiffPrev` | Walk to the next/previous byte where the two files differ |
+| `:HexPairMark {name}` / `:HexPairGoMark[!] {name}` / `:HexPairMarks` / `:HexPairMarkDelete {name}` | Remember a byte of the file, jump back to it, list them, drop one |
 | `:HexPairSplit [page]` / `:HexPairVSplit [page]` | A second view of the same file in a new window, showing `[page]` (default: this view's) |
 
 ### Reading the bytes
@@ -318,6 +349,66 @@ Where the pages come from depends on what the buffer was:
 - **modified and backed by a file** — refused, because the buffer and
   the file disagree and every way of resolving that loses something
   quietly. Write it first, or use `:HexPairOpen` to see what is on disk.
+
+### Searching, replacing, comparing
+
+`/` searches the page on screen — which is a window on the file, so it
+cannot find what is on any other page, and a sequence of bytes in a dump
+has spaces, line breaks and an ASCII column through the middle of it.
+`:HexPairFind` searches the **file**:
+
+```vim
+:HexPairFind de ad be ef      " or deadbeef, or de ?? be ef
+:HexPairFindText PK\x03\x04    " the bytes of a string
+:HexPairFindNext              " and again, obeying 'wrapscan'
+```
+
+Every match on the page is marked (`HexPairFind`), and the search lands
+the cursor on the byte it found, turning the page if it is elsewhere.
+
+```vim
+:HexPairReplace 11 22 33 44                 " over the match under the cursor
+:HexPairReplaceAll de ad be ef / 00 00      " over every match on this page
+```
+
+Both edit the page exactly as typing over the dump would: the new bytes
+are marked as changed, and nothing reaches the file until `:w` does — so
+a replacement of a different length asks the same question any other
+insertion or deletion asks. Replace-all is scoped to the page you are on,
+which is the unit everything here writes in.
+
+Comparing with another file works the same way round:
+
+```vim
+:HexPairDiff ../golden/firmware.bin   " mark what differs on this page
+:HexPairDiffNext                      " the next differing byte, wherever it is
+:HexPairDiff!                         " stop comparing
+```
+
+and the shell wrapper opens two files that way in one go:
+
+```sh
+vimhexdiff old.img new.img
+```
+
+— both files side by side, each marking what differs from the other,
+cursors on the first difference and the windows scroll-bound.
+
+### Marks
+
+Vim's own marks are positions in a *buffer*, and a paged buffer holds a
+different part of the file from one page to the next. These are positions
+in the **file**:
+
+```vim
+:HexPairMark header      " remember the byte under the cursor
+:HexPairGoMark header    " go back to it, wherever it is
+:HexPairMarks            " list them, by position, with the page each is on
+:HexPairMarkDelete header
+```
+
+They are kept per file, so two views of one file share them, and they
+last as long as the Vim session does.
 
 ### Two views of one file
 
@@ -403,11 +494,20 @@ values shown are the defaults, so uncomment a line only to change one.
 " byte. Set it to 1 and read the trace with :messages.
 " let g:hexpair_debug = 0
 
+" Whether the bytes that differ from the ones on disk - what you have
+" edited and not yet written - are highlighted. Set it to 0 to stop.
+" let g:hexpair_show_modified = 1
+
 " Highlight overrides: the byte under the cursor, its counterpart in the
-" other column, and the banner (and ruler) lines.
+" other column, the banner (and ruler) lines, the bytes changed since the
+" page was read, the bytes that differ from the file being compared
+" against, and the matches of the last search.
 " highlight HexPairActive cterm=bold,underline gui=bold,underline
 " highlight HexPairMirror ctermbg=52 guibg=#5f0000
 " highlight link HexPairPageBanner Comment
+" highlight link HexPairModified DiffText
+" highlight link HexPairDiff DiffAdd
+" highlight link HexPairFind Search
 
 " The page and the byte under the cursor, in the statusline. Empty in
 " every buffer hexpair has not touched, so one statusline serves both.

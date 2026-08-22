@@ -256,6 +256,8 @@ come back**; each names the test that would catch it.
 | `g:hexpair_debug` was documented but no longer implemented at all | "the trace says both directions of the mapping" |
 | A second `:HexPairOpen` of one file died with E95: the buffer name was the file's alone | "a split is a second view, on the page it names" |
 | Freshness keyed on the file's mtime, so one view writing locked every other view of that file out of writing | "one view writing does not lock the other out" — and its counter-case, two views of the SAME page |
+| `:HexPairReplace` decided "is the cursor on a match?" from the page as READ, so a second replace on the same spot overwrote bytes that were no longer a match | "the cursor has to be on a match to replace it" |
+| A hex index is a nibble: `match()` on a run of hex finds patterns starting on the wrong half of a byte | "a match must start on a byte, not between two" |
 | The cursor in the gap between the hex and ASCII columns reported the NEXT line's first byte, because the pairs counted before it were the whole line's | "and it is the byte the layout says" — which pins the gap column too |
 | `count` is a read-only Vim variable (`v:count`), so a local named that aborts the function it is in with E46 | caught by the selection tests; do not name a local `count`, `errmsg`, `line`… |
 
@@ -281,6 +283,17 @@ is 32 failures, all of them the splice paths — shortening a file,
 refused with the `readblob()` gate message. Anything else failing there
 is a regression in the baseline. The suite itself must stay 8.0-clean
 too: no `trim()`, no Blob literal, no `count()` over a string.
+
+**The property test** (`test/run-tests.sh`, "Property: any shape of dump
+writes the bytes it spells") renders one page's bytes in six shapes a
+seeded generator invents — offsets or not, ASCII column or not, either
+case, lines of two to sixty-four digits, empty lines through the middle —
+and requires each write to produce exactly the bytes python says. When it
+fails, the round number names the shape. Note the one shape it must NOT
+generate, and why: a line with an ASCII column but no offset column,
+whose ASCII part contains a ':' (byte 0x3a), has that colon read as the
+end of an offset column — the rule working as written (invariant 1), not
+a case to hold the write path to.
 
 **Gotcha for any new `plugin/*.vim` file**: `vim -es -u NONE` (this
 suite's harness, with no vimrc) starts in `'compatible'` mode, whose
@@ -595,6 +608,45 @@ was designed and built in Stage 2 - see "What Stage 2 decided".
   a change to the rest of the file, which is what made two views of one
   file impossible to write from (see below). A successful check adopts
   the new mtime, so the fallback path does not go on complaining.
+- Finding, comparing and marking all rest on **one file read helper**,
+  `s:FileHex(file, off, len)` — a byte range of any file as one flat run
+  of lowercase hex — and on two ways of looking at such a run:
+  - `HexPairPagedFindInHex()` — where a pattern matches, **on a byte
+    boundary**: an index into hex is a nibble and half of them are the
+    wrong half, which is the one thing every caller of `match()` here
+    has to remember.
+  - `HexPairPagedFirstDifference()` / `LastDifference()` — where two runs
+    part company, by **halving**, never by walking: comparing two strings
+    is one C-level operation and a block is megabytes of hex. One string
+    being a prefix of the other IS a difference, at the point where the
+    shorter one ends (that is how a longer file compares).
+  Blocks overlap by the pattern's length less one byte, so a match across
+  a seam is whole in one of them; the diff needs no overlap, since a
+  difference is one byte wide.
+- `HexPairPagedComparePositions(first, last, hex)` — the shared body of
+  every byte-level marking: compare the lines on screen against a run of
+  hex at the position the layout puts them, and give back
+  `matchaddpos()` runs for both columns. Three callers, three groups:
+  the modified bytes (against `b:hexpair_page_hex`, the page as read),
+  the diff (against the other file's bytes for this page), and the
+  search (`HexPairPagedFindPositions()`, from the match list). Each
+  caches on its own `w:` state (`[pattern/tick, page, w0, w$]`) so a
+  plain cursor movement redraws nothing.
+- **`:HexPairReplace` checks the BUFFER, the marking shows the FILE.**
+  The two part company as soon as anything is replaced — the file still
+  holds the pattern where the buffer no longer does — and a second
+  replace on the spot would otherwise overwrite bytes that are no longer
+  a match. The marking stays about the file because that is what makes
+  it free to draw; an edit shows as a changed byte instead.
+- `s:SpliceIntoPage()` — how both replace commands edit: splice the new
+  hex into the page's current digit run and rebuild the view through the
+  same `s:CanonicalDump()`/`s:HexViewLines()` the toggle uses. Nothing
+  new touches the file: `:w` writes it, and a length change meets the
+  same confirmation as any other insert or delete.
+- `s:marks` — absolute byte offsets per FILE, not per buffer, so two
+  views share them and a page turn cannot disturb them. Vim's own marks
+  cannot do this: a paged buffer holds a different part of the file from
+  one page to the next.
 - `s:WindowView()` — the `WinEnter` half of the same feature, behind
   `g:hexpair_split_views` (default 0): a window that has just become the
   SECOND one showing a page turns into a view of its own. `WinEnter`

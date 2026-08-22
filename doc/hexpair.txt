@@ -365,6 +365,24 @@ g:hexpair_ruler         A ruler line between the top banner and the dump,
                         The text view has no ruler - there are no columns
                         to number in a page of raw bytes.
 
+                                                    *g:hexpair_show_modified*
+g:hexpair_show_modified Whether the bytes that differ from the ones on
+                        disk - what has been edited and not yet written -
+                        are marked with |HexPairModified|.  Default: 1. >
+
+    let g:hexpair_show_modified = 0
+<
+                        What it compares is the POSITION, not the edit
+                        history: after an insertion every byte behind it
+                        is marked, because those offsets really do hold
+                        something else now.  Only the lines on screen are
+                        compared, and only when the page changes or
+                        scrolls.
+
+                        It costs one copy of the page's bytes as hex -
+                        256 KB for the default 128 KiB page - which is the
+                        same read the freshness check already needed.
+
                                                        *g:hexpair_split_views*
 g:hexpair_split_views   Whether a window that ends up showing a page a
                         SECOND time becomes an independent view of the
@@ -431,6 +449,13 @@ HexPairStatus()         The view, the page and the byte under the cursor,
                         cursor moves what follows; |:HexPairPages| counts
                         the digits actually there and is the exact answer.
 
+                   *HexPairModified* *HexPairDiff* *HexPairFind-highlight*
+The three markings that are about bytes rather than about the cursor: >
+
+    highlight link HexPairModified DiffText   " edited, not yet written
+    highlight link HexPairDiff     DiffAdd    " differs from |:HexPairDiff|'s file
+    highlight link HexPairFind     Search     " a match of |:HexPairFind|
+<
                                                 *HexPairActive* *HexPairMirror*
 HexPairActive           Highlight for the byte representation in the column
                         the cursor is currently in.  Default: underline.
@@ -614,6 +639,112 @@ HexPairOpenFile({file} [, {page}])
                         exactly the form |:HexPairGoOffset| and vimhex's
                         @BYTE take, so where you are can be written down
                         and gone back to.
+
+                        *:HexPairFind* *:HexPairFindText* *hexpair-find*
+                            *:HexPairFindNext* *:HexPairFindPrev*
+:HexPairFind[!] {bytes} Find {bytes} in the FILE, from the byte after the
+                        cursor, and go there - turning the page if the
+                        match is on another one.  |/| cannot do this: it
+                        searches the page on screen, which is a window on
+                        the file, and a sequence of bytes in a dump has
+                        spaces, line breaks and an ASCII column through
+                        the middle of it. >
+
+                            :HexPairFind de ad be ef
+                            :HexPairFind deadbeef
+                            :HexPairFind de ?? be ef
+<
+                        A pattern is bytes, two hex digits each; spaces
+                        between them are decoration, and a '?' stands for
+                        any nibble.  A match starts on a byte, never
+                        between two.  Every match on the page is marked
+                        with |HexPairFind|.
+
+                        The search obeys |'wrapscan'| like Vim's own, and
+                        says when it wrapped.  ! forgets the pattern and
+                        clears the marking; the bare command says what is
+                        being looked for.
+
+                        What is searched is the file on disk.  Unwritten
+                        edits are on the screen, where |/| and the eye can
+                        find them.
+
+:HexPairFindText {text} The same, for the bytes of {text}.
+:HexPairFindNext        Repeat the last search forwards,
+:HexPairFindPrev        or backwards.
+
+                                    *:HexPairReplace* *:HexPairReplaceAll*
+:HexPairReplace {bytes} Put {bytes} in place of the match under the
+                        cursor - which has to BE a match, or the command
+                        would overwrite whatever the cursor happens to sit
+                        on.
+:HexPairReplaceAll {pattern} / {bytes}
+                        Put {bytes} in place of every match of {pattern}
+                        on this page.  The slash keeps the two apart,
+                        which a pattern of hex digits, spaces and '?' can
+                        never contain. >
+
+                            :HexPairReplaceAll de ad be ef / 00 00 00 00
+<
+                        Both edit the PAGE, exactly as typing over the
+                        dump would: the new bytes are marked as changed
+                        (|HexPairModified|), nothing reaches the file
+                        until |:w| does, and a replacement of a different
+                        length goes through the same length-changing
+                        write - with the same question about what it will
+                        cost - as any other insertion or deletion.
+                        Replace-all is scoped to the page, which is the
+                        unit everything here writes in; step the pages to
+                        cover a file.
+
+                        Both want the hex view: the text view has no hex
+                        to replace.
+
+                          *:HexPairDiff* *:HexPairDiffNext* *:HexPairDiffPrev*
+:HexPairDiff[!] [file]  Compare this view with [file]: every byte of the
+                        page that differs from the same offset of [file]
+                        is marked with |HexPairDiff|, and the command says
+                        how many differ and where the first one is.  With
+                        no argument it says what is being compared
+                        against; with ! it stops comparing.
+
+                        Comparing follows the pages: turning to another
+                        page compares that one.  What is marked is what is
+                        on SCREEN against the other file, so an edit shows
+                        up at once.
+
+:HexPairDiffNext        Go to the next byte at which the two files
+:HexPairDiffPrev        differ, or the previous one - anywhere in the
+                        file, however many pages away.  A difference past
+                        the end of THIS file (the other one is longer) has
+                        nowhere to put the cursor, so it is reported
+                        instead.
+
+                        `vimhexdiff` (|hexpair-vimhex|) opens two files
+                        side by side this way.
+
+                        *:HexPairMark* *:HexPairGoMark* *:HexPairMarks*
+                                                     *:HexPairMarkDelete*
+:HexPairMark {name}     Remember the byte under the cursor as {name}.
+:HexPairGoMark[!] {name}
+                        Go back to it, turning the page if needed and
+                        completing {name}.
+:HexPairMarks           List the marks in this file, by position, with the
+                        page each falls on.
+:HexPairMarkDelete {name}
+                        Drop one.
+
+                        Vim's own |mark|s are positions in a BUFFER, and a
+                        paged buffer holds a different part of the file
+                        from one page to the next, so a mark set on page 3
+                        would mean something else on page 4.  These are
+                        absolute byte offsets kept per FILE: every view of
+                        that file shares them (|hexpair-two-views|), a
+                        page turn cannot disturb them, and one left
+                        pointing past the end - the file shrank under it -
+                        is listed as such and refused on the jump.
+
+                        They last as long as the Vim session does.
 
                           *:HexPairSplit* *:HexPairVSplit* *hexpair-two-views*
 :HexPairSplit [page]    Open a SECOND view of the same file in a new
@@ -846,6 +977,16 @@ and it defines: >
     cat bigfile.bin | vimhex -
     dd if=/dev/sda bs=1M count=64 | vimhex - @1024
 <
+The same file also defines `vimhexdiff`: >
+
+    vimhexdiff old.img new.img
+<
+which opens both files side by side, each marking the bytes that differ
+from the other (|:HexPairDiff|), with the cursors on the first difference
+and the two windows scroll-bound.  They navigate independently, as two
+views of anything here do, so |:HexPairDiffNext| moves the window it is
+used in - press it in the other one to follow.
+
 Set $VIMHEX_VIM to use a particular Vim.
 
 Three things in it are not incidental, and are commented in the file

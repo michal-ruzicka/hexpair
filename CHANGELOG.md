@@ -10,6 +10,37 @@ and this project adheres to
 ## [v2.1.0-devel] – 2026-08-21
 
 ### Added
+- **Search across the file.** `:HexPairFind {bytes}` looks through the
+  whole file a block at a time and lands the cursor on the byte it found,
+  turning the page on the way; a pattern is bytes (`de ad be ef`,
+  `deadbeef`) and `?` stands for any nibble. `:HexPairFindText {string}`
+  searches for the bytes of a string, `:HexPairFindNext` /
+  `:HexPairFindPrev` repeat it either way and obey `'wrapscan'`, and
+  every match on the page is marked (`HexPairFind`). `/` could never do
+  this: it searches the page on screen, which is a window on the file.
+- **Replacing what was found.** `:HexPairReplace {bytes}` over the match
+  under the cursor, `:HexPairReplaceAll {pattern} / {bytes}` over every
+  match on the page. Both edit the page exactly as typing over the dump
+  would, so nothing reaches the file until `:w` does and a replacement of
+  a different length asks the same question any other insertion does.
+- **`:HexPairDiff [file]`** marks every byte of the page that differs
+  from the same offset of another file (`HexPairDiff`) and says how many
+  differ; `:HexPairDiffNext` / `:HexPairDiffPrev` walk the whole file for
+  the next disagreement. The shell wrapper gains `vimhexdiff FILE1 FILE2`,
+  which opens both side by side, each marking what differs from the
+  other, cursors on the first difference and the windows scroll-bound.
+- **Marks in the file**: `:HexPairMark {name}`, `:HexPairGoMark {name}`,
+  `:HexPairMarks`, `:HexPairMarkDelete {name}`. Vim's own marks are
+  positions in a buffer, and a paged buffer holds a different part of the
+  file from one page to the next; these are absolute byte offsets kept
+  per file, shared by every view of it.
+- **`HexPairModified`**: the bytes edited and not yet written are marked
+  in both columns, so an edit in a dump no longer looks exactly like
+  everything around it (`g:hexpair_show_modified` turns it off).
+- **`:HexPairGoOffset +N` / `-N`** steps from the byte the cursor is on,
+  crossing pages like a position does.
+- **`:HexPairOpen!`** abandons a modified buffer in the window, the bang
+  README had documented for a year and the command never had.
 - **A data inspector.** `:HexPairInspect` (`<Plug>(HexPairInspect)`)
   reads the bytes at the cursor as the numbers they could be: 8, 16, 32
   and 64 bits wide, unsigned and signed, little- and big-endian, plus
