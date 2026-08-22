@@ -2588,11 +2588,13 @@ call setline(4, substitute(getline(4), '^\(.\{10\}\)........', '\1aa bb cc', '')
 call add(out, string(HexPairPagedModifiedPositions(4, 4)))
 call setline(5, toupper(getline(5)))
 call add(out, string(HexPairPagedModifiedPositions(5, 5)))
-call append(5, '41 42')
-call add(out, string(HexPairPagedModifiedPositions(6, 6)))
 call add(out, string(HexPairPagedModifiedPositions(1, 1)))
+" Written while every edit so far has kept the page's length, so this
+" needs nothing of the splice - which the oldest supported Vim refuses.
 write
 call add(out, string([&l:modified, HexPairPagedModifiedPositions(2, 6)]))
+call append(5, '41 42')
+call add(out, string(HexPairPagedModifiedPositions(6, 6)))
 call writefile(out, '$WORK/tmod.out')
 qa!
 EOF
@@ -2604,12 +2606,12 @@ check "an edited byte is marked in both columns" "[[3, 11, 2], [3, 60, 1]]" \
 check "a run of them is one match per column" "[[4, 11, 8], [4, 60, 3]]" \
     "$(sed -n 3p "$WORK/tmod.out")"
 check "case is not a change of bytes" "[]" "$(sed -n 4p "$WORK/tmod.out")"
+check "a banner line has nothing to compare" "[]" "$(sed -n 5p "$WORK/tmod.out")"
+check "a write clears the marks with the modified flag" "[0, []]" \
+    "$(sed -n 6p "$WORK/tmod.out")"
 # A bare line the user typed has no ASCII column to mark, and every byte
 # on it is new.
-check "an inserted line is all new bytes" "[[6, 1, 5]]" \
-    "$(sed -n 5p "$WORK/tmod.out")"
-check "a banner line has nothing to compare" "[]" "$(sed -n 6p "$WORK/tmod.out")"
-check "and a write clears the marks with the modified flag" "[0, []]" \
+check "and an inserted line is all new bytes" "[[6, 1, 5]]" \
     "$(sed -n 7p "$WORK/tmod.out")"
 
 # ===========================================================================
