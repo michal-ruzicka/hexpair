@@ -514,11 +514,14 @@ values shown are the defaults, so uncomment a line only to change one.
 " Highlight overrides: the byte under the cursor, its counterpart in the
 " other column, the banner (and ruler) lines, the bytes changed since the
 " page was read, the bytes that differ from the file being compared
-" against, and the matches of the last search.
-" highlight HexPairActive cterm=bold,underline gui=bold,underline
-" highlight HexPairMirror ctermbg=52 guibg=#5f0000
+" against, and the matches of the last search. The values below are the
+" defaults; an override should set a foreground AND a background, since
+" giving only one leaves the other at the colour scheme's and the two can
+" land on top of each other.
+" highlight HexPairActive cterm=underline gui=underline
+" highlight link HexPairMirror IncSearch
 " highlight link HexPairPageBanner Comment
-" highlight link HexPairModified DiffText
+" highlight link HexPairModified DiffChange
 " highlight link HexPairDiff DiffAdd
 " highlight link HexPairFind Search
 

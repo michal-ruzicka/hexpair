@@ -38,7 +38,10 @@ and this project adheres to
   per file, shared by every view of it.
 - **`HexPairModified`**: the bytes edited and not yet written are marked
   in both columns, so an edit in a dump no longer looks exactly like
-  everything around it (`g:hexpair_show_modified` turns it off).
+  everything around it (`g:hexpair_show_modified` turns it off). It links
+  to `DiffChange` rather than the closer-sounding `DiffText`, whose own
+  default is a red background with no foreground — black on red for
+  anyone with a light background.
 - **`:HexPairGoOffset +N` / `-N`** steps from the byte the cursor is on,
   crossing pages like a position does.
 - **`:HexPairOpen!`** abandons a modified buffer in the window, the bang

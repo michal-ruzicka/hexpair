@@ -473,12 +473,22 @@ HexPairStatus()         The view, the page and the byte under the cursor,
                         the digits actually there and is the exact answer.
 
                    *HexPairModified* *HexPairDiff* *HexPairFind-highlight*
-The three markings that are about bytes rather than about the cursor: >
+The three markings that are about bytes rather than about the cursor,
+with their defaults: >
 
-    highlight link HexPairModified DiffText   " edited, not yet written
+    highlight link HexPairModified DiffChange " edited, not yet written
     highlight link HexPairDiff     DiffAdd    " differs from |:HexPairDiff|'s file
     highlight link HexPairFind     Search     " a match of |:HexPairFind|
 <
+An override wants a foreground AND a background: >
+
+    highlight HexPairModified ctermbg=224 ctermfg=88 guibg=#ffd7d7 guifg=#870000
+<
+Giving only one of the two leaves the other at whatever the colour scheme
+has, and the two can land on top of each other - which is why the default
+above is DiffChange and not the closer-sounding DiffText: Vim's own
+DiffText is `guibg=Red` with no foreground at all, so with a light
+background it comes out black on red.
                                                 *HexPairActive* *HexPairMirror*
 HexPairActive           Highlight for the byte representation in the column
                         the cursor is currently in.  Default: underline.

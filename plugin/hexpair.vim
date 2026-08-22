@@ -144,9 +144,20 @@ highlight default link HexPairMirror IncSearch
 highlight default link HexPairPageBanner Comment
 
 " Highlight group for bytes that differ from what the file holds at that
-" position - the edits not yet written. Linked to DiffText, which every
-" colour scheme has an opinion about and which means the same thing.
-highlight default link HexPairModified DiffText
+" position - the edits not yet written.
+"
+" DiffChange rather than DiffText, though DiffText is the closer name:
+" Vim's own default for DiffText is `guibg=Red` with NO foreground, so it
+" leaves the text whatever colour 'Normal' has - black on red for anyone
+" with a light background, which is the worst pairing of the two. Both of
+" DiffChange's default backgrounds (LightMagenta, DarkMagenta) keep their
+" contrast with a light or a dark foreground, and "this part changed" is
+" what it means anyway.
+"
+" An override should set a foreground AND a background, for the same
+" reason: giving only one leaves the other at the colour scheme's, and
+" the two can land on top of each other.
+highlight default link HexPairModified DiffChange
 
 " Highlight group for bytes that differ from the file being compared
 " against (|:HexPairDiff|), as opposed to from this view's own file.
