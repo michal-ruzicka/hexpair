@@ -54,6 +54,8 @@
 "                              mark stands on (default 1)
 "   g:hexpair_split_views      set to 1 to make a plain :split of a hex
 "                              page a view of its own (default 0)
+"   g:hexpair_short_commands   set to 0 to leave the short HP names
+"                              undefined (default 1, define them)
 "   g:hexpair_debug            set to 1 to echo position-mapping traces
 "                              (inspect with :messages)
 "   HexPairActive, HexPairMirror, HexPairPageBanner, HexPairModified,
@@ -2858,7 +2860,7 @@ endfunction
 " Statusline
 " ---------------------------------------------------------------------------
 
-" A compact summary for 'statusline', e.g. "hex 3/21 @0x4a2001" - the
+" A compact summary for 'statusline', e.g. "hex 3/349 @0x50a01" - the
 " view, the page, and the byte under the cursor in the form
 " |:HexPairGoOffset| and vimhex's @BYTE both take. Empty for every buffer
 " hexpair has not touched, so it can sit in the statusline unconditionally:

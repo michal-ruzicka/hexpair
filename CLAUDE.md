@@ -748,9 +748,9 @@ a real file), they are directly testable against a fabricated multi-GiB
 ### Page banner
 
 Leading/trailing single lines the plugin generates and inserts around
-the `xxd` output, e.g. `" hexpair: page 3/21  bytes
-2097153-3145728 of 45678901  bigfile.bin"` / `" hexpair: end of page
-3/21"`. The byte range in this text (and in `:HexPairPages`, via the
+the `xxd` output, e.g. `" hexpair: page 3/349  bytes
+262145-393216 of 45678901  bigfile.bin"` / `" hexpair: end of page
+3/349"`. The byte range in this text (and in `:HexPairPages`, via the
 same formula — `s:BannerTop()`/`s:Pages()`, keep in sync) is
 deliberately **1-based and inclusive** (`base + 1` to `base + len`),
 unlike `b:hexpair_page_base`/`len` themselves or the hex dump's own
@@ -865,9 +865,10 @@ above).
 - `g:hexpair_ruler` — see invariant 7; the option is snapshotted into
   `b:hexpair_page_header` at page load, never read directly by the
   arithmetic.
-- `g:hexpair_page_size` — default `1024 * 1024` (1 MiB — overriding an
-  earlier 64 MiB draft of this plan; small enough to set down to e.g.
-  `512` for tests). Validated as a positive multiple of
+- `g:hexpair_page_size` — default `128 * 1024` (128 KiB; the plan drafted
+  64 MiB, then 1 MiB, and what settled it was how long a page takes to
+  scan rather than how much of the file one wants in view — small enough
+  to set down to e.g. `512` for tests). Validated as a positive multiple of
   `g:hexpair_bytes_per_line` by `HexPairPagedSizeError()`, snapshotted
   into `b:hexpair_page_size` at `:HexPairOpen` time (mirrors
   `b:hexpair_n`'s snapshot of `g:hexpair_bytes_per_line` in the base

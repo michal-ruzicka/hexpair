@@ -259,6 +259,9 @@ last byte, and on a short last line on its last existing byte.
                        *<Plug>(HexPairInspect)* *<Plug>(HexPairSelection)*
              *<Plug>(HexPairGoMark)* *<Plug>(HexPairGoMarkForce)*
                              *<Plug>(HexPairFind)* *<Plug>(HexPairFindText)*
+                  *<Plug>(HexPairFindNext)* *<Plug>(HexPairFindPrev)*
+                  *<Plug>(HexPairDiffNext)* *<Plug>(HexPairDiffPrev)*
+                                                       *<Plug>(HexPairMarks)*
 The plugin defines NO key mappings by default; it only provides the
 commands above and <Plug> mappings.  Choose your own keys in your vimrc.
 Every command that takes no argument has a target; the whole set, on a
@@ -290,6 +293,10 @@ Every command that takes no argument has a target; the whole set, on a
     nmap <Leader>t <Plug>(HexPairFindText)
     nmap <Leader>n <Plug>(HexPairFindNext)
     nmap <Leader>N <Plug>(HexPairFindPrev)
+
+    " Comparing with another file
+    nmap <Leader>] <Plug>(HexPairDiffNext)
+    nmap <Leader>[ <Plug>(HexPairDiffPrev)
 
     " The same, discarding unwritten changes without asking - as the !
     " commands do; handy for reading through a file rather than editing it
@@ -499,8 +506,8 @@ HexPairStatus()         The view, the page and the byte under the cursor,
 
     set statusline=%f\ %h%w%m%r\ %{HexPairStatus()}%=%l,%c%V\ %P
 <
-                        gives "hex 3/21 @0x4a2001 (4857857)" in a hex
-                        page and "txt 3/21 @0x4a2001 (4857857)" in the
+                        gives "hex 3/349 @0x50a01 (330241)" in a hex
+                        page and "txt 3/349 @0x50a01 (330241)" in the
                         text view, and an EMPTY string in every buffer
                         hexpair has not touched - so one statusline
                         serves both.  The byte comes in both bases: hex
@@ -677,6 +684,16 @@ or from within Vim:
                         reports an error and leaves the current buffer
                         completely untouched - nothing is created.
 
+                                                          *HexPairDiffWith()*
+HexPairDiffWith({file})
+                        Function form of |:HexPairDiff| {file}, for the
+                        same reason |HexPairOpenFile()| exists: a name
+                        with a space or a literal "$" does not survive
+                        the Ex command line's own argument parsing.
+                        `vimhexdiff` (|hexpair-vimhex|) calls it. >
+
+                            call HexPairDiffWith($OTHER_FILE)
+<
                                                           *HexPairOpenFile()*
 HexPairOpenFile({file} [, {page}])
                         Function form of |:HexPairOpen|, for scripts,
@@ -721,10 +738,10 @@ HexPairOpenFile({file} [, {page}])
                                                               *:HexPairPages*
 :HexPairPages           Report the current page number, the total page
                         count, the absolute byte range shown and the byte
-                        the cursor is on, e.g. "page 3 of 21, offsets
-                        2097153-3145728 of total 45678901 bytes
-                        (bigfile.bin); cursor on byte 0x2fefe1
-                        (3141601)".  The first half is what the page
+                        the cursor is on, e.g. "page 3 of 349, offsets
+                        262145-393216 of total 45678901 bytes
+                        (bigfile.bin); cursor on byte 0x50a01
+                        (330241)".  The first half is what the page
                         banner shows (below), useful once the banner has
                         scrolled out of view; the second is a position in
                         exactly the form |:HexPairGoOffset| and vimhex's
@@ -920,16 +937,16 @@ command directly: >
 <
 Each page is bracketed by a leading and trailing banner line, e.g.: >
 
-    " hexpair: page 3/21  bytes 2097153-3145728 of 45678901  bigfile.bin
-    00200000: 41 42 43 44 45 46 47 48 ...                    ABCDEFGH...
+    " hexpair: page 3/349  bytes 262145-393216 of 45678901  bigfile.bin
+    00040000: 41 42 43 44 45 46 47 48 ...                    ABCDEFGH...
     ...
-    003fffff: ...
-    " hexpair: end of page 3/21
+    0005fff0: ...
+    " hexpair: end of page 3/349
 <
 The banner's and |:HexPairPages|' byte range is 1-based and inclusive
 (byte 1 is the file's first byte, so the LAST page's range always ends
 exactly at the total) - unlike the hex dump's own offset column (e.g.
-"00200000:" above), which is `xxd`'s native 0-based hex address and is
+"00040000:" above), which is `xxd`'s native 0-based hex address and is
 left alone.
 
 A banner line - recognized as any line whose FIRST character is a double

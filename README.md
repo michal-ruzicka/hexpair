@@ -108,7 +108,7 @@ code, releases and issue tracker.
 - **A selection knows its size.** `:HexPairSelection` says how many
   bytes a Visual selection covers and which ones, in the same 1-based
   numbering `:HexPairGoOffset` takes.
-- **Statusline support.** `HexPairStatus()` puts `hex 3/21 @0x4a2001` in
+- **Statusline support.** `HexPairStatus()` puts `hex 3/349 @0x50a01` in
   your statusline and returns nothing in buffers hexpair never touched,
   so one statusline works everywhere.
 - **An optional column ruler.** `g:hexpair_ruler` numbers the byte
@@ -176,6 +176,8 @@ nmap <Leader>s <Plug>(HexPairSelection)     " how many bytes the last selection 
 xmap <Leader>s <Plug>(HexPairSelection)     " ... and the one being made now (kept)
 nmap <Leader>m <Plug>(HexPairMarks)         " list the marks in this file
 nmap <Leader>M <Plug>(HexPairGoMark)        " prompt for a mark to go to
+" ... and <Plug>(HexPairGoMarkForce) is that prompt discarding unwritten
+" changes, as :HexPairGoMark! does
 
 " Searching, and comparing with another file
 nmap <Leader>/ <Plug>(HexPairFind)          " prompt for bytes to find
@@ -202,7 +204,11 @@ that take an argument — `:HexPairFind`, `:HexPairReplace`,
 `<Plug>` target, so there is nothing to map for them.
 
 `:HexPairOpen {file}` takes an argument, so it has no `<Plug>` target;
-it is meant for the command line or a shell wrapper (see below).
+it is meant for the command line or a shell wrapper (see below). For a
+name built programmatically there are function forms —
+`HexPairOpenFile({file} [, {page}])` and `HexPairDiffWith({file})` —
+because a name containing a space or a literal `$` does not survive the
+Ex command line's own argument parsing.
 
 `<Leader>` expands to the `mapleader` variable at the time a mapping is
 defined — backslash by default; put e.g. `let mapleader = ','` *before*
@@ -563,11 +569,11 @@ carries no bytes and is never written:
 00000200: 00 01 02 03 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f  ................
 ```
 
-`HexPairStatus()` gives `hex 3/21 @0x4a2001 (4857857)` in the hex view
-and `txt 3/21 @0x4a2001 (4857857)` in the text view — the byte in both
+`HexPairStatus()` gives `hex 3/349 @0x50a01 (330241)` in the hex view
+and `txt 3/349 @0x50a01 (330241)` in the text view — the byte in both
 bases, hex as the dump's own offset column speaks it and decimal as
 everything else does. A page with unwritten edits is marked
-`hex 3/21+ @…`, and the byte is then where the layout puts it — use
+`hex 3/349+ @…`, and the byte is then where the layout puts it — use
 `:HexPairPages` for the counted answer once you have inserted or deleted
 digits. A cursor standing in the offset column is on that line's first
 byte, which is what the column says.
@@ -605,7 +611,7 @@ press the key, type a number (or `+2`, `-1`, `$`), Enter.
 changes without asking, like the `{N}` variant with `!`.
 
 Each page is bracketed by a leading and trailing banner line (`" hexpair:
-page 3/21  bytes ...`), given a comment-like appearance via the
+page 3/349  bytes ...`), given a comment-like appearance via the
 `HexPairPageBanner` highlight group. The banner contributes no bytes: in
 the dump it is recognized by its leading double quote, and in the
 windowed text view — where a page of raw bytes may itself start with one
