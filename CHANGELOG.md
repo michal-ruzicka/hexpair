@@ -19,8 +19,10 @@ and this project adheres to
   every match on the page is marked (`HexPairFind`). `/` could never do
   this: it searches the page on screen, which is a window on the file.
 - **Replacing what was found.** `:HexPairReplace {bytes}` over the match
-  under the cursor, `:HexPairReplaceAll {pattern} / {bytes}` over every
-  match on the page. Both edit the page exactly as typing over the dump
+  under the cursor, `:HexPairReplaceAllInPage {pattern} / {bytes}` over every
+  match on the page in view - the scope is in the name, because
+  everything here writes one page at a time and a file-wide replace would
+  be a different mechanism, not a bigger version of this one. Both edit the page exactly as typing over the dump
   would, so nothing reaches the file until `:w` does and a replacement of
   a different length asks the same question any other insertion does.
 - **`:HexPairDiff [file]`** marks every byte of the page that differs

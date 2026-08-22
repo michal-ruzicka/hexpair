@@ -3208,7 +3208,7 @@ endfunction
 function! HexPairPagedSplitReplaceArgs(text) abort
   let parts = split(a:text, '/', 1)
   if len(parts) != 2
-    return {'msg': 'hexpair: :HexPairReplaceAll takes {pattern} / {bytes}'}
+    return {'msg': 'hexpair: :HexPairReplaceAllInPage takes {pattern} / {bytes}'}
   endif
   return {'pattern': parts[0], 'replacement': parts[1]}
 endfunction
@@ -4241,7 +4241,7 @@ command! -bar -nargs=+ HexPairFindText call s:FindText(<q-args>)
 command! -bar HexPairFindNext call s:FindRepeat(1)
 command! -bar HexPairFindPrev call s:FindRepeat(0)
 command! -bar -nargs=+ HexPairReplace call s:Replace(<q-args>)
-command! -bar -nargs=+ HexPairReplaceAll call s:ReplaceAll(<q-args>)
+command! -bar -nargs=+ HexPairReplaceAllInPage call s:ReplaceAll(<q-args>)
 command! -bar HexPairDiffNext call s:DiffJump(1)
 command! -bar HexPairDiffPrev call s:DiffJump(0)
 command! -bar -nargs=? HexPairSplit  call s:SplitView(0, <f-args>)

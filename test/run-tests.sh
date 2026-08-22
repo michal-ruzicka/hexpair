@@ -2812,7 +2812,7 @@ write
 bwipeout!
 HexPairOpen $WORK/rep2.bin 1
 redir => m2
-silent HexPairReplaceAll de ad be ef / aa bb cc dd
+silent HexPairReplaceAllInPage de ad be ef / aa bb cc dd
 redir END
 call add(out, Msg(m2))
 write
@@ -2826,7 +2826,7 @@ silent! HexPairReplace 11
 redir END
 call add(out, Msg(m3))
 redir => m4
-silent! HexPairReplaceAll de ad / 11 ??
+silent! HexPairReplaceAllInPage de ad / 11 ??
 redir END
 call add(out, Msg(m4))
 call writefile(out, '$WORK/trep.out')

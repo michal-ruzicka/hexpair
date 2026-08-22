@@ -89,7 +89,7 @@ code, releases and issue tracker.
   looks through the whole file a block at a time and lands on the byte it
   found, turning the page on the way; `?` stands for any nibble, and
   `:HexPairFindText` takes a string. `:HexPairReplace` and
-  `:HexPairReplaceAll` put new bytes over what was found.
+  `:HexPairReplaceAllInPage` put new bytes over what was found.
 - **Changed bytes are visible.** Everything edited and not yet written is
   marked in both columns (`HexPairModified`), so an edit in a dump does
   not look exactly like everything around it.
@@ -281,7 +281,7 @@ page. Close and reopen the file for the ordinary view.
 | `:HexPairFindText {string}` | The same, for the bytes of a string |
 | `:HexPairFindNext` / `:HexPairFindPrev` | Repeat the search either way (obeys `'wrapscan'`) |
 | `:HexPairReplace {bytes}` | Put those bytes over the match under the cursor |
-| `:HexPairReplaceAll {pattern} / {bytes}` | ... over every match on this page |
+| `:HexPairReplaceAllInPage {pattern} / {bytes}` | ... over every match on the page in view |
 | `:HexPairDiff[!] [file]` | Compare with `{file}`, marking the bytes that differ; `!` stops |
 | `:HexPairDiffNext` / `:HexPairDiffPrev` | Walk to the next/previous byte where the two files differ |
 | `:HexPairMark {name}` / `:HexPairGoMark[!] {name}` / `:HexPairMarks` / `:HexPairMarkDelete {name}` | Remember a byte of the file, jump back to it, list them, drop one |
@@ -368,14 +368,19 @@ the cursor on the byte it found, turning the page if it is elsewhere.
 
 ```vim
 :HexPairReplace 11 22 33 44                 " over the match under the cursor
-:HexPairReplaceAll de ad be ef / 00 00      " over every match on this page
+:HexPairReplaceAllInPage de ad be ef / 00 00      " over every match on this page
 ```
 
 Both edit the page exactly as typing over the dump would: the new bytes
 are marked as changed, and nothing reaches the file until `:w` does — so
 a replacement of a different length asks the same question any other
-insertion or deletion asks. Replace-all is scoped to the page you are on,
-which is the unit everything here writes in.
+insertion or deletion asks.
+
+The second command has the scope in its name because the scope is the
+surprising part: everything here writes one page at a time, and a
+file-wide replace would be a different mechanism with a different failure
+to recover from, not a bigger version of this one. Step the pages to
+cover a file.
 
 Comparing with another file works the same way round:
 

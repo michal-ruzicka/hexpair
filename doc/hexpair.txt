@@ -673,18 +673,24 @@ HexPairOpenFile({file} [, {page}])
 :HexPairFindNext        Repeat the last search forwards,
 :HexPairFindPrev        or backwards.
 
-                                    *:HexPairReplace* *:HexPairReplaceAll*
+                                    *:HexPairReplace* *:HexPairReplaceAllInPage*
 :HexPairReplace {bytes} Put {bytes} in place of the match under the
                         cursor - which has to BE a match, or the command
                         would overwrite whatever the cursor happens to sit
                         on.
-:HexPairReplaceAll {pattern} / {bytes}
+:HexPairReplaceAllInPage {pattern} / {bytes}
                         Put {bytes} in place of every match of {pattern}
-                        on this page.  The slash keeps the two apart,
-                        which a pattern of hex digits, spaces and '?' can
-                        never contain. >
+                        on this page - the name says the scope, because
+                        the scope is the surprising part: everything here
+                        writes one page at a time, so a file-wide replace
+                        would be a different mechanism with a different
+                        failure to recover from, not a bigger version of
+                        this one.  Step the pages to cover a file.  The
+                        slash keeps the two arguments apart, which a
+                        pattern of hex digits, spaces and '?' can never
+                        contain. >
 
-                            :HexPairReplaceAll de ad be ef / 00 00 00 00
+                            :HexPairReplaceAllInPage de ad be ef / 00 00 00 00
 <
                         Both edit the PAGE, exactly as typing over the
                         dump would: the new bytes are marked as changed
@@ -693,9 +699,6 @@ HexPairOpenFile({file} [, {page}])
                         length goes through the same length-changing
                         write - with the same question about what it will
                         cost - as any other insertion or deletion.
-                        Replace-all is scoped to the page, which is the
-                        unit everything here writes in; step the pages to
-                        cover a file.
 
                         Both want the hex view: the text view has no hex
                         to replace.
