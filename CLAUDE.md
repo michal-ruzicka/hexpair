@@ -538,12 +538,12 @@ was designed and built in Stage 2 - see "What Stage 2 decided".
   that same buffer in place (matching how the base plugin's
   `s:ToHex()` already behaves) — likely NOT `buftype=acwrite` for that
   path, since it is a real, already-named, non-synthetic buffer;
-  Stage 2 needs to work out whether `BufWritePre`/`BufWritePost` (the
-  base plugin's existing mechanism) or `BufWriteCmd` fits it better,
-  and how the two population paths converge on identical buffer state
-  (same buffer-local variables below, same commands available)
-  afterward, so the rest of the plugin cannot tell which path a given
-  Hex-page-view buffer took to get there.
+  Stage 2 settled both questions, and they are settled still: every
+  hex-mode buffer is `buftype=acwrite` with a `BufWriteCmd` (see "What
+  Stage 2 decided"), because letting Vim do the writing would put a
+  buffer holding one page over the whole file; and both population paths
+  end in `s:SetupPagedBuffer()`, so the rest of the plugin cannot tell
+  which one a given Hex-page-view buffer took to get there.
 - Buffer-local state: `b:hexpair_page_file`, `b:hexpair_page_index`
   (0-based internally, 1-based in the UI), `b:hexpair_page_size`,
   `b:hexpair_page_base`, `b:hexpair_page_len` (shorter on the last

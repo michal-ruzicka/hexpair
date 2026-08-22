@@ -153,6 +153,13 @@ for name in ('paged21.bin', 'paged22.bin', 'paged23.bin', 'paged31.bin', 'paged3
 for name in ('scan1.bin', 'scan2.bin'):
     with open(os.path.join(w, name), 'wb') as f:
         f.write(bytes((i * 7) % 256 for i in range(100000)))
+# text-view fixtures: the same needle, and a copy differing on page 4
+_tv = bytearray(bytes(i % 256 for i in range(5000)))
+_tv[300:304] = b'\xde\xad\xbe\xef'
+open(os.path.join(w, 'tview1.bin'), 'wb').write(bytes(_tv))
+_tv2 = bytearray(_tv)
+_tv2[2000] = 0xee
+open(os.path.join(w, 'tview2.bin'), 'wb').write(bytes(_tv2))
 # search fixtures: a needle three times over, and some text
 _fd = bytearray(bytes(i % 256 for i in range(5000)))
 _fd[300:304] = b'\xde\xad\xbe\xef'
@@ -3045,6 +3052,52 @@ EOF
     check "round $round: and the page came out clean" "[0, {}]" \
         "$(cat "$WORK/tprop.out")"
 done
+
+# ===========================================================================
+# The same commands, driven from the windowed text view
+# ===========================================================================
+# Marks, search and comparison all ask "which byte is the cursor on" and
+# "put the cursor on this byte", and the text view answers both
+# differently from the hex one - so each of them has to be driven from
+# there too, not only from the dump.
+cat > "$WORK/ttv5.vim" <<EOF
+$(printf "$HEX")
+HexPairOpen $WORK/tview1.bin 3
+HexPairToggle
+let out = [b:hexpair_view]
+call cursor(3, 5)
+HexPairMark inside
+call add(out, HexPairStatus())
+HexPairPageGoto 7
+HexPairGoMark inside
+call add(out, b:hexpair_view . ' ' . HexPairStatus())
+HexPairGoOffset 1
+silent HexPairFind de ad be ef
+call add(out, b:hexpair_view . ' ' . HexPairStatus())
+silent HexPairDiff $WORK/tview2.bin
+silent HexPairDiffNext
+call add(out, b:hexpair_view . ' ' . HexPairStatus())
+redir => msg
+silent! HexPairReplace 11 22
+redir END
+call add(out, matchstr(msg, 'hexpair:.*'))
+call writefile(out, '$WORK/ttv5.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/ttv5.vim" < /dev/null
+check "a mark set in the text view is a byte of the file" \
+    "txt 3/10 @0x410 (1040)" "$(sed -n 2p "$WORK/ttv5.out")"
+# The jump crosses pages and stays in the view it was made from.
+check "and going back to it keeps the view" "text txt 3/10 @0x410 (1040)" \
+    "$(sed -n 3p "$WORK/ttv5.out")"
+check "searching works from there too" "text txt 1/10 @0x12d (301)" \
+    "$(sed -n 4p "$WORK/ttv5.out")"
+check "and so does walking the differences" "text txt 4/10 @0x7d1 (2001)" \
+    "$(sed -n 5p "$WORK/ttv5.out")"
+# Replacing is the one that does not: there is no hex to put bytes over.
+check "replacing says which view it wants" \
+    "hexpair: replacing works in the hex view; :HexPairToggle first" \
+    "$(sed -n 6p "$WORK/ttv5.out")"
 
 # ---------------------------------------------------------------------------
 if [ "$FAIL" -eq 0 ]; then

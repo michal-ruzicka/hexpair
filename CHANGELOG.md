@@ -19,12 +19,13 @@ and this project adheres to
   every match on the page is marked (`HexPairFind`). `/` could never do
   this: it searches the page on screen, which is a window on the file.
 - **Replacing what was found.** `:HexPairReplace {bytes}` over the match
-  under the cursor, `:HexPairReplaceAllInPage {pattern} / {bytes}` over every
-  match on the page in view - the scope is in the name, because
+  under the cursor, `:HexPairReplaceAllInPage {pattern} / {bytes}` over
+  every match on the page in view - the scope is in the name, because
   everything here writes one page at a time and a file-wide replace would
-  be a different mechanism, not a bigger version of this one. Both edit the page exactly as typing over the dump
-  would, so nothing reaches the file until `:w` does and a replacement of
-  a different length asks the same question any other insertion does.
+  be a different mechanism, not a bigger version of this one. Both edit
+  the page exactly as typing over the dump would, so nothing reaches the
+  file until `:w` does, and a replacement of a different length asks the
+  same question any other insertion does.
 - **`:HexPairDiff [file]`** marks every byte of the page that differs
   from the same offset of another file (`HexPairDiff`) and says how many
   differ; `:HexPairDiffNext` / `:HexPairDiffPrev` walk the whole file for
@@ -34,10 +35,10 @@ and this project adheres to
 - **Marks in the file**: `:HexPairMark {name}`, `:HexPairGoMark {name}`,
   `:HexPairMarks`, `:HexPairMarkDelete {name}`, and the byte a mark
   stands on underlined on the page (`HexPairMark`,
-  `g:hexpair_show_marks`). Vim's own marks are
-  positions in a buffer, and a paged buffer holds a different part of the
-  file from one page to the next; these are absolute byte offsets kept
-  per file, shared by every view of it.
+  `g:hexpair_show_marks`). Vim's own marks are positions in a buffer, and
+  a paged buffer holds a different part of the file from one page to the
+  next; these are absolute byte offsets kept per file, shared by every
+  view of it.
 - **`HexPairModified`**: the bytes edited and not yet written are marked
   in both columns, so an edit in a dump no longer looks exactly like
   everything around it (`g:hexpair_show_modified` turns it off). It links
@@ -55,10 +56,10 @@ and this project adheres to
   character, in binary and in octal - and what the bytes would be as
   text: UTF-8, UTF-16 and UTF-32, each saying what is wrong with the
   bytes (an overlong sequence, a lone surrogate, a value past U+10FFFF)
-  rather than reporting a code point for something that is not one. The bytes are the page's, as the
-  buffer holds them — edits included — and stop at its end, where the
-  wider rows say how many are left rather than reaching into a page that
-  is not on screen.
+  rather than reporting a code point for something that is not one. The
+  bytes are the page's, as the buffer holds them — edits included — and
+  stop at its end, where the wider rows say how many are left rather than
+  reaching into a page that is not on screen.
 - **`:HexPairSelection`** (`<Plug>(HexPairSelection)`, worth mapping in
   Visual mode as well as Normal) says how many bytes a Visual selection
   covers and which, 1-based like the banner, so the numbers can be typed
@@ -68,8 +69,8 @@ and this project adheres to
 - **`HexPairStatus()`** for `'statusline'`: `hex 3/21 @0x4a2001 (4857857)`
   in the hex view, `txt 3/21 @0x4a2001 (4857857)` in the text view, and
   an empty string in every buffer hexpair has not touched, so one
-  statusline serves both. It never walks the page — it is called on every cursor movement
-  — and marks a page with unwritten edits with a `+`.
+  statusline serves both. It never walks the page — it is called on every
+  cursor movement — and marks a page with unwritten edits with a `+`.
 - **`g:hexpair_ruler`** (default 0): a ruler line between the banner and
   the dump, numbering the byte columns — two digits over each hex byte,
   the low nibble over each ASCII character. Like the banners it starts
@@ -145,11 +146,16 @@ and this project adheres to
   promised for viewing, navigating, same-length writes and in-place
   inserts. Verified against a Vim 8.0.0000 build: only the splice paths
   are refused there, each with the `readblob()` gate message.
-- Documentation that had stopped being true: `:HexPairOpen[!]` (the
-  command has no `!`), a Vim requirement justified by lambda
-  expressions the plugin no longer uses, and a Limitations section still
-  describing undo across the conversion boundary and a plugin that
-  "operates on the whole buffer", which paging replaced.
+- **A cursor in the offset column** reported a byte a few along from the
+  line's first: the offset's own digits were counted like any other hex
+  payload, so `00000210:` read as four bytes of nothing.
+  `:HexPairPages`, the byte a write puts the cursor back on and the data
+  inspector all read that. It is the line's first byte now, which is
+  what the column says.
+- Documentation that had stopped being true: a Vim requirement justified
+  by lambda expressions the plugin no longer uses, and a Limitations
+  section still describing undo across the conversion boundary and a
+  plugin that "operates on the whole buffer", which paging replaced.
 
 ## [v2.0.0] – 2026-08-21
 

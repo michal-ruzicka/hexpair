@@ -22,10 +22,20 @@
 " :w writes just the page back: an edit that kept its length patches it
 " in place, one that changed the length splices the file.
 "
-" Commands:         :HexPairToggle, :HexPairGoHex, :HexPairGoAscii,
-"                   :HexPairSwap, :HexPairRefresh, :HexPairOpen,
-"                   :HexPairPageNext, :HexPairPagePrev,
-"                   :HexPairPageGoto, :HexPairPages
+" Views:            :HexPairToggle, :HexPairGoHex, :HexPairGoAscii,
+"                   :HexPairSwap, :HexPairRefresh
+" Pages:            :HexPairOpen, :HexPairPageNext, :HexPairPagePrev,
+"                   :HexPairPageGoto, :HexPairGoOffset, :HexPairPages,
+"                   :HexPairSplit, :HexPairVSplit
+" Reading bytes:    :HexPairInspect, :HexPairSelection
+" Finding bytes:    :HexPairFind, :HexPairFindText, :HexPairFindNext,
+"                   :HexPairFindPrev, :HexPairReplace,
+"                   :HexPairReplaceAllInPage
+" Comparing:        :HexPairDiff, :HexPairDiffNext, :HexPairDiffPrev
+" Marks:            :HexPairMark, :HexPairGoMark, :HexPairMarks,
+"                   :HexPairMarkDelete
+" Functions:        HexPairStatus() for 'statusline', HexPairOpenFile()
+"                   and HexPairDiffWith() for scripts and wrappers
 " Mapping:          none by default; map <Plug>(HexPairToggle) in your vimrc
 "
 " Configuration (set in your vimrc before the plugin loads):
@@ -36,9 +46,18 @@
 "   g:hexpair_page_size        bytes per page (default 128 KiB)
 "   g:hexpair_page_confirm     set to 0 to skip the confirmation a
 "                              length-changing write asks for
+"   g:hexpair_ruler            set to 1 for a line numbering the byte
+"                              columns of the dump (default 0)
+"   g:hexpair_show_modified    set to 0 to stop marking the bytes edited
+"                              and not yet written (default 1)
+"   g:hexpair_show_marks       set to 0 to stop underlining the byte a
+"                              mark stands on (default 1)
+"   g:hexpair_split_views      set to 1 to make a plain :split of a hex
+"                              page a view of its own (default 0)
 "   g:hexpair_debug            set to 1 to echo position-mapping traces
 "                              (inspect with :messages)
-"   HexPairActive, HexPairMirror, HexPairPageBanner  highlight groups
+"   HexPairActive, HexPairMirror, HexPairPageBanner, HexPairModified,
+"   HexPairDiff, HexPairFind, HexPairMark   highlight groups
 "
 " Editing defaults for the dump (tabstop, shiftwidth, no automatic
 " formatting) live in the bundled ftplugin/xxd.vim; see
