@@ -153,6 +153,8 @@ for name in ('paged21.bin', 'paged22.bin', 'paged23.bin', 'paged31.bin', 'paged3
 for name in ('scan1.bin', 'scan2.bin'):
     with open(os.path.join(w, name), 'wb') as f:
         f.write(bytes((i * 7) % 256 for i in range(100000)))
+# stepping fixture
+open(os.path.join(w, 'step1.bin'), 'wb').write(bytes(i % 256 for i in range(5000)))
 # two-views fixtures
 for name in ('split1.bin', 'split2.bin', 'split3.bin', 'split4.bin'):
     with open(os.path.join(w, name), 'wb') as f:
@@ -1538,8 +1540,8 @@ source $PLUGIN
 let want = ['(HexPairToggle)', '(HexPairGoHex)', '(HexPairGoAscii)', '(HexPairSwap)', '(HexPairRefresh)', '(HexPairPageNext)', '(HexPairPagePrev)', '(HexPairPageGoto)', '(HexPairPageGotoForce)', '(HexPairGoOffset)', '(HexPairGoOffsetForce)', '(HexPairPages)']
 let listed = execute('nmap')
 let missing = filter(copy(want), 'stridx(listed, "<Plug>" . v:val) < 0')
-let parsed = [HexPairPagedParseOffsetInput(''), HexPairPagedParseOffsetInput('1234'), HexPairPagedParseOffsetInput('0x10'), HexPairPagedParseOffsetInput('zz'), HexPairPagedParseOffsetInput('ff')]
-call writefile([string(missing), string(parsed[0]), string(parsed[1]), string(parsed[2]), parsed[3].msg, parsed[4].msg], '$WORK/tk1.out')
+let parsed = [HexPairPagedParseOffsetInput(''), HexPairPagedParseOffsetInput('1234'), HexPairPagedParseOffsetInput('0x10'), HexPairPagedParseOffsetInput('zz'), HexPairPagedParseOffsetInput('ff'), HexPairPagedParseOffsetInput('+16'), HexPairPagedParseOffsetInput('-0x10')]
+call writefile([string(missing), string(parsed[0]), string(parsed[1]), string(parsed[2]), parsed[3].msg, parsed[4].msg, string([parsed[5], parsed[6]])], '$WORK/tk1.out')
 qa!
 EOF
 "$HEXPAIR_VIM" -es -u NONE -S "$WORK/tk1.vim" < /dev/null
@@ -1548,14 +1550,18 @@ check "an empty offset prompt cancels"    "{}" "$(sed -n 2p "$WORK/tk1.out")"
 check "byte 1234 parses to offset 1233"   "{'offset': 1233}" "$(sed -n 3p "$WORK/tk1.out")"
 check "byte 0x10 parses to offset 15"     "{'offset': 15}"   "$(sed -n 4p "$WORK/tk1.out")"
 check "a non-position is reported" \
-    "hexpair: not a byte position: 'zz' (decimal, or 0x for hex; byte 1 is the first)" \
+    "hexpair: not a byte position: 'zz' (decimal, or 0x for hex; byte 1 is the first, +N and -N step from here)" \
     "$(sed -n 5p "$WORK/tk1.out")"
 # A bare "ff" reads as hex to a person and as the decimal 0 to str2nr(),
 # so it is refused as a position rather than reported as "positions start
 # at 1", which is a complaint about the wrong thing.
 check "hex without the 0x is not a position either" \
-    "hexpair: not a byte position: 'ff' (decimal, or 0x for hex; byte 1 is the first)" \
+    "hexpair: not a byte position: 'ff' (decimal, or 0x for hex; byte 1 is the first, +N and -N step from here)" \
     "$(sed -n 6p "$WORK/tk1.out")"
+# A step is the one form where 0 means something ("stay here") and where
+# the 1-based question does not arise at all.
+check "a step parses as a step, in either base" \
+    "[{'delta': 16}, {'delta': -16}]" "$(sed -n 7p "$WORK/tk1.out")"
 
 # --- Piped input that Vim may already have transcoded is flagged -----------
 # A named file can be re-read with ++bin; piped input cannot, so if the
@@ -2451,6 +2457,49 @@ check "splitting piped input says why not" \
     "hexpair: this view is paged from a private copy of piped input, which belongs to it alone; save it with :w {file} first, and split that" \
     "$(sed -n 1p "$WORK/tsv4.out")"
 check "and opens no window" "1" "$(sed -n 2p "$WORK/tsv4.out")"
+
+# --- Stepping by bytes, and :HexPairOpen! ---------------------------------
+# A step moves from the byte the cursor is on, so it crosses page
+# boundaries the same way a position does. The bang is Vim's own "abandon
+# what is in this window", which :HexPairOpen had never had.
+cat > "$WORK/tstep.vim" <<EOF
+$(printf "$HEX")
+HexPairOpen $WORK/step1.bin 3
+call cursor(4, 11)
+let start = HexPairPagedByteOffset()
+HexPairGoOffset +16
+let forward = HexPairPagedByteOffset()
+HexPairGoOffset -0x20
+let back = HexPairPagedByteOffset()
+HexPairGoOffset +600
+let crossed = [HexPairPagedByteOffset(), b:hexpair_page_index + 1]
+redir => msg
+silent! HexPairGoOffset -99999
+redir END
+let outside = substitute(msg, '^[\r\n]*', '', '')
+enew
+call setline(1, 'precious unsaved work')
+let refused = ''
+try
+  HexPairOpen $WORK/step1.bin 1
+catch
+  let refused = v:exception =~# 'E37' ? 'refused' : v:exception
+endtry
+HexPairOpen! $WORK/step1.bin 1
+call writefile([string([start, forward, back, crossed]), outside, string([refused, b:hexpair_page_index + 1, get(b:, 'hexpair_page_active', 0)])], '$WORK/tstep.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tstep.vim" < /dev/null
+check "a step moves from where the cursor is, and turns the page" \
+    "[1056, 1072, 1040, [1640, 4]]" "$(sed -n 1p "$WORK/tstep.out")"
+check "and a step out of the file is refused like a position" \
+    "hexpair: byte -98358 is outside the file (5000 bytes)" \
+    "$(sed -n 2p "$WORK/tstep.out")"
+# The bang is about the buffer being LEFT, not about the page: a paged
+# buffer is 'bufhidden' hide and is never abandoned, but an ordinary
+# modified buffer in the window is, and Vim refuses that without a !.
+check "the bang opens over a modified buffer, the bare command does not" \
+    "['refused', 1, 1]" "$(sed -n 3p "$WORK/tstep.out")"
 
 # ---------------------------------------------------------------------------
 if [ "$FAIL" -eq 0 ]; then

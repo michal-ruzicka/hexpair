@@ -1043,7 +1043,7 @@ function! s:NamePageBuffer(file) abort
   throw printf('hexpair: 99 views of %s are already open', a:file)
 endfunction
 
-function! s:Open(file, ...) abort
+function! s:Open(force, file, ...) abort
   " The page argument takes the same three forms |:HexPairPageGoto| does.
   " A step is counted from the first page, which is where opening starts:
   " "+2" is page 3, and "$" is the last one, without having to work out
@@ -1086,7 +1086,9 @@ function! s:Open(file, ...) abort
     return
   endif
 
-  enew
+  " Vim refuses to abandon a modified buffer, and ! is how that is
+  " overridden everywhere else in Vim, so it is how it is overridden here.
+  execute a:force ? 'enew!' : 'enew'
   call s:NamePageBuffer(a:file)
   let b:hexpair_page_file = file
   let b:hexpair_page_spill = ''
@@ -2517,15 +2519,10 @@ function! s:GotoOffsetPrompt(force) abort
   if !s:RequirePaged()
     return
   endif
-  let text = input(printf('hexpair: goto byte (1-%d): ',
+  let text = input(printf('hexpair: goto byte (1-%d, or +N/-N from here): ',
         \ b:hexpair_page_total))
   redraw
-  let parsed = HexPairPagedParseOffsetInput(text)
-  if has_key(parsed, 'msg')
-    echohl ErrorMsg
-    echomsg parsed.msg
-    echohl None
-  elseif has_key(parsed, 'offset')
+  if !empty(text)
     call s:GotoOffset(text, a:force)
   endif
 endfunction
@@ -2578,14 +2575,24 @@ function! HexPairPagedParseOffsetInput(text) abort
   if empty(a:text)
     return {}
   endif
+  " A leading + or - makes it a step from the byte the cursor is on
+  " rather than a position in the file, which is the only form where 0
+  " means something ("stay here") and where the 1-based/0-based question
+  " does not arise at all.
+  let sign = a:text[0] ==# '+' ? 1 : (a:text[0] ==# '-' ? -1 : 0)
+  let text = sign ? a:text[1:] : a:text
   " Decimal, or hex with the 0x on it: a bare "ff" is not read as either,
   " because str2nr() would take it for the decimal 0 and the complaint
   " ("byte positions start at 1") would be about the wrong thing.
-  if a:text !~# '^\%(0[xX]\x\+\|\d\+\)$'
-    return {'msg': printf('hexpair: not a byte position: %s '
-          \ . '(decimal, or 0x for hex; byte 1 is the first)', string(a:text))}
+  if text !~# '^\%(0[xX]\x\+\|\d\+\)$'
+    return {'msg': printf('hexpair: not a byte position: %s (decimal, or '
+          \ . '0x for hex; byte 1 is the first, +N and -N step from here)',
+          \ string(a:text))}
   endif
-  let n = a:text =~# '^0[xX]' ? str2nr(a:text[2:], 16) : str2nr(a:text)
+  let n = text =~# '^0[xX]' ? str2nr(text[2:], 16) : str2nr(text)
+  if sign
+    return {'delta': sign * n}
+  endif
   if n < 1
     return {'msg': 'hexpair: byte positions start at 1, not 0'}
   endif
@@ -2600,6 +2607,13 @@ function! s:GotoOffset(text, force) abort
     let parsed = HexPairPagedParseOffsetInput(a:text)
     if has_key(parsed, 'msg')
       throw parsed.msg
+    endif
+    if has_key(parsed, 'delta')
+      " A step is from the byte the cursor is on, so it needs no page
+      " arithmetic of its own - it becomes a position and takes the same
+      " road as one, including the check that it is inside the file.
+      let here = s:IsHexView() ? s:PagedByteOffset() : s:TextByteOffset()
+      let parsed = {'offset': here + parsed.delta}
     endif
     if !has_key(parsed, 'offset')
       return
@@ -2697,7 +2711,7 @@ function! s:NewViewHere(file, page, off, wastext) abort
   " saying so first is what keeps s:WindowView() from acting on the
   " window events this very call produces.
   let w:hexpair_own_view = 1
-  call s:Open(a:file, string(a:page))
+  call s:Open(0, a:file, string(a:page))
   if !get(b:, 'hexpair_page_active', 0)
     return 0
   endif
@@ -2760,7 +2774,7 @@ function! s:WindowView() abort
 endfunction
 
 function! HexPairOpenFile(file, ...) abort
-  call call('s:Open', [a:file] + a:000)
+  call call('s:Open', [0, a:file] + a:000)
 endfunction
 
 " ---------------------------------------------------------------------------
@@ -3165,7 +3179,8 @@ command! -bar HexPairGoAscii call s:PagedJumpTo('ascii')
 command! -bar HexPairSwap    call s:PagedJumpTo('swap')
 command! -bar HexPairRefresh call s:Refresh()
 
-command! -bar -nargs=+ -complete=file HexPairOpen call s:Open(<f-args>)
+command! -bar -bang -nargs=+ -complete=file HexPairOpen
+      \ call s:Open('<bang>' ==# '!', <f-args>)
 command! -bar -bang HexPairPageNext call s:PageNext('<bang>' ==# '!')
 command! -bar -bang HexPairPagePrev call s:PagePrev('<bang>' ==# '!')
 command! -bar -bang -nargs=1 HexPairPageGoto
