@@ -2799,6 +2799,10 @@ redir END
 call add(out, substitute(substitute(msg3, '^[\r\n]*', '', ''), '\n', ' ', 'g'))
 HexPairDiff!
 call add(out, string([get(b:, 'hexpair_diff_file', ''), get(b:, 'hexpair_diff_hex', ''), len(get(w:, 'hexpair_diff_ids', []))]))
+call add(out, string([HexPairPagedCountDifferences('00112233', '00112233'), HexPairPagedCountDifferences('00112233', '0011ff33'), HexPairPagedCountDifferences('00112233', 'ffffffff'), HexPairPagedCountDifferences('00112233', '0011'), HexPairPagedCountDifferences('', '')]))
+let g:mine = repeat('a1b2c3d4', 32768)
+let g:theirs = substitute(g:mine, '^\(.\{100000}\)..', '\1ff', '')
+call add(out, string(HexPairPagedCountDifferences(g:mine, g:theirs)))
 call writefile(out, '$WORK/tdf.out')
 qa!
 EOF
@@ -2828,6 +2832,16 @@ check "and back again finds the one before" "hex 3/10 @0x5dd (1501)" \
 check "comparing a view with its own file is refused" \
     "hexpair: that is this view's own file" "$(sed -n 11p "$WORK/tdf.out")"
 check "and the bang stops comparing" "['', '', 0]" "$(sed -n 12p "$WORK/tdf.out")"
+# Counting the differing bytes skips whole blocks that match and only
+# takes apart the ones that do not, so what has to be pinned is that it
+# still answers what a walk over every byte would: none, one in the
+# middle, all of them, and a second file that ends early - which counts
+# as differing, because that is what a file ending early is.
+check "counting the differing bytes" \
+    "[[0, -1], [1, 2], [4, 0], [2, 2], [0, -1]]" "$(sed -n 13p "$WORK/tdf.out")"
+# On a full 128 KiB page, where the block skipping is what keeps this
+# under ten milliseconds instead of the five seconds a walk cost.
+check "on a page-sized run, one byte in" "[1, 50000]" "$(sed -n 14p "$WORK/tdf.out")"
 
 # --- A file that is longer differs from where it grows --------------------
 cat > "$WORK/tdf2.vim" <<EOF
