@@ -270,6 +270,7 @@ last byte, and on a short last line on its last existing byte.
                              *<Plug>(HexPairFind)* *<Plug>(HexPairFindText)*
                   *<Plug>(HexPairFindNext)* *<Plug>(HexPairFindPrev)*
                   *<Plug>(HexPairDiffNext)* *<Plug>(HexPairDiffPrev)*
+                 *<Plug>(HexPairFindClear)* *<Plug>(HexPairDiffClear)*
                                                        *<Plug>(HexPairMarks)*
 The plugin defines NO key mappings by default; it only provides the
 commands above and <Plug> mappings.  Choose your own keys in your vimrc.
@@ -306,6 +307,10 @@ Every command that takes no argument has a target; the whole set, on a
     " Comparing with another file
     nmap <Leader>] <Plug>(HexPairDiffNext)
     nmap <Leader>[ <Plug>(HexPairDiffPrev)
+
+    " Turning the markings off again
+    nmap <Leader>c <Plug>(HexPairFindClear)
+    nmap <Leader>C <Plug>(HexPairDiffClear)
 
     " The same, discarding unwritten changes without asking - as the !
     " commands do; handy for reading through a file rather than editing it
@@ -808,8 +813,15 @@ HexPairOpenFile({file} [, {page}])
 
                         The search obeys |'wrapscan'| like Vim's own, and
                         says when it wrapped.  ! forgets the pattern and
-                        clears the marking; the bare command says what is
-                        being looked for.
+                        clears the marking - that is how a page stops
+                        being covered in matches, and it has a mapping
+                        target of its own, |<Plug>(HexPairFindClear)|; the
+                        bare command says what is being looked for.
+
+                        Only what is on SCREEN is marked, and it is
+                        marked again as the window scrolls, so a pattern
+                        that matches thousands of times on a page costs
+                        no more than one that matches twice.
 
                         What is searched is the file on disk.  Unwritten
                         edits are on the screen, where |/| and the eye can
@@ -861,14 +873,29 @@ HexPairOpenFile({file} [, {page}])
                         Comparing follows the pages: turning to another
                         page compares that one.  What is marked is what is
                         on SCREEN against the other file, so an edit shows
-                        up at once.
+                        up at once.  The ! that stops comparing also
+                        clears the marking, and has a mapping target of
+                        its own: |<Plug>(HexPairDiffClear)|.
 
-:HexPairDiffNext        Go to the next byte at which the two files
-:HexPairDiffPrev        differ, or the previous one - anywhere in the
-                        file, however many pages away.  A difference past
-                        the end of THIS file (the other one is longer) has
-                        nowhere to put the cursor, so it is reported
-                        instead.
+:HexPairDiffNext        Go to the next CHANGE, or the previous one -
+:HexPairDiffPrev        anywhere in the file, however many pages away.
+
+                        A change is a run of bytes that differ, and these
+                        move between changes rather than through the bytes
+                        of one: where the files agree on byte 1, differ
+                        over bytes 2-5, agree again over 6-8 and differ
+                        from byte 9 on, |:HexPairDiffNext| from byte 1
+                        goes to byte 2, from there to byte 9, and then
+                        says there is no change after it - three presses
+                        for two changes, whatever their length.
+
+                        Backwards it goes to a change's FIRST byte too, so
+                        from the middle of one it lands on that change's
+                        own start, as |[c| does in a diff.
+
+                        A difference past the end of THIS file (the other
+                        one is longer) has nowhere to put the cursor, so
+                        it is reported instead.
 
                         `vimhexdiff` (|hexpair-vimhex|) opens two files
                         side by side this way.

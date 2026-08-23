@@ -184,8 +184,10 @@ nmap <Leader>/ <Plug>(HexPairFind)          " prompt for bytes to find
 nmap <Leader>t <Plug>(HexPairFindText)      " prompt for text to find
 nmap <Leader>n <Plug>(HexPairFindNext)      " next match of the last pattern
 nmap <Leader>N <Plug>(HexPairFindPrev)      " previous match
-nmap <Leader>] <Plug>(HexPairDiffNext)      " next byte that differs
+nmap <Leader>] <Plug>(HexPairDiffNext)      " next change against that file
 nmap <Leader>[ <Plug>(HexPairDiffPrev)      " previous one
+nmap <Leader>c <Plug>(HexPairFindClear)     " stop marking the matches
+nmap <Leader>C <Plug>(HexPairDiffClear)     " stop comparing, clear the marking
 
 " Uppercase variants: the same, but discard unwritten changes without
 " asking (like the ! commands) - handy for skimming through a file.
@@ -417,9 +419,18 @@ Comparing with another file works the same way round:
 
 ```vim
 :HexPairDiff ../golden/firmware.bin   " mark what differs on this page
-:HexPairDiffNext                      " the next differing byte, wherever it is
-:HexPairDiff!                         " stop comparing
+:HexPairDiffNext                      " the next change, wherever it is
+:HexPairDiff!                         " stop comparing, and clear the marking
 ```
+
+`:HexPairDiffNext` / `:HexPairDiffPrev` move between **changes**, not
+through the bytes of one: a run of differing bytes is one change however
+long it is. Where two files agree on byte 1, differ over bytes 2–5, agree
+again over 6–8 and differ from byte 9 on, that is two changes — byte 2
+and byte 9 — and a third press says there is nothing after them.
+Backwards works the same way and lands on a change's first byte, so from
+the middle of one it goes to that change's own start, as `[c` does in a
+diff.
 
 and the shell wrapper opens two files that way in one go:
 

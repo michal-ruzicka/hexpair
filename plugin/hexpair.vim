@@ -3924,6 +3924,158 @@ endfunction
 " The next (or previous) offset at which the two files differ, from a:from
 " exclusive. Reads both a block at a time, so memory does not follow the
 " size of either, and finds the byte within a block by halving.
+" The first byte at which two runs of hex AGREE, or -1 if they never do.
+" Bytes the shorter run does not reach are differences, not agreements -
+" a file that has ended does not agree with one that has not.
+"
+" Same shape as HexPairPagedCountDifferences(): a chunk that is identical
+" between the two is one string comparison and agreement at its first
+" byte, and only a chunk that is not gets taken apart.
+function! HexPairPagedFirstAgreement(mine, theirs) abort
+  let bytes  = strlen(a:mine) / 2
+  let theirs = strlen(a:theirs) / 2
+  let common = theirs < bytes ? theirs : bytes
+  let at = 0
+  while at < common
+    let span = s:cmpblock < common - at ? s:cmpblock : common - at
+    let lhs = strpart(a:mine, at * 2, span * 2)
+    let rhs = strpart(a:theirs, at * 2, span * 2)
+    if lhs ==# rhs
+      return at
+    endif
+    let l = split(lhs, '..\zs')
+    let r = split(rhs, '..\zs')
+    let same = filter(range(span), 'l[v:val] ==# r[v:val]')
+    if !empty(same)
+      return at + same[0]
+    endif
+    let at += span
+  endwhile
+  return -1
+endfunction
+
+" The same from the other end: the LAST byte at which they agree, or -1.
+function! HexPairPagedLastAgreement(mine, theirs) abort
+  let bytes  = strlen(a:mine) / 2
+  let theirs = strlen(a:theirs) / 2
+  let common = theirs < bytes ? theirs : bytes
+  let at = common
+  while at > 0
+    let span = s:cmpblock < at ? s:cmpblock : at
+    let from = at - span
+    let lhs = strpart(a:mine, from * 2, span * 2)
+    let rhs = strpart(a:theirs, from * 2, span * 2)
+    if lhs ==# rhs
+      return at - 1
+    endif
+    let l = split(lhs, '..\zs')
+    let r = split(rhs, '..\zs')
+    let same = filter(range(span), 'l[v:val] ==# r[v:val]')
+    if !empty(same)
+      return from + same[-1]
+    endif
+    let at = from
+  endwhile
+  return -1
+endfunction
+
+" Where the change that covers a:from ends: the first byte at or after it
+" at which the two files agree. If they already agree at a:from - the
+" cursor is not in a change - that is a:from itself, and nothing is read
+" beyond the first block. If they never agree again, the end of the
+" longer file.
+function! s:AgreementAfter(other, from, total) abort
+  let off = a:from
+  while off < a:total
+    let len = s:diffblock < a:total - off ? s:diffblock : a:total - off
+    let mine   = s:FileHex(b:hexpair_page_file, off, len)
+    let theirs = s:FileHex(a:other, off, len)
+    if mine ==# theirs
+      return off
+    endif
+    let at = HexPairPagedFirstAgreement(mine, theirs)
+    if at >= 0
+      return off + at
+    endif
+    let off += len
+    call s:Progress('following the change', off, a:total)
+  endwhile
+  return a:total
+endfunction
+
+" And backwards: the last byte BEFORE a:before at which they agree, or -1
+" when the change reaches the start of the file.
+function! s:AgreementBefore(other, before, total) abort
+  let end = a:before
+  while end > 0
+    let len = s:diffblock < end ? s:diffblock : end
+    let start = end - len
+    let mine   = s:FileHex(b:hexpair_page_file, start, len)
+    let theirs = s:FileHex(a:other, start, len)
+    if mine ==# theirs
+      return end - 1
+    endif
+    let at = HexPairPagedLastAgreement(mine, theirs)
+    if at >= 0
+      return start + at
+    endif
+    let end = start
+    call s:Progress('following the change back', a:total - end, a:total)
+  endwhile
+  return -1
+endfunction
+
+" The next byte at or after a:from at which the two files differ, or -1.
+function! s:DifferenceAfter(other, from, total) abort
+  let off = a:from
+  while off < a:total
+    call s:Progress('comparing', off, a:total)
+    let len = s:diffblock < a:total - off ? s:diffblock : a:total - off
+    let idx = HexPairPagedFirstDifference(
+          \ s:FileHex(b:hexpair_page_file, off, len),
+          \ s:FileHex(a:other, off, len))
+    if idx >= 0
+      return off + idx / 2
+    endif
+    let off += len
+  endwhile
+  return -1
+endfunction
+
+" The last byte before a:before at which they differ, or -1.
+function! s:DifferenceBefore(other, before, total) abort
+  let off = a:before
+  while off > 0
+    call s:Progress('comparing back', a:total - off, a:total)
+    let len = s:diffblock < off ? s:diffblock : off
+    let start = off - len
+    let idx = HexPairPagedLastDifference(
+          \ s:FileHex(b:hexpair_page_file, start, len),
+          \ s:FileHex(a:other, start, len))
+    if idx >= 0
+      return start + idx / 2
+    endif
+    let off = start
+  endwhile
+  return -1
+endfunction
+
+" The next (or previous) CHANGE, as the offset of its first byte.
+"
+" A change is a run of bytes that differ, and what these jumps are for is
+" moving between changes - not through the bytes of one. Two files that
+" part company at byte 2 and agree again at byte 6 have one change there,
+" however many bytes it covers, so the jump from inside it goes to the
+" next one.
+"
+" Forward, that is: find where the change under the cursor ends (nothing
+" is read past the first block when the cursor is not in one), then the
+" first difference from there - which is a change's first byte by
+" construction, since everything between the agreement and it agrees.
+" Backwards: the last difference before the cursor is somewhere inside a
+" change, and what is wanted is that change's first byte, so walk back to
+" the agreement in front of it. From the middle of a change that lands on
+" the change's own start, which is what |[c| does in a diff.
 function! s:DiffSearch(from, forward) abort
   let other = get(b:, 'hexpair_diff_file', '')
   if other ==# ''
@@ -3932,36 +4084,12 @@ function! s:DiffSearch(from, forward) abort
   let mysize = getfsize(b:hexpair_page_file)
   let theirsize = getfsize(other)
   let total = mysize > theirsize ? mysize : theirsize
-  let block = s:diffblock
   if a:forward
-    let off = a:from + 1
-    while off < total
-      call s:Progress('comparing', off, total)
-      let len = block < total - off ? block : total - off
-      let idx = HexPairPagedFirstDifference(
-            \ s:FileHex(b:hexpair_page_file, off, len),
-            \ s:FileHex(other, off, len))
-      if idx >= 0
-        return off + idx / 2
-      endif
-      let off += len
-    endwhile
-    return -1
+    return s:DifferenceAfter(other,
+          \ s:AgreementAfter(other, a:from, total), total)
   endif
-  let off = a:from
-  while off > 0
-    call s:Progress('comparing back', total - off, total)
-    let len = block < off ? block : off
-    let start = off - len
-    let idx = HexPairPagedLastDifference(
-          \ s:FileHex(b:hexpair_page_file, start, len),
-          \ s:FileHex(other, start, len))
-    if idx >= 0
-      return start + idx / 2
-    endif
-    let off = start
-  endwhile
-  return -1
+  let at = s:DifferenceBefore(other, a:from, total)
+  return at < 0 ? -1 : s:AgreementBefore(other, at, total) + 1
 endfunction
 
 function! s:DiffJump(forward) abort
@@ -3972,7 +4100,7 @@ function! s:DiffJump(forward) abort
     let here = s:IsHexView() ? s:PagedByteOffset() : s:TextByteOffset()
     let at = s:DiffSearch(here, a:forward)
     if at < 0
-      echo printf('hexpair: no difference %s byte %d',
+      echo printf('hexpair: no change %s byte %d',
             \ a:forward ? 'after' : 'before', here + 1)
       return
     endif
@@ -3986,8 +4114,9 @@ function! s:DiffJump(forward) abort
       return
     endif
     call s:GotoOffset(string(at + 1), 0)
-    echo printf('hexpair: byte %d (0x%x) differs from %s',
-          \ at + 1, at + 1, b:hexpair_diff_file)
+    echo printf('hexpair: %s change against %s starts at byte %d (0x%x)',
+          \ a:forward ? 'next' : 'previous', b:hexpair_diff_file,
+          \ at + 1, at + 1)
   catch /^hexpair:/
     echohl ErrorMsg
     echomsg v:exception
@@ -4932,6 +5061,11 @@ nnoremap <silent> <Plug>(HexPairFindNext) :<C-U>HexPairFindNext<CR>
 nnoremap <silent> <Plug>(HexPairFindPrev) :<C-U>HexPairFindPrev<CR>
 nnoremap <silent> <Plug>(HexPairDiffNext) :<C-U>HexPairDiffNext<CR>
 nnoremap <silent> <Plug>(HexPairDiffPrev) :<C-U>HexPairDiffPrev<CR>
+" Turning the markings off is what the bang on either command does, and
+" both are worth a key: they are how a page stops being covered in
+" matches once the thing has been found.
+nnoremap <silent> <Plug>(HexPairFindClear) :<C-U>HexPairFind!<CR>
+nnoremap <silent> <Plug>(HexPairDiffClear) :<C-U>HexPairDiff!<CR>
 
 " No default key mappings are defined; map the <Plug> mappings (or the
 " commands directly) in your vimrc, e.g.:

@@ -265,6 +265,9 @@ come back**; each names the test that would catch it.
 | A temp-hygiene test asked how many files `tempname()`'s directory HOLDS; on Windows that is the shared `%TEMP%`, with sixteen of other people's in it | "a page of a file this user cannot write is read-only" — count what a write ADDED |
 | Counting the bytes that differ walked the page, two `strpart()`s per byte: 4.9 s a page, paid twice by `vimhexdiff` — it looked hung | "counting the differing bytes" / "on a page-sized run, one byte in" |
 | A page turn left the scroll-bound window on its old page, so `vimhexdiff` scrolled two windows in step through different parts of two files | "a bound window turns to the same page" and the four refusals beside it |
+| The diff jumps stepped byte by byte through one change instead of between changes — `]` fifty times to cross fifty differing bytes | "and the next jump clears the whole of it" + the block around it |
+| Every match on the PAGE was found and then tested against every visible line: `:HexPairFind 2?` cost a second per page | "a match over a line end is marked on both lines" (the positions are window-scoped now) |
+| A selection report echoed from a Visual-mode mapping was painted over by `-- VISUAL --` before it could be read | not testable headlessly — the tmux recipe above, and the hit-enter prompt is the fix |
 
 **The Vim version floor is a claim that has to be run.** The plugin says
 everything but the splice works on Vim 8.0; it did not, for a year, and
@@ -679,6 +682,14 @@ was designed and built in Stage 2 - see "What Stage 2 decided".
     boundary**: an index into hex is a nibble and half of them are the
     wrong half, which is the one thing every caller of `match()` here
     has to remember.
+  - `HexPairPagedFirstAgreement()` / `LastAgreement()` — where they agree
+    again, which is what makes a CHANGE (a run of differing bytes) a
+    thing the jumps can move between. Agreement is not a prefix property,
+    so it cannot be halved: a chunk that is identical is one comparison
+    and agreement at its first byte, and only a chunk that is not gets
+    taken apart with `split()`/`filter()`. A change that runs to the end
+    of a large file therefore costs a read of the rest of it — which is
+    also what "is there another change?" honestly costs.
   - `HexPairPagedFirstDifference()` / `LastDifference()` — where two runs
     part company, by **halving**, never by walking: comparing two strings
     is one C-level operation and a block is megabytes of hex. One string

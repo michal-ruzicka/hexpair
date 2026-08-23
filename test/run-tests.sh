@@ -186,6 +186,15 @@ _fd[700:705] = b'hello'
 open(os.path.join(w, 'find1.bin'), 'wb').write(bytes(_fd))
 open(os.path.join(w, 'rep1.bin'), 'wb').write(bytes(_fd))
 open(os.path.join(w, 'rep2.bin'), 'wb').write(bytes(_fd))
+# a diff fixture with RUNS of differing bytes rather than single ones:
+# bytes 2-5, 1001-1201 and the last one (1-based), so the jumps between
+# changes have something to jump over
+_ra = bytes(i % 256 for i in range(5000))
+_rb = bytearray(_ra)
+for _i in list(range(1, 5)) + list(range(1000, 1201)) + [4999]:
+    _rb[_i] ^= 0xff
+open(os.path.join(w, 'runa.bin'), 'wb').write(bytes(_ra))
+open(os.path.join(w, 'runb.bin'), 'wb').write(bytes(_rb))
 # diff fixtures: same bytes but for three, and a longer copy
 _da = bytes(i % 256 for i in range(5000))
 _db = bytearray(_da)
@@ -2826,7 +2835,7 @@ check "the second is on another page" "hex 3/10 @0x5dd (1501)" \
 check "the third is the file's last byte" "hex 10/10 @0x1388 (5000)" \
     "$(sed -n 8p "$WORK/tdf.out")"
 check "past the last one it says there is none" \
-    "hexpair: no difference after byte 5000" "$(sed -n 9p "$WORK/tdf.out")"
+    "hexpair: no change after byte 5000" "$(sed -n 9p "$WORK/tdf.out")"
 check "and back again finds the one before" "hex 3/10 @0x5dd (1501)" \
     "$(sed -n 10p "$WORK/tdf.out")"
 check "comparing a view with its own file is refused" \
@@ -2842,6 +2851,74 @@ check "counting the differing bytes" \
 # On a full 128 KiB page, where the block skipping is what keeps this
 # under ten milliseconds instead of the five seconds a walk cost.
 check "on a page-sized run, one byte in" "[1, 50000]" "$(sed -n 14p "$WORK/tdf.out")"
+
+# --- The jumps move between changes, not through the bytes of one ---------
+# A change is a run of differing bytes, and these jumps are for moving
+# between changes: from inside one, forward goes to the NEXT one, and
+# backward to the start of the one the cursor is in - which is what |[c|
+# does in a diff. The fixture differs in three runs: bytes 2-5, 1001-1201
+# (another page) and the last byte.
+cat > "$WORK/trun.vim" <<EOF
+$(printf "$HEX")
+function! Msg(m) abort
+  let lines = filter(split(a:m, "\n"), 'v:val =~# "hexpair:"')
+  return empty(lines) ? '' : matchstr(lines[-1], 'hexpair:[^ ]* [^ ]* change')
+endfunction
+let out = []
+call add(out, string([HexPairPagedFirstAgreement('001122', '001122'), HexPairPagedFirstAgreement('ff1122', '001122'), HexPairPagedFirstAgreement('ffee22', '0011dd'), HexPairPagedFirstAgreement('001122', '0011')]))
+call add(out, string([HexPairPagedLastAgreement('001122', '001122'), HexPairPagedLastAgreement('0011ff', '001100'), HexPairPagedLastAgreement('ffee22', '0011dd'), HexPairPagedLastAgreement('001122', '0011')]))
+HexPairOpen $WORK/runa.bin 1
+silent HexPairDiff $WORK/runb.bin
+HexPairGoOffset 1
+redir => m1
+silent HexPairDiffNext
+redir END
+call add(out, HexPairStatus() . ' | ' . Msg(m1))
+silent HexPairDiffNext
+call add(out, HexPairStatus())
+silent HexPairDiffNext
+call add(out, HexPairStatus())
+redir => m2
+silent HexPairDiffNext
+redir END
+call add(out, matchstr(m2, 'no change after byte \\d\\+'))
+HexPairGoOffset 1100
+redir => m3
+silent HexPairDiffPrev
+redir END
+call add(out, HexPairStatus() . ' | ' . Msg(m3))
+silent HexPairDiffPrev
+call add(out, HexPairStatus())
+HexPairGoOffset 1100
+silent HexPairDiffNext
+call add(out, HexPairStatus())
+call writefile(out, '$WORK/trun.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/trun.vim" < /dev/null
+# The pure halves first: where two runs of hex agree, from either end. A
+# byte the shorter run does not reach is a difference, not an agreement.
+check "where two runs first agree" "[0, 1, -1, 0]" "$(sed -n 1p "$WORK/trun.out")"
+check "and where they last agree" "[2, 1, -1, 1]" "$(sed -n 2p "$WORK/trun.out")"
+check "the first change is entered at its first byte" \
+    "hex 1/10 @0x2 (2) | hexpair: next change" "$(sed -n 3p "$WORK/trun.out")"
+# From inside the first change (its bytes 2-5), the next jump clears the
+# whole of it rather than stepping to byte 3.
+check "and the next jump clears the whole of it" "hex 2/10 @0x3e9 (1001)" \
+    "$(sed -n 4p "$WORK/trun.out")"
+check "then the last byte, which is a change of its own" \
+    "hex 10/10 @0x1388 (5000)" "$(sed -n 5p "$WORK/trun.out")"
+check "and then there are no more" "no change after byte 5000" \
+    "$(sed -n 6p "$WORK/trun.out")"
+# Backwards from the middle of the second change: its own start, as |[c|
+# does in a diff.
+check "backwards from inside a change goes to its start" \
+    "hex 2/10 @0x3e9 (1001) | hexpair: previous change" \
+    "$(sed -n 7p "$WORK/trun.out")"
+check "and again to the one before that" "hex 1/10 @0x2 (2)" \
+    "$(sed -n 8p "$WORK/trun.out")"
+check "forwards from inside it skips to the next" "hex 10/10 @0x1388 (5000)" \
+    "$(sed -n 9p "$WORK/trun.out")"
 
 # --- A file that is longer differs from where it grows --------------------
 cat > "$WORK/tdf2.vim" <<EOF
@@ -2912,6 +2989,8 @@ silent HexPairPageGoto 1
 silent HexPairFind 0e 0f 10
 call add(out, string(HexPairPagedFindPositions(2, 3)))
 call add(out, string(HexPairPagedFindPositions(3, 3)))
+silent HexPairFind!
+call add(out, string([HexPairPagedFindPositions(2, 33), execute('nmap') =~# 'HexPairFindClear', execute('nmap') =~# 'HexPairDiffClear']))
 call writefile(out, '$WORK/tfind.out')
 qa!
 EOF
@@ -2957,6 +3036,11 @@ check "a match over a line end is marked on both lines" \
     "$(sed -n 13p "$WORK/tfind.out")"
 check "and on the second line alone when that is all that is asked for" \
     "[[3, 11, 2], [3, 60, 1]]" "$(sed -n 14p "$WORK/tfind.out")"
+# The bang is how the marking goes away, and it has a <Plug> target of its
+# own for that - as :HexPairDiff! does - because "how do I turn this off"
+# is a question with a key on it.
+check "the bang clears the marking, and both clears have a target" \
+    "[[], 1, 1]" "$(sed -n 15p "$WORK/tfind.out")"
 
 # --- Replacing what was found ---------------------------------------------
 # Both commands edit the PAGE, exactly as typing over the dump would: the

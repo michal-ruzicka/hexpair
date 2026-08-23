@@ -33,7 +33,12 @@ and this project adheres to
 - **`:HexPairDiff [file]`** marks every byte of the page that differs
   from the same offset of another file (`HexPairDiff`) and says how many
   differ; `:HexPairDiffNext` / `:HexPairDiffPrev` walk the whole file for
-  the next disagreement. The shell wrapper gains `vimhexdiff FILE1 FILE2`,
+  the next **change** - a run of differing bytes is one change however
+  long it is, so the jumps move between changes rather than through the
+  bytes of one, and backwards lands on a change's first byte as `[c` does
+  in a diff. `:HexPairDiff!` stops comparing and clears the marking
+  (`<Plug>(HexPairDiffClear)`, and `<Plug>(HexPairFindClear)` for
+  `:HexPairFind!`). The shell wrapper gains `vimhexdiff FILE1 FILE2`,
   which opens both side by side, each marking what differs from the
   other, cursors on the first difference and the windows scroll-bound -
   and a page turn in either window takes the other with it, to the page
