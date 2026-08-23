@@ -18,6 +18,10 @@ and this project adheres to
   `:HexPairFindPrev` repeat it either way and obey `'wrapscan'`, and
   every match on the page is marked (`HexPairFind`). `/` could never do
   this: it searches the page on screen, which is a window on the file.
+  A search reads the file a megabyte at a time, and from 16 MB up says
+  how far it has got, since a scan of a large file takes long enough to
+  look like a hang; `CTRL-C` stops it, and nothing has been changed by
+  then. `:HexPairDiffNext` reports the same way.
 - **Replacing what was found.** `:HexPairReplace {bytes}` over the match
   under the cursor, `:HexPairReplaceAllInPage {pattern} / {bytes}` over
   every match on the page in view - the scope is in the name, because

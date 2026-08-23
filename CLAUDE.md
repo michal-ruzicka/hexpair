@@ -642,7 +642,15 @@ was designed and built in Stage 2 - see "What Stage 2 decided".
   the new mtime, so the fallback path does not go on complaining.
 - Finding, comparing and marking all rest on **one file read helper**,
   `s:FileHex(file, off, len)` — a byte range of any file as one flat run
-  of lowercase hex — and on two ways of looking at such a run:
+  of lowercase hex. What it strips from xxd's output is the line breaks,
+  and it does that as **two passes over one character each** (`\n`, then
+  `\r` for a Windows xxd) rather than one over a negated collection:
+  measured on the 2 MB of hex a 1 MiB block comes to, 16 ms against
+  51 ms, and a scan of a large file is thousands of those. A 64 MiB
+  `:HexPairDiffNext` went 11.4 s → 5.4 s on that change alone; what is
+  left is `system()` and xxd themselves (4.2 s of the 5.4 s), which is
+  the floor for as long as reading a range of a file means running xxd.
+  Two ways of looking at such a run:
   - `HexPairPagedFindInHex()` — where a pattern matches, **on a byte
     boundary**: an index into hex is a nibble and half of them are the
     wrong half, which is the one thing every caller of `match()` here
@@ -664,6 +672,14 @@ was designed and built in Stage 2 - see "What Stage 2 decided".
   with a handful of differences and 260 ms when every byte differs. The
   block is 1024 bytes because that is where skipping matching bytes
   faster and taking apart differing ones slower meet (256…16384 measured).
+- `s:Progress()` / `HexPairPagedProgressText()` — a file-wide scan reads a
+  megabyte at a time and can run for minutes, which is indistinguishable
+  from a hang, so from 16 MB up it says how far it has got. **The redraw
+  goes after the echo, and it has to be `redraw!`**: measured in a
+  terminal over five updates, a plain `redraw` before the echo showed one
+  of them, after it two, and `redraw!` all five — Vim skips a redraw it
+  believes changes nothing. It costs about 5 ms per update, ~5% of a
+  scan. `CTRL-C` interrupts, which is safe because a scan only reads.
 - `s:BindPageTurn()` / `s:FollowPageTurn()` — `'scrollbind'` is Vim's own
   "these windows move together", and a page turn is the one kind of
   scrolling it cannot follow: the bound window keeps its page and the two

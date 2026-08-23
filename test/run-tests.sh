@@ -3224,6 +3224,33 @@ EOF
 check "refreshing the other windows leaves this one current" "[1, 1, 2, 5]" \
     "$(cat "$WORK/twin.out")"
 
+# --- What a scan says while it runs ---------------------------------------
+# A scan of a big file reads it a megabyte at a time and can take minutes,
+# which is indistinguishable from a hang, so it says where it has got to.
+# The message is the part that can be wrong in a way anyone would notice,
+# so it is a pure function and is checked as one.
+cat > "$WORK/tprog.vim" <<EOF
+$(printf "$HEX")
+let out = []
+call add(out, string([HexPairPagedSizeText(512), HexPairPagedSizeText(1536), HexPairPagedSizeText(1024 * 1024 * 3 / 2), HexPairPagedSizeText(1024 * 1024 * 1024 * 2)]))
+call add(out, HexPairPagedProgressText('comparing', 0, 1024 * 1024 * 1024))
+call add(out, HexPairPagedProgressText('searching', 3 * 1024 * 1024, 4 * 1024 * 1024))
+call add(out, HexPairPagedProgressText('searching back', 0, 0))
+call writefile(out, '$WORK/tprog.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tprog.vim" < /dev/null
+check "a size reads the way a person says it" \
+    "['512 bytes', '1.5 KiB', '1.5 MiB', '2.0 GiB']" "$(sed -n 1p "$WORK/tprog.out")"
+check "a scan says how far it has got" \
+    "hexpair: comparing 0% of 1.0 GiB (CTRL-C stops)" "$(sed -n 2p "$WORK/tprog.out")"
+check "and in which direction" \
+    "hexpair: searching 75% of 4.0 MiB (CTRL-C stops)" "$(sed -n 3p "$WORK/tprog.out")"
+# A file with no bytes is not a division by zero, and is done by definition.
+check "an empty file is 100%" \
+    "hexpair: searching back 100% of 0 bytes (CTRL-C stops)" \
+    "$(sed -n 4p "$WORK/tprog.out")"
+
 # --- A page turn takes the scroll-bound windows with it -------------------
 # 'scrollbind' says these windows move together, and a page turn is the
 # one kind of scrolling Vim cannot follow on its own - which is what left

@@ -424,6 +424,11 @@ vimhexdiff old.img new.img
 — both files side by side, each marking what differs from the other,
 cursors on the first difference and the windows scroll-bound.
 
+Searching and comparing read the file a megabyte at a time, so neither
+has to fit in memory. On a large one that takes long enough to look like
+a hang, so from 16 MB up the scan says how far it has got, and `CTRL-C`
+stops it — nothing has been changed by then, both only read.
+
 `'scrollbind'` says the two windows move together, and a page turn is the
 one kind of scrolling Vim cannot follow on its own — so hexpair passes it
 on: turning the page in either window (or landing on another page with

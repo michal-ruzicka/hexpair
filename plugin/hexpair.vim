@@ -296,6 +296,13 @@ let s:cmpblock = 1024
 " that their own turns do not pass it back.
 let s:binding = 0
 
+" From what size a file-wide scan (|:HexPairFind|, |:HexPairDiffNext|)
+" says where it has got to. Below it a scan is over before a message
+" could be read, and a progress line that flashes past is noise; above it
+" a scan is minutes of a silent Vim, which is indistinguishable from a
+" hang.
+let s:progressfrom = 16 * 1024 * 1024
+
 " Blocks the length-changing write copies in. Bounded on purpose: the
 " whole point of paging is that memory use does not follow the size of
 " the file.
@@ -1069,6 +1076,45 @@ function! s:RefreshOtherWindows() abort
   endtry
 endfunction
 
+" A size as a person reads one. Sizes here span a boot sector and a disk
+" image, so the unit follows the number rather than the number the unit.
+function! HexPairPagedSizeText(bytes) abort
+  if a:bytes >= 1024 * 1024 * 1024
+    return printf('%.1f GiB', a:bytes / 1024.0 / 1024.0 / 1024.0)
+  endif
+  if a:bytes >= 1024 * 1024
+    return printf('%.1f MiB', a:bytes / 1024.0 / 1024.0)
+  endif
+  if a:bytes >= 1024
+    return printf('%.1f KiB', a:bytes / 1024.0)
+  endif
+  return printf('%d bytes', a:bytes)
+endfunction
+
+" What a scan says while it runs. Pure, and therefore testable: the
+" message is the only part of a progress report that can be wrong in a
+" way anyone would notice.
+function! HexPairPagedProgressText(what, done, total) abort
+  return printf('hexpair: %s %d%% of %s (CTRL-C stops)', a:what,
+        \ a:total > 0 ? a:done * 100 / a:total : 100,
+        \ HexPairPagedSizeText(a:total))
+endfunction
+
+" Scans of a big file report where they have got to. The redraw AFTER the
+" echo is what puts the line on the screen while a function is still
+" running, and it has to be the forcing one: measured in a terminal over
+" five updates, a plain :redraw before the echo showed one of them, after
+" it two, and :redraw! all five - Vim skips a redraw it believes changes
+" nothing, and a message written from inside a running function is
+" exactly that.
+function! s:Progress(what, done, total) abort
+  if a:total < s:progressfrom
+    return
+  endif
+  echo HexPairPagedProgressText(a:what, a:done, a:total)
+  redraw!
+endfunction
+
 " A page turn is scrolling by a whole page, and 'scrollbind' cannot follow
 " it: the bound window stays on the page it had, and the two then scroll
 " in step through different parts of their files. Every scroll-bound
@@ -1666,8 +1712,15 @@ function! s:FileHex(file, off, len) abort
     return ''
   endif
   try
-    return substitute(s:Run(printf('%s -p -s %d -l %d %s', s:xxd, a:off,
-          \ a:len, shellescape(a:file))), '[^0-9a-fA-F]', '', 'g')
+    let out = s:Run(printf('%s -p -s %d -l %d %s', s:xxd, a:off, a:len,
+          \ shellescape(a:file)))
+    " xxd -p prints hex and line breaks and nothing else, so the line
+    " breaks are all there is to remove - the CR because a Windows xxd
+    " ends its lines with one. Two passes over a single character each,
+    " rather than one over a collection: measured on the 2 MB of hex a
+    " 1 MiB block comes to, 16 ms against 51 ms, and a scan of a large
+    " file is thousands of those.
+    return substitute(substitute(out, '\n', '', 'g'), '\r', '', 'g')
   catch
     return ''
   endtry
@@ -3245,6 +3298,7 @@ function! s:FindScan(from, forward) abort
   if a:forward
     let off = a:from
     while off < total
+      call s:Progress('searching', off, total)
       let len = s:diffblock < total - off ? s:diffblock : total - off
       let idx = HexPairPagedFindInHex(s:FileHex(file, off, len), pat, 0, 1)
       if idx >= 0
@@ -3259,6 +3313,7 @@ function! s:FindScan(from, forward) abort
   endif
   let end = a:from
   while end > 0
+    call s:Progress('searching back', total - end, total)
     let start = end - s:diffblock
     let start = start < 0 ? 0 : start
     " Read past the block's end by the pattern's span, so a match that
@@ -3867,6 +3922,7 @@ function! s:DiffSearch(from, forward) abort
   if a:forward
     let off = a:from + 1
     while off < total
+      call s:Progress('comparing', off, total)
       let len = block < total - off ? block : total - off
       let idx = HexPairPagedFirstDifference(
             \ s:FileHex(b:hexpair_page_file, off, len),
@@ -3880,6 +3936,7 @@ function! s:DiffSearch(from, forward) abort
   endif
   let off = a:from
   while off > 0
+    call s:Progress('comparing back', total - off, total)
     let len = block < off ? block : off
     let start = off - len
     let idx = HexPairPagedLastDifference(

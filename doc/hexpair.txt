@@ -864,6 +864,16 @@ HexPairOpenFile({file} [, {page}])
                         `vimhexdiff` (|hexpair-vimhex|) opens two files
                         side by side this way.
 
+                                                        *hexpair-progress*
+                        Both files are read a megabyte at a time, so
+                        neither has to fit in memory - but on a large one
+                        that takes long enough to look like a hang, so
+                        from 16 MB up the scan says how far it has got,
+                        and CTRL-C stops it.  |:HexPairFind| and
+                        |:HexPairFindNext| do the same; nothing has been
+                        changed by the time either of them can be
+                        interrupted, since both only read.
+
                         *:HexPairMark* *:HexPairGoMark* *:HexPairMarks*
                                                      *:HexPairMarkDelete*
 :HexPairMark {name}     Remember the byte under the cursor as {name}.
