@@ -3429,27 +3429,43 @@ cat > "$WORK/tview3.vim" <<EOF
 $(printf "$HEX")
 let out = []
 call add(out, string([HexPairPagedMayLeaveWindow('n'), HexPairPagedMayLeaveWindow('c'), HexPairPagedMayLeaveWindow('v'), HexPairPagedMayLeaveWindow('V'), HexPairPagedMayLeaveWindow("\<C-V>"), HexPairPagedMayLeaveWindow('s'), HexPairPagedMayLeaveWindow('i'), HexPairPagedMayLeaveWindow('R')]))
-HexPairOpen $WORK/runa.bin 1
-silent HexPairDiff $WORK/runb.bin
-call cursor(3, 12)
-doautocmd CursorMoved
-call add(out, 'hex: ' . (len(getmatches()) > 0))
+function! Overshoot() abort
+  let over = 0
+  for m in getmatches()
+    for key in filter(keys(m), 'v:val =~# "^pos"')
+      let p = m[key]
+      if type(p) == type([]) && len(p) >= 3
+        let past = p[1] + p[2] - 1 - (strlen(getline(p[0])) + 1)
+        let over = past > over ? past : over
+      endif
+    endfor
+  endfor
+  return over
+endfunction
+HexPairOpen $WORK/tmark1.bin 1
+silent HexPairDiff $WORK/tmark2.bin
+call add(out, 'hex columns: ' . string(map(copy(HexPairPagedMarkingPositions('diff', 2, 4)), 'v:val[1]')))
 HexPairToggle
 doautocmd CursorMoved
-call add(out, 'text: ' . len(getmatches()))
-HexPairToggle
-doautocmd CursorMoved
-call add(out, 'hex again: ' . (len(getmatches()) > 0))
+call add(out, 'text columns: ' . string(map(copy(HexPairPagedMarkingPositions('diff', 2, 4)), 'v:val[1]')))
+call add(out, 'past the line ends: ' . Overshoot())
 call writefile(out, '$WORK/tview3.out')
 qa!
 EOF
 "$HEXPAIR_VIM" -es -u NONE -S "$WORK/tview3.vim" < /dev/null
 check "a Visual or Insert mode keeps this window" "[1, 1, 0, 0, 0, 0, 0, 0]" \
     "$(sed -n 1p "$WORK/tview3.out")"
-check "the hex view has its markings" "hex: 1" "$(sed -n 2p "$WORK/tview3.out")"
-check "the hex view's marks do not survive into the text view" \
-    "text: 0" "$(sed -n 3p "$WORK/tview3.out")"
-check "and they come back on the way back" "hex again: 1" \
+# The same two differing bytes, in the columns each view puts them in: the
+# dump's hex column starts at 11 and gives a byte three columns, the text
+# view gives it one, at the offset within its line.
+check "a dump marks them in its own columns" "hex columns: [17, 62, 38, 69]" \
+    "$(sed -n 2p "$WORK/tview3.out")"
+check "the text view marks them at one column per byte" \
+    "text columns: [3, 4]" "$(sed -n 3p "$WORK/tview3.out")"
+# And nothing left over from the view before: a hex-view column on a
+# text-view line would reach past the end of it, which is exactly what the
+# stale markings did.
+check "and nothing reaches past the end of a line" "past the line ends: 0" \
     "$(sed -n 4p "$WORK/tview3.out")"
 
 # --- A page turn takes the scroll-bound windows with it -------------------
