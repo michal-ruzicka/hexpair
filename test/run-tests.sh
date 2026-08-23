@@ -2908,6 +2908,10 @@ redir => m4
 silent! HexPairFind ff ff ff ff ff
 redir END
 call add(out, Msg(m4))
+silent HexPairPageGoto 1
+silent HexPairFind 0e 0f 10
+call add(out, string(HexPairPagedFindPositions(2, 3)))
+call add(out, string(HexPairPagedFindPositions(3, 3)))
 call writefile(out, '$WORK/tfind.out')
 qa!
 EOF
@@ -2942,6 +2946,17 @@ check "text is found the same way" \
 check "and what is not there says so" \
     "hexpair: bytes ff ff ff ff ff not found in this file" \
     "$(sed -n 12p "$WORK/tfind.out")"
+# Only the bytes the given lines hold are searched, which is what keeps a
+# pattern matching thousands of times on a page from costing a second per
+# redraw. Two things have to survive that: a match spanning the end of a
+# line is still marked on both, and one that STARTS above the range and
+# reaches into it is marked on the line it reaches - the reason the slice
+# begins the pattern's length early.
+check "a match over a line end is marked on both lines" \
+    "[[2, 53, 5], [2, 74, 2], [3, 11, 2], [3, 60, 1]]" \
+    "$(sed -n 13p "$WORK/tfind.out")"
+check "and on the second line alone when that is all that is asked for" \
+    "[[3, 11, 2], [3, 60, 1]]" "$(sed -n 14p "$WORK/tfind.out")"
 
 # --- Replacing what was found ---------------------------------------------
 # Both commands edit the PAGE, exactly as typing over the dump would: the

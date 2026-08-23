@@ -3338,68 +3338,72 @@ function! s:FindScan(from, forward) abort
   return -1
 endfunction
 
-" Matches of the current pattern within the page, as byte offsets from the
-" page's base. Computed from the page's own bytes as they were READ, once
-" per page and pattern - which is what makes highlighting them cost
-" nothing per redraw, and what keeps the marking about the FILE: an edit
-" of yours shows up as a changed byte (HexPairModified), not as a match
-" appearing or vanishing under the cursor.
-function! s:FindMatchesOnPage() abort
-  let state = [s:find.hex, b:hexpair_page_base]
-  if get(b:, 'hexpair_find_state', []) ==# state
-    return b:hexpair_find_matches
-  endif
-  let b:hexpair_find_state = state
-  let b:hexpair_find_matches = []
-  let hex = get(b:, 'hexpair_page_hex', '')
-  if s:find.hex ==# '' || hex ==# ''
-    return b:hexpair_find_matches
-  endif
-  let at = 0
-  while 1
-    let idx = HexPairPagedFindInHex(hex, s:find.hex, at, 1)
-    if idx < 0
-      break
-    endif
-    call add(b:hexpair_find_matches, idx / 2)
-    let at = idx + 2
-  endwhile
-  return b:hexpair_find_matches
-endfunction
-
-" Those matches, as matchaddpos() positions for the lines a:first to
-" a:last. A match that runs over the end of a line is marked on each line
-" it covers.
+" Matches of the current pattern, as matchaddpos() positions for the lines
+" a:first to a:last. A match that runs over the end of a line is marked on
+" each line it covers.
+"
+" Only the bytes THOSE LINES hold are searched, plus the pattern's length
+" less one in front of them so a match reaching in from above is found
+" whole. A pattern like "2?" matches every sixteenth byte, which on a
+" 128 KiB page is eight thousand times: building that list took a second,
+" and walking every visible line for each of its entries took another - to
+" mark the forty matches that are on screen. What can be marked is what is
+" on screen, and there is a window's worth of it.
+"
+" The bytes are the page's as it was READ, which is what keeps the marking
+" about the FILE: an edit of yours shows up as a changed byte
+" (HexPairModified), not as a match appearing or vanishing under the
+" cursor.
 function! HexPairPagedFindPositions(first, last) abort
   let out = []
   let n = b:hexpair_n
   let span = s:find.bytes
-  if span <= 0
+  let hex = get(b:, 'hexpair_page_hex', '')
+  if span <= 0 || s:find.hex ==# '' || hex ==# ''
     return out
   endif
-  for at in s:FindMatchesOnPage()
-    for lnum in range(a:first, a:last)
-      if s:IsBannerLine(getline(lnum))
-        continue
+  let header = s:HeaderLines()
+  let firstidx = a:first - 1 - header
+  let lastidx  = a:last - 1 - header
+  let bytes = strlen(hex) / 2
+  let lo = firstidx < 0 ? 0 : firstidx * n
+  let hi = (lastidx + 1) * n - 1
+  if hi > bytes - 1
+    let hi = bytes - 1
+  endif
+  if lastidx < 0 || lo > hi
+    return out
+  endif
+  " Back up by the pattern's span so a match that starts above the window
+  " and reaches into it is found; the slice still starts on a byte.
+  let from = lo - (span - 1) < 0 ? 0 : lo - (span - 1)
+  let slice = strpart(hex, from * 2, (hi - from + 1) * 2)
+  let at = 0
+  while 1
+    let idx = HexPairPagedFindInHex(slice, s:find.hex, at, 1)
+    if idx < 0
+      break
+    endif
+    let at = idx + 2
+    let byte = from + idx / 2
+    let line = byte / n
+    let last = (byte + span - 1) / n
+    while line <= last
+      let lnum = line + 1 + header
+      if line >= firstidx && line <= lastidx && line * n < bytes
+        let [n2, hexstart, hexend, asciistart] = s:PagedLineLayout(lnum)
+        let s0 = byte - line * n
+        let s0 = s0 < 0 ? 0 : s0
+        let s1 = byte + span - 1 - line * n
+        let s1 = s1 > n - 1 ? n - 1 : s1
+        call add(out, [lnum, hexstart + s0 * 3, (s1 - s0 + 1) * 3 - 1])
+        if strlen(getline(lnum)) >= asciistart
+          call add(out, [lnum, asciistart + s0, s1 - s0 + 1])
+        endif
       endif
-      let idx = lnum - 1 - s:HeaderLines()
-      if idx < 0
-        continue
-      endif
-      let lo = at - idx * n
-      let hi = lo + span - 1
-      let lo = lo < 0 ? 0 : lo
-      let hi = hi > n - 1 ? n - 1 : hi
-      if hi < lo || lo > n - 1 || at + span - 1 < idx * n
-        continue
-      endif
-      let [n, hexstart, hexend, asciistart] = s:PagedLineLayout(lnum)
-      call add(out, [lnum, hexstart + lo * 3, (hi - lo + 1) * 3 - 1])
-      if strlen(getline(lnum)) >= asciistart
-        call add(out, [lnum, asciistart + lo, hi - lo + 1])
-      endif
-    endfor
-  endfor
+      let line += 1
+    endwhile
+  endwhile
   return out
 endfunction
 
