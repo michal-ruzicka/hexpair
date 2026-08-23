@@ -186,6 +186,15 @@ _fd[700:705] = b'hello'
 open(os.path.join(w, 'find1.bin'), 'wb').write(bytes(_fd))
 open(os.path.join(w, 'rep1.bin'), 'wb').write(bytes(_fd))
 open(os.path.join(w, 'rep2.bin'), 'wb').write(bytes(_fd))
+# a small text-view fixture with known line breaks: bytes 0-9 "ABCDEFGHIJ",
+# 10 a line break, 11-20 "KLMNOPQRST", 21 a line break, 22-31 "UVWXYZ0123"
+_tm = b'ABCDEFGHIJ\nKLMNOPQRST\nUVWXYZ0123'
+open(os.path.join(w, 'tmark1.bin'), 'wb').write(_tm)
+_tm2 = bytearray(_tm)
+_tm2[2] = ord('X')
+_tm2[3] = ord('Y')
+_tm2[25] = ord('Q')
+open(os.path.join(w, 'tmark2.bin'), 'wb').write(bytes(_tm2))
 # a diff fixture with RUNS of differing bytes rather than single ones:
 # bytes 2-5, 1001-1201 and the last one (1-based), so the jumps between
 # changes have something to jump over
@@ -3105,6 +3114,59 @@ check "and a replacement cannot have wildcards in it" \
     "hexpair: a replacement cannot have wildcards in it" \
     "$(sed -n 6p "$WORK/trep.out")"
 
+# --- The markings in the windowed text view --------------------------------
+# A dump has three columns per byte and one for its character; a page of
+# text has one column per byte and lines as long as the bytes between two
+# 0x0a make them. All four markings are built from byte runs and put on
+# the lines here, so what is checked is that a run lands on the right line
+# at the right column - including one that spans a line break, whose own
+# byte has no column to mark.
+cat > "$WORK/ttmark.vim" <<EOF
+$(printf "$HEX")
+let out = []
+call add(out, string([HexPairPagedTextRuns('abcdef', 'abXdef', 100), HexPairPagedTextRuns('abcdef', 'abcdef', 0), HexPairPagedTextRuns('abcdef', 'abc', 0), HexPairPagedTextRuns('abc', 'abcdef', 0)]))
+call add(out, string(HexPairPagedTextPositions([[2, 0, 10], [3, 11, 10]], [[5, 3]])))
+call add(out, string(HexPairPagedTextPositions([[2, 0, 10], [3, 11, 10]], [[8, 6]])))
+HexPairOpen $WORK/tmark1.bin 1
+HexPairToggle
+call add(out, string([getline(2), getline(3), getline(4)]))
+silent HexPairDiff $WORK/tmark2.bin
+call add(out, string(HexPairPagedMarkingPositions('diff', 2, 4)))
+HexPairGoOffset 6
+HexPairMark m1
+call add(out, string(HexPairPagedMarkingPositions('mark', 2, 4)))
+silent HexPairFind 4b 4c
+call add(out, string(HexPairPagedMarkingPositions('find', 2, 4)))
+call setline(4, 'UVWXYZ9999')
+call add(out, string([&modified, HexPairPagedMarkingPositions('modified', 2, 4)]))
+call writefile(out, '$WORK/ttmark.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/ttmark.vim" < /dev/null
+# The two pure halves first: where two strings of bytes part company, and
+# where a run of bytes lands on the lines that hold it.
+check "runs are where two lines of bytes differ" \
+    "[[[102, 1]], [], [[3, 3]], []]" "$(sed -n 1p "$WORK/ttmark.out")"
+check "a run inside one line is one position" "[[2, 6, 3]]" \
+    "$(sed -n 2p "$WORK/ttmark.out")"
+# Bytes 8-13 with a line break at 10: two pieces, and the break itself is
+# not marked because it has no column.
+check "and one across a line break is two" "[[2, 9, 2], [3, 1, 3]]" \
+    "$(sed -n 3p "$WORK/ttmark.out")"
+check "the text view holds the bytes between the breaks" \
+    "['ABCDEFGHIJ', 'KLMNOPQRST', 'UVWXYZ0123']" "$(sed -n 4p "$WORK/ttmark.out")"
+check "what differs from the other file is marked where it is" \
+    "[[2, 3, 2], [4, 4, 1]]" "$(sed -n 5p "$WORK/ttmark.out")"
+check "so is the byte a mark stands on" "[[2, 6, 1]]" \
+    "$(sed -n 6p "$WORK/ttmark.out")"
+check "and the bytes a search found" "[[3, 1, 2]]" \
+    "$(sed -n 7p "$WORK/ttmark.out")"
+# The edited bytes are the one layer that is about the BUFFER, and in this
+# view that means comparing what the lines hold against the page as it was
+# read - string against string, in the text view's own spelling.
+check "and the bytes edited and not yet written" "[1, [[4, 7, 4]]]" \
+    "$(sed -n 8p "$WORK/ttmark.out")"
+
 # ===========================================================================
 # Property: any shape of dump writes the bytes it spells
 # ===========================================================================
@@ -3360,7 +3422,9 @@ check "an empty file is 100%" \
 # And every marking comes off the window when the view changes: they are
 # window matches, the columns of a dump are not the columns of a page of
 # text, and the marks otherwise sat on the text view where the hex view
-# had put them.
+# had put them. (The text view draws its own - see "The markings in the
+# windowed text view" above; what is checked here is that the hex view's
+# do not survive into it, which in a window one line tall means none.)
 cat > "$WORK/tview3.vim" <<EOF
 $(printf "$HEX")
 let out = []
@@ -3383,7 +3447,7 @@ EOF
 check "a Visual or Insert mode keeps this window" "[1, 1, 0, 0, 0, 0, 0, 0]" \
     "$(sed -n 1p "$WORK/tview3.out")"
 check "the hex view has its markings" "hex: 1" "$(sed -n 2p "$WORK/tview3.out")"
-check "the text view is left unmarked, not marked in the wrong columns" \
+check "the hex view's marks do not survive into the text view" \
     "text: 0" "$(sed -n 3p "$WORK/tview3.out")"
 check "and they come back on the way back" "hex again: 1" \
     "$(sed -n 4p "$WORK/tview3.out")"

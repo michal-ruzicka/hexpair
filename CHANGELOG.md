@@ -54,7 +54,10 @@ and this project adheres to
   view of it.
 - **`HexPairModified`**: the bytes edited and not yet written are marked
   in both columns, so an edit in a dump no longer looks exactly like
-  everything around it (`g:hexpair_show_modified` turns it off). It links
+  everything around it (`g:hexpair_show_modified` turns it off). That
+  marking, and the three beside it - what differs from the file being
+  compared with, what a search found, and the byte a mark stands on - are
+  drawn in the windowed text view too, one column per byte. It links
   to `DiffChange` rather than the closer-sounding `DiffText`, whose own
   default is a red background with no foreground — black on red for
   anyone with a light background.

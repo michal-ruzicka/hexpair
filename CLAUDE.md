@@ -730,6 +730,25 @@ was designed and built in Stage 2 - see "What Stage 2 decided".
   whose file does not reach that far, is left where it is **and says so** —
   a bound window quietly showing something else is the bug being fixed.
   `g:hexpair_bind_pages` turns the whole thing off.
+- **The markings are drawn in both views**, and `HexPairPagedMarkingPositions(layer, first, last)`
+  is the one entry point that says where — dispatching on the view so the
+  four layers cannot drift apart about which one they are drawing in, and
+  so the suite can ask for lines a headless window (one line tall) never
+  shows. The text view builds them out of byte RUNS (`[offset, length]`,
+  page-relative) and one mapper (`HexPairPagedTextPositions()`) puts the
+  runs on the lines: a dump has three columns per byte, a page of text
+  one, and the line break ending a line is a byte with no column, so it
+  is the one byte never marked.
+  The two comparing layers there work **string against string in the text
+  view's own spelling** (`HexPairPagedTextRuns()`), not by turning the
+  buffer back into hex: a Vim string cannot hold a NUL and both sides
+  write one as a line break, since both come from `readfile(..., 'b')`.
+  That costs one documented blind spot — a NUL replaced by a line break
+  at the same offset is not marked — and buys a comparison that needs no
+  per-byte conversion. The other side of each comparison (the page as
+  read, the file being compared with) is one `xxd -r -p` per page, kept
+  against the hex it was made from (`s:BytesAsText()`), so a redraw pays
+  nothing for it.
 - `HexPairPagedComparePositions(first, last, hex)` — the shared body of
   every byte-level marking: compare the lines on screen against a run of
   hex at the position the layout puts them, and give back

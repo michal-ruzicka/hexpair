@@ -1022,7 +1022,7 @@ endfunction
 
 function! s:ModifiedHighlight() abort
   if !g:hexpair_show_modified || !get(b:, 'hexpair_page_active', 0)
-        \ || !s:IsHexView() || get(b:, 'hexpair_page_hex', '') ==# ''
+        \ || get(b:, 'hexpair_page_hex', '') ==# ''
     return
   endif
   " Nothing to recompute while the page, the window's view of it and the
@@ -1036,7 +1036,8 @@ function! s:ModifiedHighlight() abort
   if !&l:modified
     return
   endif
-  let positions = HexPairPagedModifiedPositions(line('w0'), line('w$'))
+  let positions = HexPairPagedMarkingPositions('modified',
+        \ line('w0'), line('w$'))
   " matchaddpos() takes eight positions at a time.
   for i in range(0, len(positions) - 1, 8)
     call add(w:hexpair_mod_ids,
@@ -1214,6 +1215,28 @@ endfunction
 " columns of a dump are not the columns of anything else, and the marks
 " would otherwise sit on the text view at the offsets the hex view put
 " them (which is what they did).
+" The positions of one marking layer over the given lines, in whichever
+" view the buffer is in - 'modified', 'diff', 'find' or 'mark'. One entry
+" point, so the four layers cannot drift apart about which view they are
+" drawing in, and so the suite can ask for a range of lines that a
+" headless window (one line tall) does not actually show.
+function! HexPairPagedMarkingPositions(layer, first, last) abort
+  let hex = s:IsHexView()
+  if a:layer ==# 'modified'
+    return hex ? HexPairPagedModifiedPositions(a:first, a:last)
+          \ : s:TextComparePositions(a:first, a:last, 'page',
+          \                          get(b:, 'hexpair_page_hex', ''))
+  elseif a:layer ==# 'diff'
+    return hex ? s:DiffPositions(a:first, a:last)
+          \ : s:TextComparePositions(a:first, a:last, 'diff', s:DiffHex())
+  elseif a:layer ==# 'find'
+    return hex ? HexPairPagedFindPositions(a:first, a:last)
+          \ : s:TextFindPositions(a:first, a:last)
+  endif
+  return hex ? HexPairPagedMarkPositions(a:first, a:last)
+        \ : s:TextMarkPositions(a:first, a:last)
+endfunction
+
 function! s:ClearMarkings() abort
   call s:ClearModifiedHighlight()
   call s:ClearDiffHighlight()
@@ -3450,7 +3473,7 @@ function! s:ClearFindHighlight() abort
 endfunction
 
 function! s:FindHighlight() abort
-  if !get(b:, 'hexpair_page_active', 0) || !s:IsHexView()
+  if !get(b:, 'hexpair_page_active', 0)
     return
   endif
   let state = [s:find.hex, b:hexpair_page_base, line('w0'), line('w$')]
@@ -3462,7 +3485,8 @@ function! s:FindHighlight() abort
   if s:find.hex ==# ''
     return
   endif
-  let positions = HexPairPagedFindPositions(line('w0'), line('w$'))
+  let positions = HexPairPagedMarkingPositions('find',
+        \ line('w0'), line('w$'))
   for i in range(0, len(positions) - 1, 8)
     call add(w:hexpair_find_ids,
           \ matchaddpos('HexPairFind', positions[i : i + 7]))
@@ -3816,8 +3840,7 @@ function! s:ClearDiffHighlight() abort
 endfunction
 
 function! s:DiffHighlight() abort
-  if !get(b:, 'hexpair_page_active', 0) || !s:IsHexView()
-        \ || s:DiffHex() ==# ''
+  if !get(b:, 'hexpair_page_active', 0) || s:DiffHex() ==# ''
     return
   endif
   let state = [b:changedtick, line('w0'), line('w$'), b:hexpair_page_index]
@@ -3826,7 +3849,8 @@ function! s:DiffHighlight() abort
   endif
   call s:ClearDiffHighlight()
   let w:hexpair_diff_state = state
-  let positions = s:DiffPositions(line('w0'), line('w$'))
+  let positions = HexPairPagedMarkingPositions('diff',
+        \ line('w0'), line('w$'))
   for i in range(0, len(positions) - 1, 8)
     call add(w:hexpair_diff_ids,
           \ matchaddpos('HexPairDiff', positions[i : i + 7]))
@@ -4237,7 +4261,6 @@ endfunction
 
 function! s:MarkHighlight() abort
   if !g:hexpair_show_marks || !get(b:, 'hexpair_page_active', 0)
-        \ || !s:IsHexView()
     return
   endif
   let state = [s:marks_tick, b:hexpair_page_base, line('w0'), line('w$')]
@@ -4250,7 +4273,8 @@ function! s:MarkHighlight() abort
   " a byte that is also edited, differing or found, what is true of the
   " BYTE wins - the mark is about the place, and the place is still findable
   " through |:HexPairMarks|.
-  let positions = HexPairPagedMarkPositions(line('w0'), line('w$'))
+  let positions = HexPairPagedMarkingPositions('mark',
+        \ line('w0'), line('w$'))
   for i in range(0, len(positions) - 1, 8)
     call add(w:hexpair_mark_ids,
           \ matchaddpos('HexPairMark', positions[i : i + 7], 5))
@@ -4798,6 +4822,212 @@ function! s:TextGotoOffset(abs) abort
     let acc += len + 1
   endfor
   call cursor(last, 1)
+endfunction
+
+" ---------------------------------------------------------------------------
+" The same markings, in the windowed text view
+" ---------------------------------------------------------------------------
+"
+" A dump has three columns per byte in one place and one per byte in
+" another, and the marking arithmetic that goes with it; a page of text has
+" one column per byte and lines as long as the bytes between two 0x0a make
+" them. So the markings are built here out of byte RUNS - [offset, length]
+" pairs, page-relative - which every layer can say without knowing anything
+" about columns, and one mapper puts them on the lines.
+"
+" The two comparing layers work in the text view's OWN representation,
+" string against string, rather than turning the buffer back into hex: a
+" Vim string cannot hold a NUL, and both sides spell one the same way (as
+" a line break) because both come from readfile(..., 'b'). That has one
+" consequence, and only one: a NUL replaced by a line break at the same
+" offset, or the other way round, is not marked. Every other edit is,
+" including one that changes the length.
+
+" The visible body lines, as [lnum, offset in the page, length]. Empty
+" when the banner has been edited away, since then which lines are content
+" is exactly what cannot be told - a redraw is no place to throw about it.
+function! s:TextSpans(first, last) abort
+  let out = []
+  try
+    let [bfirst, blast] = s:TextBodyRange()
+  catch
+    return out
+  endtry
+  let base = line2byte(bfirst)
+  let lnum = a:first < bfirst ? bfirst : a:first
+  let last = a:last > blast ? blast : a:last
+  while lnum <= last
+    call add(out, [lnum, line2byte(lnum) - base, strlen(getline(lnum))])
+    let lnum += 1
+  endwhile
+  return out
+endfunction
+
+" Byte runs put on the lines that hold them. A run may cover more than one
+" line, and the line break that ends a line is a byte of the page with no
+" column to mark, so it is simply left out.
+function! HexPairPagedTextPositions(spans, runs) abort
+  let out = []
+  for span in a:spans
+    let [lnum, start, len] = span
+    if len <= 0
+      continue
+    endif
+    for run in a:runs
+      let lo = run[0] > start ? run[0] : start
+      let hi = run[0] + run[1] < start + len ? run[0] + run[1] : start + len
+      if hi > lo
+        call add(out, [lnum, lo - start + 1, hi - lo])
+      endif
+    endfor
+  endfor
+  return out
+endfunction
+
+" Where two strings of the same bytes part company, as [offset, length]
+" runs counted from a:base. Chunked, so an unedited line costs one
+" comparison per kilobyte rather than one per byte - a page with no 0x0a
+" in it is a single line as long as the page.
+function! HexPairPagedTextRuns(mine, theirs, base) abort
+  let out = []
+  if a:mine ==# a:theirs
+    return out
+  endif
+  let len = strlen(a:mine)
+  let at = 0
+  let from = -1
+  while at < len
+    let span = s:cmpblock < len - at ? s:cmpblock : len - at
+    if strpart(a:mine, at, span) ==# strpart(a:theirs, at, span)
+      if from >= 0
+        call add(out, [a:base + from, at - from])
+        let from = -1
+      endif
+      let at += span
+      continue
+    endif
+    let i = at
+    while i < at + span
+      if strpart(a:mine, i, 1) !=# strpart(a:theirs, i, 1)
+        if from < 0
+          let from = i
+        endif
+      elseif from >= 0
+        call add(out, [a:base + from, i - from])
+        let from = -1
+      endif
+      let i += 1
+    endwhile
+    let at += span
+  endwhile
+  if from >= 0
+    call add(out, [a:base + from, len - from])
+  endif
+  return out
+endfunction
+
+" A run of hex as the text view would hold it, with the line breaks back
+" in, so a piece of it can be taken by byte offset and compared against
+" what a line of the buffer holds. One xxd for it, kept against the hex it
+" was made from: the page as it was read and the file being compared with
+" are each converted once per page, not once per redraw.
+function! s:BytesAsText(label, hex) abort
+  let cache = get(b:, 'hexpair_text_bytes', {})
+  let hit = get(cache, a:label, ['', ''])
+  if hit[0] ==# a:hex
+    return hit[1]
+  endif
+  let text = ''
+  if a:hex !=# ''
+    let hexfile = tempname()
+    let raw = tempname()
+    try
+      call writefile([a:hex], hexfile)
+      call s:Run(printf('%s -r -p %s %s', s:xxd,
+            \ shellescape(hexfile), shellescape(raw)))
+      let text = join(readfile(raw, 'b'), "\n")
+    catch
+      let text = ''
+    finally
+      call delete(hexfile)
+      call delete(raw)
+    endtry
+  endif
+  let cache[a:label] = [a:hex, text]
+  let b:hexpair_text_bytes = cache
+  return text
+endfunction
+
+" What the buffer holds against a:hex, over the visible lines only.
+function! s:TextComparePositions(first, last, label, hex) abort
+  if a:hex ==# ''
+    return []
+  endif
+  let theirs = s:BytesAsText(a:label, a:hex)
+  if theirs ==# ''
+    return []
+  endif
+  let spans = s:TextSpans(a:first, a:last)
+  let runs = []
+  for span in spans
+    if span[2] <= 0
+      continue
+    endif
+    call extend(runs, HexPairPagedTextRuns(getline(span[0]),
+          \ strpart(theirs, span[1], span[2]), span[1]))
+  endfor
+  return HexPairPagedTextPositions(spans, runs)
+endfunction
+
+" The matches of the current pattern, and the marks, over the visible
+" lines. Both are about the FILE - the page as it was read - so neither
+" looks at the buffer at all; see HexPairPagedFindPositions() for why the
+" search is a slice of the page and not the whole of it.
+function! s:TextFindPositions(first, last) abort
+  let hex = get(b:, 'hexpair_page_hex', '')
+  let span = s:find.bytes
+  if span <= 0 || s:find.hex ==# '' || hex ==# ''
+    return []
+  endif
+  let spans = s:TextSpans(a:first, a:last)
+  if empty(spans)
+    return []
+  endif
+  let bytes = strlen(hex) / 2
+  let to = spans[-1][1] + spans[-1][2] + 1
+  let to = to > bytes ? bytes : to
+  let from = spans[0][1] - (span - 1)
+  let from = from < 0 ? 0 : from
+  if from >= to
+    return []
+  endif
+  let slice = strpart(hex, from * 2, (to - from) * 2)
+  let runs = []
+  let at = 0
+  while 1
+    let idx = HexPairPagedFindInHex(slice, s:find.hex, at, 1)
+    if idx < 0
+      break
+    endif
+    let at = idx + 2
+    call add(runs, [from + idx / 2, span])
+  endwhile
+  return HexPairPagedTextPositions(spans, runs)
+endfunction
+
+function! s:TextMarkPositions(first, last) abort
+  let marks = s:MarksOf(b:hexpair_page_file)
+  if empty(marks) || b:hexpair_page_len <= 0
+    return []
+  endif
+  let runs = []
+  for name in keys(marks)
+    let off = marks[name] - b:hexpair_page_base
+    if off >= 0 && off < b:hexpair_page_len
+      call add(runs, [off, 1])
+    endif
+  endfor
+  return HexPairPagedTextPositions(s:TextSpans(a:first, a:last), runs)
 endfunction
 
 " Replace the buffer with exactly a:lines, without making it an undoable

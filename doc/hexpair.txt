@@ -257,6 +257,22 @@ last byte, and on a short last line on its last existing byte.
                         there.  From Normal mode nothing redraws over it,
                         so nothing waits.
 
+                                                    *hexpair-marking-views*
+Every byte-level marking - the bytes you have edited (|HexPairModified|),
+the bytes that differ from the file being compared with (|HexPairDiff|),
+the matches of the search (|HexPairFind|) and the byte a mark stands on
+(|HexPairMark|) - is drawn in BOTH views, and only over the lines on
+screen.  A dump has three columns per byte and one for its character; a
+page of text has one column per byte, and the line break that ends a line
+is a byte of the page with no column of its own, so it is the one byte
+that is never marked.
+
+In the text view the comparing markings work on the bytes as that view
+spells them, which has exactly one consequence worth knowing: Vim cannot
+hold a NUL in a string and writes one as a line break, so a NUL replaced
+by a line break at the same offset (or the other way round) is not marked
+as changed.  Every other edit is, including one that changes the length.
+
 ==============================================================================
 3. Mappings                                                 *hexpair-mappings*
 
@@ -873,12 +889,11 @@ HexPairOpenFile({file} [, {page}])
                         Comparing follows the pages: turning to another
                         page compares that one.  What is marked is what is
                         on SCREEN against the other file, so an edit shows
-                        up at once.  The markings are a property of the
-                        HEX view - a dump has columns to put them in - so
-                        toggling to the windowed text view takes them off
-                        and toggling back brings them out again.  The ! that stops comparing also
-                        clears the marking, and has a mapping target of
-                        its own: |<Plug>(HexPairDiffClear)|.
+                        up at once - in the windowed text view as well as
+                        in the dump (|hexpair-marking-views|).  The ! that
+                        stops comparing also clears the marking, and has a
+                        mapping target of its own:
+                        |<Plug>(HexPairDiffClear)|.
 
 :HexPairDiffNext        Go to the next CHANGE, or the previous one -
 :HexPairDiffPrev        anywhere in the file, however many pages away.
