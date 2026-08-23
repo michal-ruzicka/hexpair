@@ -3350,6 +3350,44 @@ check "an empty file is 100%" \
     "hexpair: searching back 100% of 0 bytes (CTRL-C stops)" \
     "$(sed -n 4p "$WORK/tprog.out")"
 
+# --- Leaving the window is not free, and not always allowed ---------------
+# Refreshing another window means going to it and back, which is also what
+# ENDS a Visual selection and would take Insert mode with it: in
+# vimhexdiff, where two windows are what make the refresh run at all, `v`
+# dropped the moment the cursor moved. Which modes allow it is a function
+# because mode() cannot be driven into a Visual one here.
+#
+# And every marking comes off the window when the view changes: they are
+# window matches, the columns of a dump are not the columns of a page of
+# text, and the marks otherwise sat on the text view where the hex view
+# had put them.
+cat > "$WORK/tview3.vim" <<EOF
+$(printf "$HEX")
+let out = []
+call add(out, string([HexPairPagedMayLeaveWindow('n'), HexPairPagedMayLeaveWindow('c'), HexPairPagedMayLeaveWindow('v'), HexPairPagedMayLeaveWindow('V'), HexPairPagedMayLeaveWindow("\<C-V>"), HexPairPagedMayLeaveWindow('s'), HexPairPagedMayLeaveWindow('i'), HexPairPagedMayLeaveWindow('R')]))
+HexPairOpen $WORK/runa.bin 1
+silent HexPairDiff $WORK/runb.bin
+call cursor(3, 12)
+doautocmd CursorMoved
+call add(out, 'hex: ' . (len(getmatches()) > 0))
+HexPairToggle
+doautocmd CursorMoved
+call add(out, 'text: ' . len(getmatches()))
+HexPairToggle
+doautocmd CursorMoved
+call add(out, 'hex again: ' . (len(getmatches()) > 0))
+call writefile(out, '$WORK/tview3.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tview3.vim" < /dev/null
+check "a Visual or Insert mode keeps this window" "[1, 1, 0, 0, 0, 0, 0, 0]" \
+    "$(sed -n 1p "$WORK/tview3.out")"
+check "the hex view has its markings" "hex: 1" "$(sed -n 2p "$WORK/tview3.out")"
+check "the text view is left unmarked, not marked in the wrong columns" \
+    "text: 0" "$(sed -n 3p "$WORK/tview3.out")"
+check "and they come back on the way back" "hex again: 1" \
+    "$(sed -n 4p "$WORK/tview3.out")"
+
 # --- A page turn takes the scroll-bound windows with it -------------------
 # 'scrollbind' says these windows move together, and a page turn is the
 # one kind of scrolling Vim cannot follow on its own - which is what left

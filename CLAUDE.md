@@ -268,6 +268,8 @@ come back**; each names the test that would catch it.
 | The diff jumps stepped byte by byte through one change instead of between changes — `]` fifty times to cross fifty differing bytes | "and the next jump clears the whole of it" + the block around it |
 | Every match on the PAGE was found and then tested against every visible line: `:HexPairFind 2?` cost a second per page | "a match over a line end is marked on both lines" (the positions are window-scoped now) |
 | A selection report echoed from a Visual-mode mapping was painted over by `-- VISUAL --` before it could be read | not testable headlessly — the tmux recipe above, and the hit-enter prompt is the fix |
+| Refreshing the other windows (a `wincmd w` there and back) ENDED the Visual selection on every cursor movement, so Visual mode was unusable in `vimhexdiff` | "a Visual or Insert mode keeps this window" — the modes are a pure function, since mode() cannot be driven into a Visual one here |
+| The window's markings survived a toggle to the text view and sat there at the columns the hex view had put them | "the text view is left unmarked, not marked in the wrong columns" |
 
 **The Vim version floor is a claim that has to be run.** The plugin says
 everything but the splice works on Vim 8.0; it did not, for a year, and

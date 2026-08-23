@@ -446,6 +446,11 @@ has to fit in memory. On a large one that takes long enough to look like
 a hang, so from 16 MB up the scan says how far it has got, and `CTRL-C`
 stops it — nothing has been changed by then, both only read.
 
+The byte markings — what differs, what matches a search, what you have
+edited, where a mark is — belong to the **hex view**, which has columns
+to put them in. Toggling to the windowed text view takes them off, and
+toggling back brings them out again.
+
 `'scrollbind'` says the two windows move together, and a page turn is the
 one kind of scrolling Vim cannot follow on its own — so hexpair passes it
 on: turning the page in either window (or landing on another page with

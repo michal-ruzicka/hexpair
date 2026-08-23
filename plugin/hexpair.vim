@@ -1054,8 +1054,27 @@ endfunction
 " noautocmd, so hopping between them raises nothing (least of all another
 " CursorMoved), and the window that was current is current again at the
 " end whatever happens in between.
+"
+" Not from every mode, though: going to another window and back is what
+" refreshes one that scrolled without being entered, and it is also what
+" ENDS a Visual selection - and would take Insert mode with it. In
+" vimhexdiff, where two windows are what make this run at all, that made
+" Visual mode unusable: `v` held until the cursor moved and then dropped
+" it, `V` flashed and was gone. So this happens from Normal mode and from
+" the command line (which is also where a script drives it from), and not
+" from a Visual, Select, Insert or Replace one. While a selection is being
+" made the other window's markings stay as they were; the next movement
+" outside it brings them up to date.
+" Which modes that is, as a function, because mode() cannot be put into a
+" Visual one under this project's headless harness (there it is always
+" 'c', which is a mode this does allow - a script driving the plugin is
+" not holding a selection).
+function! HexPairPagedMayLeaveWindow(mode) abort
+  return a:mode =~# '^[nc]'
+endfunction
+
 function! s:RefreshOtherWindows() abort
-  if winnr('$') < 2
+  if winnr('$') < 2 || !HexPairPagedMayLeaveWindow(mode())
     return
   endif
   let here = winnr()
@@ -1187,6 +1206,19 @@ endfunction
 function! s:Stayed(why) abort
   echomsg printf('hexpair: %s %s, so that view stayed on page %d',
         \ s:PageLabel(), a:why, b:hexpair_page_index + 1)
+endfunction
+
+" Every byte-level marking this plugin draws, taken off the window. They
+" are matchaddpos() matches, which belong to the WINDOW and not to what it
+" is showing, so a view that stops being a hex dump has to say so: the
+" columns of a dump are not the columns of anything else, and the marks
+" would otherwise sit on the text view at the offsets the hex view put
+" them (which is what they did).
+function! s:ClearMarkings() abort
+  call s:ClearModifiedHighlight()
+  call s:ClearDiffHighlight()
+  call s:ClearFindHighlight()
+  call s:ClearMarkHighlight()
 endfunction
 
 function! s:PagedHighlight() abort
@@ -4830,6 +4862,7 @@ function! s:ToText() abort
     call s:Run(printf('%s -r -p %s %s', s:xxd,
           \ shellescape(hex), shellescape(raw)))
     call s:PagedClearHighlight()
+    call s:ClearMarkings()
     call s:SetViewLines(readfile(raw, 'b'))
   finally
     call delete(hex)
@@ -4866,6 +4899,7 @@ function! s:ToHexView() abort
   try
     call writefile(s:TextViewLines(), raw, 'b')
     call s:CanonicalDump(raw, b:hexpair_page_base, dump)
+    call s:ClearMarkings()
     call s:SetLines(s:HexViewLines(readfile(dump)))
   finally
     call delete(raw)

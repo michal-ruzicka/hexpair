@@ -873,7 +873,10 @@ HexPairOpenFile({file} [, {page}])
                         Comparing follows the pages: turning to another
                         page compares that one.  What is marked is what is
                         on SCREEN against the other file, so an edit shows
-                        up at once.  The ! that stops comparing also
+                        up at once.  The markings are a property of the
+                        HEX view - a dump has columns to put them in - so
+                        toggling to the windowed text view takes them off
+                        and toggling back brings them out again.  The ! that stops comparing also
                         clears the marking, and has a mapping target of
                         its own: |<Plug>(HexPairDiffClear)|.
 
