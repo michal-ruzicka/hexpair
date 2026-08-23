@@ -56,6 +56,9 @@
 "                              page a view of its own (default 0)
 "   g:hexpair_short_commands   set to 0 to leave the short HP names
 "                              undefined (default 1, define them)
+"   g:hexpair_bind_pages       set to 0 to stop a page turn from taking
+"                              the scroll-bound windows with it
+"                              (default 1, take them)
 "   g:hexpair_debug            set to 1 to echo position-mapping traces
 "                              (inspect with :messages)
 "   HexPairActive, HexPairMirror, HexPairPageBanner, HexPairModified,
@@ -153,6 +156,18 @@ endif
 " same thing explicitly, whatever this is set to.
 if !exists('g:hexpair_split_views')
   let g:hexpair_split_views = 0
+endif
+
+" Whether a page turn in a window is passed on to the windows that are
+" scroll-bound to it. 'scrollbind' is Vim's own "these windows move
+" together", and a page turn is the one kind of scrolling it cannot
+" follow by itself: the other window keeps the page it had, so the two go
+" on scrolling in step through different parts of their files - which is
+" what `vimhexdiff` looked like it was doing wrong. On, because a bound
+" window that shows a different region is not showing anything useful;
+" set it to 0 to have 'scrollbind' mean scrolling alone.
+if !exists('g:hexpair_bind_pages')
+  let g:hexpair_bind_pages = 1
 endif
 
 " Position-mapping trace, off by default. Every step that turns a cursor
@@ -276,6 +291,10 @@ let s:diffblock = 1024 * 1024
 " takes apart differing ones slower, and 1024 is where the two meet -
 " 8 ms for a page with a handful of differences either way.
 let s:cmpblock = 1024
+
+" Set while a page turn is being passed on to the scroll-bound windows, so
+" that their own turns do not pass it back.
+let s:binding = 0
 
 " Blocks the length-changing write copies in. Bounded on purpose: the
 " whole point of paging is that memory use does not follow the size of
@@ -1048,6 +1067,80 @@ function! s:RefreshOtherWindows() abort
   finally
     noautocmd execute here . 'wincmd w'
   endtry
+endfunction
+
+" A page turn is scrolling by a whole page, and 'scrollbind' cannot follow
+" it: the bound window stays on the page it had, and the two then scroll
+" in step through different parts of their files. Every scroll-bound
+" window showing a page is therefore moved to the page holding the same
+" BYTE - by offset, not by page number, because two views need not be
+" paged the same way - and lands its cursor on it, so the two are aligned
+" exactly rather than merely level.
+"
+" A window with unwritten changes is left where it is: following would
+" mean discarding them, and this window's page turn is no reason to. So
+" is one whose file does not reach that far. Both say so, because a
+" bound window quietly showing something else is the bug this fixes.
+function! s:BindPageTurn(offset) abort
+  if !g:hexpair_bind_pages || !&l:scrollbind || winnr('$') < 2 || s:binding
+    return
+  endif
+  let here = winnr()
+  let s:binding = 1
+  try
+    let w = 1
+    while w <= winnr('$')
+      if w != here && getbufvar(winbufnr(w), 'hexpair_page_active', 0)
+        noautocmd execute w . 'wincmd w'
+        call s:FollowPageTurn(a:offset)
+      endif
+      let w += 1
+    endwhile
+  finally
+    let s:binding = 0
+    noautocmd execute here . 'wincmd w'
+  endtry
+endfunction
+
+" The bound window's half of it, run with that window current. Its own
+" 'scrollbind' comes off while the page loads: a window being filled
+" scrolls, and a scroll here would drag the window the turn came from.
+function! s:FollowPageTurn(offset) abort
+  if !&l:scrollbind || !get(b:, 'hexpair_page_active', 0)
+    return
+  endif
+  let page = a:offset / b:hexpair_page_size
+  if page == b:hexpair_page_index
+    return
+  endif
+  if &l:modified
+    call s:Stayed('has unsaved changes')
+    return
+  endif
+  if page >= HexPairPagedTotalPages(b:hexpair_page_size,
+        \ getfsize(b:hexpair_page_file))
+    call s:Stayed(printf('has no page %d', page + 1))
+    return
+  endif
+  let bound = &l:scrollbind
+  setlocal noscrollbind
+  try
+    if s:LoadPageInView(page)
+      if s:IsHexView()
+        call s:PagedGotoOffset(a:offset)
+        call s:PagedHighlight()
+      else
+        call s:TextGotoOffset(a:offset)
+      endif
+    endif
+  finally
+    let &l:scrollbind = bound
+  endtry
+endfunction
+
+function! s:Stayed(why) abort
+  echomsg printf('hexpair: %s %s, so that view stayed on page %d',
+        \ s:PageLabel(), a:why, b:hexpair_page_index + 1)
 endfunction
 
 function! s:PagedHighlight() abort
@@ -2223,7 +2316,9 @@ function! s:GotoPage(pageidx, force) abort
     echohl None
     return
   endif
-  call s:LoadPageInView(a:pageidx)
+  if s:LoadPageInView(a:pageidx)
+    call s:BindPageTurn(b:hexpair_page_base)
+  endif
 endfunction
 
 function! s:PageNext(force) abort

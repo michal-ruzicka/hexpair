@@ -40,10 +40,11 @@
 #
 #     vimhexdiff old.img new.img
 #
-# The two views navigate independently, as two views of anything do here:
-# :HexPairDiffNext moves the window it is used in, so press it in the other
-# one to follow. They start scroll-bound, so scrolling within a page keeps
-# them level.
+# The two windows are scroll-bound, so they keep showing the same bytes:
+# scrolling within a page keeps them level, and a page turn in either one
+# - by :HexPairDiffNext landing further on, or by turning it directly -
+# takes the other with it (g:hexpair_bind_pages). Within one page they
+# navigate independently, as two views of anything do here.
 #
 # Only the page on screen is read, so the size of the file does not matter.
 # Set VIMHEX_VIM to use a particular Vim, e.g. VIMHEX_VIM=/usr/bin/vim.

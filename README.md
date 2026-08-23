@@ -424,6 +424,15 @@ vimhexdiff old.img new.img
 — both files side by side, each marking what differs from the other,
 cursors on the first difference and the windows scroll-bound.
 
+`'scrollbind'` says the two windows move together, and a page turn is the
+one kind of scrolling Vim cannot follow on its own — so hexpair passes it
+on: turning the page in either window (or landing on another page with
+`:HexPairDiffNext`, `:HexPairFind`, a mark) takes every scroll-bound
+window with it, to the page holding the same **byte**, cursor included.
+A window with unwritten changes is left where it is and says so, rather
+than having them discarded on its behalf. `g:hexpair_bind_pages = 0`
+turns this off and lets `'scrollbind'` mean scrolling alone.
+
 ### Marks
 
 Vim's own marks are positions in a *buffer*, and a paged buffer holds a
@@ -539,6 +548,11 @@ values shown are the defaults, so uncomment a line only to change one.
 " Whether every command is also defined under a short "HP" name -
 " :HPFind for :HexPairFind, and so on.
 " let g:hexpair_short_commands = 1
+
+" Whether a page turn is passed on to the windows scroll-bound to this one
+" (what `vimhexdiff` sets up). Set it to 0 to have 'scrollbind' mean
+" scrolling alone, and let each window keep its own page.
+" let g:hexpair_bind_pages = 1
 
 " Highlight overrides: the byte under the cursor, its counterpart in the
 " other column, the banner (and ruler) lines, the bytes changed since the

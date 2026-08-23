@@ -440,6 +440,35 @@ g:hexpair_show_modified Whether the bytes that differ from the ones on
                         256 KB for the default 128 KiB page - which is the
                         same read the freshness check already needed.
 
+                                                     *g:hexpair_bind_pages*
+g:hexpair_bind_pages    Whether a page turn in this window is passed on to
+                        the windows that are scroll-bound to it.
+                        Default: 1. >
+
+    let g:hexpair_bind_pages = 0
+<
+                        'scrollbind' is Vim's own "these windows move
+                        together", and a page turn is the one kind of
+                        scrolling it cannot follow by itself: the bound
+                        window keeps the page it had, and the two then
+                        scroll in step through different parts of their
+                        files.  `vimhexdiff` (|hexpair-vimhex|) is where
+                        this shows: it binds the two windows precisely so
+                        that they show the same bytes.
+
+                        A bound window follows by BYTE, not by page
+                        number - two views need not be paged the same way
+                        - and its cursor lands on that byte, so the two
+                        dumps line up rather than merely scroll together.
+                        A window is left where it is, with a message
+                        saying so, when following would mean discarding
+                        unwritten changes, or when its own file does not
+                        reach that far.
+
+                        Set it to 0 to have 'scrollbind' mean scrolling
+                        alone; each window then keeps its own page, as
+                        two views otherwise do (|hexpair-two-views|).
+
                                                   *g:hexpair_short_commands*
 g:hexpair_short_commands
                         Whether every command is also defined under a
@@ -1100,9 +1129,10 @@ The same file also defines `vimhexdiff`: >
 <
 which opens both files side by side, each marking the bytes that differ
 from the other (|:HexPairDiff|), with the cursors on the first difference
-and the two windows scroll-bound.  They navigate independently, as two
-views of anything here do, so |:HexPairDiffNext| moves the window it is
-used in - press it in the other one to follow.
+and the two windows scroll-bound.  A page turn in either window takes the
+other with it (|g:hexpair_bind_pages|), so the two stay on the same bytes
+however far through the files you go; within one page they navigate
+independently, as two views of anything here do.
 
 Set $VIMHEX_VIM to use a particular Vim.
 

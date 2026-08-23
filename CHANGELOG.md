@@ -31,7 +31,11 @@ and this project adheres to
   differ; `:HexPairDiffNext` / `:HexPairDiffPrev` walk the whole file for
   the next disagreement. The shell wrapper gains `vimhexdiff FILE1 FILE2`,
   which opens both side by side, each marking what differs from the
-  other, cursors on the first difference and the windows scroll-bound.
+  other, cursors on the first difference and the windows scroll-bound -
+  and a page turn in either window takes the other with it, to the page
+  holding the same byte, since `'scrollbind'` promises the two move
+  together and a page turn is the one kind of scrolling Vim cannot
+  follow on its own (`g:hexpair_bind_pages`).
 - **Marks in the file**: `:HexPairMark {name}`, `:HexPairGoMark {name}`,
   `:HexPairMarks`, `:HexPairMarkDelete {name}`, and the byte a mark
   stands on underlined on the page (`HexPairMark`,

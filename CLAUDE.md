@@ -263,6 +263,8 @@ come back**; each names the test that would catch it.
 | A replacement rebuilt the page through the path that LOADS one, which clears the undo history on purpose — so a command's edit could not be undone the way a typed one can | "and one undo takes the whole replacement back" |
 | A window scrolled without being ENTERED (`'scrollbind'`, which `vimhexdiff` sets up) raises no event, so its markings stopped part way down | "refreshing the other windows leaves this one current" |
 | A temp-hygiene test asked how many files `tempname()`'s directory HOLDS; on Windows that is the shared `%TEMP%`, with sixteen of other people's in it | "a page of a file this user cannot write is read-only" — count what a write ADDED |
+| Counting the bytes that differ walked the page, two `strpart()`s per byte: 4.9 s a page, paid twice by `vimhexdiff` — it looked hung | "counting the differing bytes" / "on a page-sized run, one byte in" |
+| A page turn left the scroll-bound window on its old page, so `vimhexdiff` scrolled two windows in step through different parts of two files | "a bound window turns to the same page" and the four refusals beside it |
 
 **The Vim version floor is a claim that has to be run.** The plugin says
 everything but the splice works on Vim 8.0; it did not, for a year, and
@@ -653,6 +655,28 @@ was designed and built in Stage 2 - see "What Stage 2 decided".
   Blocks overlap by the pattern's length less one byte, so a match across
   a seam is whole in one of them; the diff needs no overlap, since a
   difference is one byte wide.
+- `HexPairPagedCountDifferences(mine, theirs)` — how many bytes of a page
+  differ and where the first one is. **Never walk two runs of hex**: a
+  block that matches is one string comparison, and only a block that
+  differs is taken apart (with `split()` into pairs and `filter()`, which
+  beats a loop even when everything differs). Measured over a 128 KiB
+  page: a walk cost 4.9 s, this costs 0.6 ms when the pages match, 8 ms
+  with a handful of differences and 260 ms when every byte differs. The
+  block is 1024 bytes because that is where skipping matching bytes
+  faster and taking apart differing ones slower meet (256…16384 measured).
+- `s:BindPageTurn()` / `s:FollowPageTurn()` — `'scrollbind'` is Vim's own
+  "these windows move together", and a page turn is the one kind of
+  scrolling it cannot follow: the bound window keeps its page and the two
+  then scroll in step through different parts of their files, which is
+  what `vimhexdiff` looked like it was doing wrong. Every bound window
+  showing a page follows by BYTE (two views need not be paged the same
+  way), cursor included. `s:binding` stops a followed turn from being
+  passed back; the followed window's own `'scrollbind'` comes off while
+  its page loads, since filling a window scrolls it and that scroll would
+  drag the window the turn came from. A window with unwritten changes, or
+  whose file does not reach that far, is left where it is **and says so** —
+  a bound window quietly showing something else is the bug being fixed.
+  `g:hexpair_bind_pages` turns the whole thing off.
 - `HexPairPagedComparePositions(first, last, hex)` — the shared body of
   every byte-level marking: compare the lines on screen against a run of
   hex at the position the layout puts them, and give back

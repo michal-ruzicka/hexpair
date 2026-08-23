@@ -3224,6 +3224,82 @@ EOF
 check "refreshing the other windows leaves this one current" "[1, 1, 2, 5]" \
     "$(cat "$WORK/twin.out")"
 
+# --- A page turn takes the scroll-bound windows with it -------------------
+# 'scrollbind' says these windows move together, and a page turn is the
+# one kind of scrolling Vim cannot follow on its own - which is what left
+# vimhexdiff scrolling two windows in step through different parts of two
+# files. What is checked here is both halves: that a bound window follows
+# by BYTE (so its cursor lands on the same offset), and that it is left
+# alone when following would mean discarding its unwritten changes, when
+# its own file does not reach that far, and when it is not bound at all.
+cat > "$WORK/tbind.vim" <<EOF
+$(printf "$HEX")
+function! Pages() abort
+  let seen = [] | let here = winnr() | let w = 1
+  while w <= winnr('\$')
+    noautocmd execute w . 'wincmd w'
+    call add(seen, b:hexpair_page_index + 1)
+    let w += 1
+  endwhile
+  noautocmd execute here . 'wincmd w'
+  return seen
+endfunction
+let out = []
+HexPairOpen $WORK/diffa.bin 1
+setlocal scrollbind
+rightbelow vsplit
+HexPairOpen $WORK/diffb.bin 1
+setlocal scrollbind
+wincmd t
+HexPairPageGoto 4
+call add(out, string(Pages()))
+call add(out, HexPairStatus())
+wincmd b
+call add(out, HexPairStatus())
+wincmd t
+HexPairPagePrev
+call add(out, string(Pages()))
+let g:hexpair_bind_pages = 0
+HexPairPageGoto 6
+call add(out, string(Pages()))
+let g:hexpair_bind_pages = 1
+wincmd b
+call setline(3, '00000010: 41 41')
+wincmd t
+redir => msg
+silent HexPairPageGoto 8
+redir END
+call add(out, string(Pages()))
+call add(out, substitute(matchstr(msg, 'hexpair:.*'), '$WORK/', '', 'g'))
+wincmd b
+HexPairPageGoto! 8
+setlocal noscrollbind
+wincmd t
+HexPairPageGoto 2
+call add(out, string(Pages()))
+call writefile(out, '$WORK/tbind.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tbind.vim" < /dev/null
+check "a bound window turns to the same page" "[4, 4]" \
+    "$(sed -n 1p "$WORK/tbind.out")"
+# The cursor lands on the byte, not merely on the page: both views report
+# the same offset, which is what makes the two dumps line up.
+check "and on the same byte" "hex 4/10 @0x601 (1537)" \
+    "$(sed -n 2p "$WORK/tbind.out")"
+check "in the bound window too" "hex 4/10 @0x601 (1537)" \
+    "$(sed -n 3p "$WORK/tbind.out")"
+check "and it follows backwards" "[3, 3]" "$(sed -n 4p "$WORK/tbind.out")"
+check "g:hexpair_bind_pages = 0 leaves it alone" "[6, 3]" \
+    "$(sed -n 5p "$WORK/tbind.out")"
+check "a bound window with unwritten changes stays" "[8, 3]" \
+    "$(sed -n 6p "$WORK/tbind.out")"
+check "and says why" \
+    "hexpair: diffb.bin has unsaved changes, so that view stayed on page 3" \
+    "$(sed -n 7p "$WORK/tbind.out")"
+check "a window that is not bound is not dragged" "[2, 8]" \
+    "$(sed -n 8p "$WORK/tbind.out")"
+
 # ---------------------------------------------------------------------------
 if [ "$FAIL" -eq 0 ]; then
     echo "All tests passed ($CHECKS checks)."
