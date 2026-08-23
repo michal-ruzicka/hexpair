@@ -2634,12 +2634,22 @@ function! s:Selection(...) abort
   let sel = b:hexpair_page_len > 0
         \ ? HexPairPagedSelectionBytes(getpos("'<"), getpos("'>"), visualmode())
         \ : {}
-  if a:0 && a:1
-    normal! gv
-  endif
-  echo b:hexpair_page_len > 0
+  let text = b:hexpair_page_len > 0
         \ ? HexPairPagedSelectionText(sel, b:hexpair_page_total)
         \ : 'hexpair: this page holds no bytes'
+  if !(a:0 && a:1)
+    echo text
+    return
+  endif
+  " Back into Visual mode with the selection this reported on - and Vim
+  " draws its own "-- VISUAL --" over the message line the moment it gets
+  " there, which is why the report used to flash past and vanish. A
+  " message of more than one line gets Vim's hit-enter prompt instead, so
+  " it stays until it has been read; the selection is still there after
+  " the Enter. (Checked in a real terminal - see CLAUDE.md; what the
+  " message line ends up showing is not observable from inside Vim.)
+  normal! gv
+  echo text . "\n"
 endfunction
 
 " ---------------------------------------------------------------------------

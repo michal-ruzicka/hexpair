@@ -248,6 +248,15 @@ last byte, and on a short last line on its last existing byte.
                         mapping works: |<Plug>(HexPairSelection)| leaves
                         Visual mode, and that is what sets the marks.
 
+                        It puts the selection back afterwards, and then
+                        waits for a key: Vim draws its own "-- VISUAL --"
+                        over the message line the moment it is back in
+                        Visual mode, so a report that did not wait would
+                        be gone before it could be read.  Press <Enter>
+                        (or any key) to carry on with the selection still
+                        there.  From Normal mode nothing redraws over it,
+                        so nothing waits.
+
 ==============================================================================
 3. Mappings                                                 *hexpair-mappings*
 

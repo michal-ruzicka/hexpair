@@ -346,6 +346,12 @@ so it leads with the count. Both work in either view, and the numbers
 are 1-based, the same as the banner's, so they can be typed straight
 into `:HexPairGoOffset`.
 
+Asked from Visual mode it puts the selection back and then waits for a
+key, because Vim draws its own `-- VISUAL --` over the message line as
+soon as it is back in Visual mode — a report that did not wait would be
+gone before it could be read. Press Enter and the selection is still
+there. From Normal mode nothing redraws over it, so nothing waits.
+
 Editing rules (see `:help hexpair` for details): keep bytes in the hex
 area separated by at most one space — a run of two spaces marks the
 start of the (ignored) ASCII column — and always write full byte pairs.

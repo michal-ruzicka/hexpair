@@ -304,6 +304,30 @@ baseline hashes computed and never compared — which is to say two tests
 that did not check what their own comment said they did. That last class
 is what a manual run before a release is for.
 
+**What the message line SHOWS is not observable from inside Vim**, and
+`vim -es` has no message line at all. A message echoed from a mapping can
+be drawn over by whatever Vim paints next - `-- VISUAL --` after a `gv`
+is the case that bit - and the only way to find out is to look at a real
+terminal:
+
+```sh
+tmux new-session -d -s hp -x 100 -y 20 "vim -u rc.vim -c 'HexPairOpen f.bin 2'"
+python3 -c "import time; time.sleep(1.5)"      # let Vim draw
+tmux send-keys -t hp -l 'jvll'                 # keys, one -l string at a time;
+tmux send-keys -t hp -l '\\'                     # a backslash needs '\\'
+tmux send-keys -t hp -l 's'
+python3 -c "import time; time.sleep(0.8)"
+tmux capture-pane -t hp -p | tail -3           # what is actually on screen
+tmux kill-session -t hp
+```
+
+That is how the hit-enter prompt on the selection report, and the
+progress line during a scan, were established rather than assumed. Two
+traps in the recipe itself: a test vimrc needs `set nocompatible` before
+any `<>` key notation (`'compatible'` puts `<` in `'cpoptions'`, and the
+mappings are then silently not what they read as), and packages in
+`~/.vim/pack` load even under `-u`, so a plugin can be loaded twice.
+
 **Read the check COUNT, not just the last line.** The suite is one long
 sequence of blocks, and an edit that replaces a span of it can swallow
 whole blocks that happen to live inside that span - which the suite then

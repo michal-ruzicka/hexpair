@@ -83,7 +83,9 @@ and this project adheres to
 - **`:HexPairSelection`** (`<Plug>(HexPairSelection)`, worth mapping in
   Visual mode as well as Normal) says how many bytes a Visual selection
   covers and which, 1-based like the banner, so the numbers can be typed
-  straight into `:HexPairGoOffset`. A blockwise selection, whose bytes
+  straight into `:HexPairGoOffset`. Asked from Visual mode it puts the
+  selection back and waits for a key, since Vim's own `-- VISUAL --` is
+  drawn over the message line the moment it gets there. A blockwise selection, whose bytes
   are not one run, leads with the count and says how many lines and how
   many per line.
 - **`HexPairStatus()`** for `'statusline'`: `hex 3/349 @0x50a01 (330241)`
