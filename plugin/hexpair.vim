@@ -4114,9 +4114,13 @@ function! s:DiffJump(forward) abort
       return
     endif
     call s:GotoOffset(string(at + 1), 0)
-    echo printf('hexpair: %s change against %s starts at byte %d (0x%x)',
-          \ a:forward ? 'next' : 'previous', b:hexpair_diff_file,
-          \ at + 1, at + 1)
+    " The file is named short here (:~:.), unlike everywhere else in this
+    " plugin: this message is printed on every press of the jump key, and
+    " one that does not fit on the command line costs a hit-enter prompt
+    " each time.
+    echo printf('hexpair: %s change at byte %d (0x%x) against %s',
+          \ a:forward ? 'next' : 'previous', at + 1, at + 1,
+          \ fnamemodify(b:hexpair_diff_file, ':~:.'))
   catch /^hexpair:/
     echohl ErrorMsg
     echomsg v:exception
