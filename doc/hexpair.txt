@@ -283,6 +283,10 @@ inside a character: |:HexPairGoOffset| on the second byte of a two-byte
 character lands on the character, and says so with the offset it reached.
 The hex view has a column per byte and reaches every one of them.
 
+What is MARKED is still the byte; what you SEE is the character it is
+part of, because a character is one cell on screen and Vim colours cells.
+The hex view shows which byte it was.
+
 ==============================================================================
 3. Mappings                                                 *hexpair-mappings*
 

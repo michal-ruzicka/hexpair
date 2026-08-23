@@ -461,7 +461,9 @@ byte of a multi-byte character is marked as one byte. The only thing a
 byte offset cannot do in the text view is put the *cursor* inside a
 character — `:HexPairGoOffset` on the second byte of a two-byte character
 lands on the character and says which offset it reached. The hex view
-reaches every byte.
+reaches every byte. And what is *marked* is the byte, while what you
+*see* is the character it belongs to — a character is one cell on screen,
+and Vim colours cells; the hex view shows which byte it was.
 
 `'scrollbind'` says the two windows move together, and a page turn is the
 one kind of scrolling Vim cannot follow on its own — so hexpair passes it
