@@ -745,7 +745,15 @@ was designed and built in Stage 2 - see "What Stage 2 decided".
   write one as a line break, since both come from `readfile(..., 'b')`.
   That costs one documented blind spot — a NUL replaced by a line break
   at the same offset is not marked — and buys a comparison that needs no
-  per-byte conversion. The other side of each comparison (the page as
+  per-byte conversion. Everything else is in bytes and stays right on the
+  two inputs a test rarely has: CRLF line endings (the CR is data, and
+  `s:SetupPagedBuffer()` forces `'fileformat'` unix so `line2byte()`
+  counts one byte per break on Windows too) and multi-byte characters
+  (`strlen()`, `strpart()` and `matchaddpos()`'s columns are all byte
+  counts). The one thing a byte offset cannot do there is put the cursor
+  INSIDE a character; the hex view reaches every byte.
+  Guard: "a paged buffer is 'fileformat' unix whatever the platform
+  prefers" and the block of checks under it. The other side of each comparison (the page as
   read, the file being compared with) is one `xxd -r -p` per page, kept
   against the hex it was made from (`s:BytesAsText()`), so a redraw pays
   nothing for it.

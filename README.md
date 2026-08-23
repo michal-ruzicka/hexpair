@@ -455,6 +455,14 @@ because Vim cannot hold a NUL in a string and writes one as a line break,
 a NUL replaced by a line break at the same offset is the one edit the
 text view does not mark.
 
+Everything is measured in bytes, so CRLF line endings and UTF-8 text mark
+exactly what is meant: a CR is a byte of the page like any other, and one
+byte of a multi-byte character is marked as one byte. The only thing a
+byte offset cannot do in the text view is put the *cursor* inside a
+character — `:HexPairGoOffset` on the second byte of a two-byte character
+lands on the character and says which offset it reached. The hex view
+reaches every byte.
+
 `'scrollbind'` says the two windows move together, and a page turn is the
 one kind of scrolling Vim cannot follow on its own — so hexpair passes it
 on: turning the page in either window (or landing on another page with

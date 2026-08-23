@@ -273,6 +273,16 @@ hold a NUL in a string and writes one as a line break, so a NUL replaced
 by a line break at the same offset (or the other way round) is not marked
 as changed.  Every other edit is, including one that changes the length.
 
+Everything here is measured in BYTES, so a file of UTF-8 text or one with
+CRLF line endings marks exactly the bytes that are meant: a CR is a byte
+of the page like any other (not a line ending Vim owns - a paged buffer is
+always 'fileformat' unix, so one line break is one byte wherever Vim
+runs), and one byte of a multi-byte character is marked as one byte.  The
+only thing a byte offset cannot do in the text view is put the CURSOR
+inside a character: |:HexPairGoOffset| on the second byte of a two-byte
+character lands on the character, and says so with the offset it reached.
+The hex view has a column per byte and reaches every one of them.
+
 ==============================================================================
 3. Mappings                                                 *hexpair-mappings*
 

@@ -186,6 +186,15 @@ _fd[700:705] = b'hello'
 open(os.path.join(w, 'find1.bin'), 'wb').write(bytes(_fd))
 open(os.path.join(w, 'rep1.bin'), 'wb').write(bytes(_fd))
 open(os.path.join(w, 'rep2.bin'), 'wb').write(bytes(_fd))
+# a text-view fixture with what a real file has and a test rarely does:
+# CRLF line endings (the CR is DATA, a byte like any other), multi-byte
+# UTF-8 characters, a four-byte one, and a pair of bytes that are not
+# valid UTF-8 at all
+_mb = 'P\u0159\u00edli\u0161 \u017elu\u0165ou\u010dk\u00fd\r\nk\u016f\u0148 \U0001f40e utf-8\r\n'.encode('utf-8') + b'\xff\xfe raw\r\n'
+open(os.path.join(w, 'mb1.bin'), 'wb').write(_mb)
+_mb2 = bytearray(_mb)
+_mb2[1] = ord('X')          # the first byte of a two-byte character
+open(os.path.join(w, 'mb2.bin'), 'wb').write(bytes(_mb2))
 # a small text-view fixture with known line breaks: bytes 0-9 "ABCDEFGHIJ",
 # 10 a line break, 11-20 "KLMNOPQRST", 21 a line break, 22-31 "UVWXYZ0123"
 _tm = b'ABCDEFGHIJ\nKLMNOPQRST\nUVWXYZ0123'
@@ -3166,6 +3175,68 @@ check "and the bytes a search found" "[[3, 1, 2]]" \
 # read - string against string, in the text view's own spelling.
 check "and the bytes edited and not yet written" "[1, [[4, 7, 4]]]" \
     "$(sed -n 8p "$WORK/ttmark.out")"
+
+# --- The same, on the bytes a real file is made of -------------------------
+# CRLF line endings and multi-byte characters are where a byte offset and
+# a column part company, and both views are byte-exact by construction:
+# everything measures in bytes (strlen(), strpart(), and matchaddpos()'s
+# own columns), and a paged buffer is forced to 'fileformat' unix so that
+# line2byte() counts one byte per line break wherever Vim is running - on
+# Windows a new buffer would default to dos and every offset past the
+# first line would be out by the number of lines above it.
+cat > "$WORK/tmb.vim" <<EOF
+$(printf "$HEX")
+set encoding=utf-8
+set fileformats=dos,unix
+let out = []
+HexPairOpen $WORK/mb1.bin 1
+call add(out, 'ff ' . &fileformat)
+HexPairToggle
+call add(out, 'ff ' . &fileformat . ', lines ' . string(map(range(2, line('\$') - 1), 'strlen(getline(v:val))')) . ', at ' . string(map(range(2, line('\$') - 1), 'line2byte(v:val) - line2byte(2)')))
+silent HexPairDiff $WORK/mb2.bin
+call add(out, string(HexPairPagedMarkingPositions('diff', 2, line('\$') - 1)))
+HexPairGoOffset 2
+HexPairMark m
+call add(out, string(HexPairPagedMarkingPositions('mark', 2, line('\$') - 1)))
+silent HexPairFind c5 99
+call add(out, string(HexPairPagedMarkingPositions('find', 2, line('\$') - 1)))
+HexPairToggle
+HexPairGoOffset 20
+call add(out, 'hex ' . HexPairStatus())
+HexPairToggle
+HexPairGoOffset 20
+call add(out, 'text ' . HexPairStatus())
+call setline(2, substitute(getline(2), '\\%d269', 'XY', ''))
+call add(out, string(HexPairPagedMarkingPositions('modified', 2, 3)))
+call writefile(out, '$WORK/tmb.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tmb.vim" < /dev/null
+check "a paged buffer is 'fileformat' unix whatever the platform prefers" \
+    "ff unix" "$(sed -n 1p "$WORK/tmb.out")"
+# Line lengths in BYTES, and the CR that ends each line counted among
+# them: 24 bytes of text plus the CR, then the line break Vim itself adds.
+check "and its text view measures lines in bytes, CR included" \
+    "ff unix, lines [24, 17, 7, 0], at [0, 25, 43, 51]" \
+    "$(sed -n 2p "$WORK/tmb.out")"
+# The changed byte is the FIRST of a two-byte character: one byte marked,
+# at the column that byte is at.
+check "a byte inside a character is marked as one byte" "[[2, 2, 1]]" \
+    "$(sed -n 3p "$WORK/tmb.out")"
+check "so is the byte a mark stands on" "[[2, 2, 1]]" \
+    "$(sed -n 4p "$WORK/tmb.out")"
+check "and both bytes of a character a search matched" "[[2, 2, 2]]" \
+    "$(sed -n 5p "$WORK/tmb.out")"
+# The hex view reaches every byte; the text view can only put the cursor
+# on a character, so a byte inside one lands on its first - byte 20 here
+# is the second of a two-byte character.
+check "the hex view reaches a byte inside a character" "hex hex 1/1 @0x14 (20)" \
+    "$(sed -n 6p "$WORK/tmb.out")"
+check "and the text view lands on the character it belongs to" \
+    "text txt 1/1 @0x13 (19)" "$(sed -n 7p "$WORK/tmb.out")"
+# Two bytes of a character replaced by two ASCII ones: the same two bytes.
+check "an edit is marked byte for byte, not character for character" \
+    "[[2, 19, 2]]" "$(sed -n 8p "$WORK/tmb.out")"
 
 # ===========================================================================
 # Property: any shape of dump writes the bytes it spells
