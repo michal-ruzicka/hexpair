@@ -186,6 +186,13 @@ _fd[700:705] = b'hello'
 open(os.path.join(w, 'find1.bin'), 'wb').write(bytes(_fd))
 open(os.path.join(w, 'rep1.bin'), 'wb').write(bytes(_fd))
 open(os.path.join(w, 'rep2.bin'), 'wb').write(bytes(_fd))
+# a fixture whose only occurrence of a pattern STRADDLES a page boundary:
+# with the 512-byte pages the suite uses, "64 20" sits at the last byte of
+# page 1 and the first of page 2
+_st = bytearray(bytes(i % 256 for i in range(1024)))
+_st[511] = 0x64
+_st[512] = 0x20
+open(os.path.join(w, 'straddle.bin'), 'wb').write(bytes(_st))
 # a text-view fixture with what a real file has and a test rarely does:
 # CRLF line endings (the CR is DATA, a byte like any other), multi-byte
 # UTF-8 characters, a four-byte one, and a pair of bytes that are not
@@ -3482,6 +3489,39 @@ check "and in which direction" \
 check "an empty file is 100%" \
     "hexpair: searching back 100% of 0 bytes (CTRL-C stops)" \
     "$(sed -n 4p "$WORK/tprog.out")"
+
+# --- A match that straddles a page boundary ---------------------------------
+# It belongs to both pages it touches, and fits whole inside neither - so
+# without a margin of the neighbouring page's bytes it is found in neither,
+# and the byte :HexPairFindNext just jumped to sits there unmarked. Both
+# views mark the part that is on the page in view.
+cat > "$WORK/tstraddle.vim" <<EOF
+$(printf "$HEX")
+let out = []
+HexPairOpen $WORK/straddle.bin 1
+silent HexPairFind 64 20
+call add(out, HexPairStatus())
+call add(out, string(HexPairPagedMarkingPositions('find', 2, 33)))
+HexPairPageNext
+call add(out, HexPairStatus() . ' ' . string(HexPairPagedMarkingPositions('find', 2, 33)))
+HexPairPagePrev
+HexPairToggle
+call add(out, string(HexPairPagedMarkingPositions('find', 2, line('\$') - 1)))
+call writefile(out, '$WORK/tstraddle.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tstraddle.vim" < /dev/null
+check "the search lands on the first byte of the match" "hex 1/2 @0x200 (512)" \
+    "$(sed -n 1p "$WORK/tstraddle.out")"
+# Page 1 holds one byte of it: the last one, in both columns.
+check "and the page it starts on marks the byte it has" \
+    "[[33, 56, 2], [33, 75, 1]]" "$(sed -n 2p "$WORK/tstraddle.out")"
+# Page 2 holds the other, at its very first byte.
+check "the page it ends on marks its share too" \
+    "hex 2/2 @0x201 (513) [[2, 11, 2], [2, 60, 1]]" \
+    "$(sed -n 3p "$WORK/tstraddle.out")"
+check "and the text view marks its one column" "[[4, 245, 1]]" \
+    "$(sed -n 4p "$WORK/tstraddle.out")"
 
 # --- Walking the edits that have not been written yet -----------------------
 # The same idea as walking the changes against another file, applied to

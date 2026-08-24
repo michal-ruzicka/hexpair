@@ -16,7 +16,8 @@ and this project adheres to
   `deadbeef`) and `?` stands for any nibble. `:HexPairFindText {string}`
   searches for the bytes of a string, `:HexPairFindNext` /
   `:HexPairFindPrev` repeat it either way and obey `'wrapscan'`, and
-  every match on the page is marked (`HexPairFind`). `/` could never do
+  every match on the page is marked (`HexPairFind`) - including one that
+  straddles a page boundary, which is marked on both pages it touches. `/` could never do
   this: it searches the page on screen, which is a window on the file.
   A search reads the file a megabyte at a time, and from 16 MB up says
   how far it has got, since a scan of a large file takes long enough to

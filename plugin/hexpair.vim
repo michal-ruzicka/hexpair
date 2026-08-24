@@ -3409,6 +3409,44 @@ endfunction
 " about the FILE: an edit of yours shows up as a changed byte
 " (HexPairModified), not as a match appearing or vanishing under the
 " cursor.
+" The page's bytes for searching, with up to a:span - 1 bytes of the pages
+" on either side. A match that straddles a page boundary belongs to both
+" pages it touches: without the margins it can be found in NEITHER, since
+" it does not fit whole inside either one - the bytes |:HexPairFindNext|
+" had just jumped to would sit there unmarked, which is what the
+" maintainer saw with a two-byte pattern split by the boundary.
+"
+" Returns [hex, margin]: margin is how many bytes of the PREVIOUS page came
+" with it, so an index into the run is a page-relative byte less margin -
+" which can be negative, meaning a match that began on the page before.
+" Kept against the page and the pattern's length: it costs two small reads.
+function! s:PageHexForSearch(span) abort
+  let hex = get(b:, 'hexpair_page_hex', '')
+  if hex ==# '' || a:span <= 1
+    return [hex, 0]
+  endif
+  " The file too: a view can be pointed at another one, and page 1 of that
+  " is the same base and length as page 1 of this.
+  let key = [b:hexpair_page_file, b:hexpair_page_base, b:hexpair_page_len,
+        \ a:span]
+  if get(b:, 'hexpair_searchhex_key', []) ==# key
+    return b:hexpair_searchhex
+  endif
+  let want  = a:span - 1
+  let base  = b:hexpair_page_base
+  let after = base + b:hexpair_page_len
+  let left  = base < want ? base : want
+  let tail  = b:hexpair_page_total - after
+  let right = tail < want ? tail : want
+  let out = [(left > 0 ? s:FileHex(b:hexpair_page_file, base - left, left) : '')
+        \ . hex
+        \ . (right > 0 ? s:FileHex(b:hexpair_page_file, after, right) : ''),
+        \ left]
+  let b:hexpair_searchhex_key = key
+  let b:hexpair_searchhex = out
+  return out
+endfunction
+
 function! HexPairPagedFindPositions(first, last) abort
   let out = []
   let n = b:hexpair_n
@@ -3430,9 +3468,15 @@ function! HexPairPagedFindPositions(first, last) abort
     return out
   endif
   " Back up by the pattern's span so a match that starts above the window
-  " and reaches into it is found; the slice still starts on a byte.
-  let from = lo - (span - 1) < 0 ? 0 : lo - (span - 1)
-  let slice = strpart(hex, from * 2, (hi - from + 1) * 2)
+  " and reaches into it is found, and search the page WITH its margins, so
+  " that one straddling a page boundary is found from either side.
+  let [runhex, margin] = s:PageHexForSearch(span)
+  let from = lo - (span - 1)
+  let from = from < -margin ? -margin : from
+  let upto = hi + span - 1
+  let ext = strlen(runhex) / 2 - margin
+  let upto = upto > ext - 1 ? ext - 1 : upto
+  let slice = strpart(runhex, (from + margin) * 2, (upto - from + 1) * 2)
   let at = 0
   while 1
     let idx = HexPairPagedFindInHex(slice, s:find.hex, at, 1)
@@ -3441,15 +3485,22 @@ function! HexPairPagedFindPositions(first, last) abort
     endif
     let at = idx + 2
     let byte = from + idx / 2
-    let line = byte / n
-    let last = (byte + span - 1) / n
+    " Only the bytes of the match that are on THIS page have a line.
+    let b0 = byte < 0 ? 0 : byte
+    let b1 = byte + span - 1
+    let b1 = b1 > bytes - 1 ? bytes - 1 : b1
+    if b1 < b0
+      continue
+    endif
+    let line = b0 / n
+    let last = b1 / n
     while line <= last
       let lnum = line + 1 + header
       if line >= firstidx && line <= lastidx && line * n < bytes
         let [n2, hexstart, hexend, asciistart] = s:PagedLineLayout(lnum)
-        let s0 = byte - line * n
+        let s0 = b0 - line * n
         let s0 = s0 < 0 ? 0 : s0
-        let s1 = byte + span - 1 - line * n
+        let s1 = b1 - line * n
         let s1 = s1 > n - 1 ? n - 1 : s1
         call add(out, [lnum, hexstart + s0 * 3, (s1 - s0 + 1) * 3 - 1])
         if strlen(getline(lnum)) >= asciistart
@@ -5188,14 +5239,16 @@ function! s:TextFindPositions(first, last) abort
     return []
   endif
   let bytes = strlen(hex) / 2
-  let to = spans[-1][1] + spans[-1][2] + 1
-  let to = to > bytes ? bytes : to
+  let [runhex, margin] = s:PageHexForSearch(span)
+  let ext = strlen(runhex) / 2 - margin
+  let to = spans[-1][1] + spans[-1][2] + span
+  let to = to > ext ? ext : to
   let from = spans[0][1] - (span - 1)
-  let from = from < 0 ? 0 : from
+  let from = from < -margin ? -margin : from
   if from >= to
     return []
   endif
-  let slice = strpart(hex, from * 2, (to - from) * 2)
+  let slice = strpart(runhex, (from + margin) * 2, (to - from) * 2)
   let runs = []
   let at = 0
   while 1
@@ -5204,6 +5257,8 @@ function! s:TextFindPositions(first, last) abort
       break
     endif
     let at = idx + 2
+    " A run may start before this page or end after it; the mapper keeps
+    " only what falls on a line.
     call add(runs, [from + idx / 2, span])
   endwhile
   return HexPairPagedTextPositions(spans, runs)

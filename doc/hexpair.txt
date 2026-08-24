@@ -887,6 +887,12 @@ HexPairOpenFile({file} [, {page}])
                         that matches thousands of times on a page costs
                         no more than one that matches twice.
 
+                        A match that straddles a page boundary is marked
+                        on both pages it touches, each showing the bytes
+                        it holds - the page's own bytes are searched with
+                        a few of the neighbouring page's on either side,
+                        since such a match fits whole inside neither.
+
                         What is searched is the file on disk.  Unwritten
                         edits are on the screen, where |/| and the eye can
                         find them.
