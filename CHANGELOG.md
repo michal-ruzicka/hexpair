@@ -57,18 +57,23 @@ and this project adheres to
   view of it.
 - **`HexPairModified`**: the bytes edited and not yet written are marked
   in both columns, so an edit in a dump no longer looks exactly like
-  everything around it (`g:hexpair_show_modified` turns it off), and
-  `:HexPairModifiedNext` / `:HexPairModifiedPrev` walk between the runs of
-  them - bytes that touch are one edit, and the message says which of how
-  many. They need no scan of the file: turning a page needs an unmodified
-  buffer or a bang that discards, so edited bytes only ever exist on the
-  page in view. That
-  marking, and the three beside it - what differs from the file being
-  compared with, what a search found, and the byte a mark stands on - are
-  drawn in the windowed text view too, one column per byte. It links
+  everything around it (`g:hexpair_show_modified` turns it off). It links
   to `DiffChange` rather than the closer-sounding `DiffText`, whose own
-  default is a red background with no foreground — black on red for
+  default is a red background with no foreground - black on red for
   anyone with a light background.
+- **The markings are drawn in the windowed text view too**, one column
+  per byte where the dump gives a byte three: the bytes you edited, the
+  bytes that differ from the file being compared with, the matches of a
+  search, and the byte a mark stands on. The line break that ends a
+  text-view line is a byte of the page with no column of its own, and is
+  therefore the one byte never marked.
+- **`:HexPairModifiedNext` / `:HexPairModifiedPrev`** walk between the
+  runs of edited bytes the way `:HexPairDiffNext` walks changes: bytes
+  that touch are one edit, the cursor lands on the first byte of each,
+  and the message says which of how many. No scan of the file is needed -
+  turning a page needs an unmodified buffer or a bang that discards it,
+  so bytes edited and not yet written only ever exist on the page in
+  view.
 - **`hexpair.vimrc`**: the mappings the maintainer uses, shipped in the
   repository and the release tarball so that a vimrc can source them
   rather than copy them - `runtime pack/*/start/hexpair/hexpair.vimrc`,
@@ -80,10 +85,10 @@ and this project adheres to
   `:HPReplaceAllInPage` - same arguments, same bang, same completion,
   because `:HexPair…` is a lot to type at a `:` prompt.
   `g:hexpair_short_commands = 0` leaves that namespace alone.
-- **Prompting `<Plug>` targets** for the three commands that take
-  something typed: `<Plug>(HexPairGoMark)` (with the mark names
-  completed), `<Plug>(HexPairFind)` and `<Plug>(HexPairFindText)` - the
-  same shape `<Plug>(HexPairPageGoto)` has had. The Visual-mode
+- **Prompting `<Plug>` targets** for the commands that take something
+  typed: `<Plug>(HexPairFind)`, `<Plug>(HexPairFindText)` and the three
+  mark ones above, each completing what it can - the same shape
+  `<Plug>(HexPairPageGoto)` has had. The Visual-mode
   `<Plug>(HexPairSelection)` also puts the selection back when it has
   reported on it: asking about a selection from the `:` line is what
   ends Visual mode, and losing it to look at it is not a trade worth
@@ -108,9 +113,9 @@ and this project adheres to
   covers and which, 1-based like the banner, so the numbers can be typed
   straight into `:HexPairGoOffset`. Asked from Visual mode it puts the
   selection back and waits for a key, since Vim's own `-- VISUAL --` is
-  drawn over the message line the moment it gets there. A blockwise selection, whose bytes
-  are not one run, leads with the count and says how many lines and how
-  many per line.
+  drawn over the message line the moment it gets there. A blockwise
+  selection, whose bytes are not one run, leads with the count and says
+  how many lines and how many per line.
 - **`HexPairStatus()`** for `'statusline'`: `hex 3/349 @0x50a01 (330241)`
   in the hex view, `txt 3/349 @0x50a01 (330241)` in the text view, and
   an empty string in every buffer hexpair has not touched, so one
