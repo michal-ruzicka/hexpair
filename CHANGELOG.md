@@ -7,7 +7,7 @@ and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html); the
 `Version:` header in `plugin/hexpair.vim` is the single source of truth.
 
-## [v2.1.0-devel] – 2026-08-21
+## [v2.1.0] – 2026-08-24
 
 ### Added
 - **Search across the file.** `:HexPairFind {bytes}` looks through the
@@ -17,12 +17,12 @@ and this project adheres to
   searches for the bytes of a string, `:HexPairFindNext` /
   `:HexPairFindPrev` repeat it either way and obey `'wrapscan'`, and
   every match on the page is marked (`HexPairFind`) - including one that
-  straddles a page boundary, which is marked on both pages it touches. `/` could never do
-  this: it searches the page on screen, which is a window on the file.
-  A search reads the file a megabyte at a time, and from 16 MB up says
-  how far it has got, since a scan of a large file takes long enough to
-  look like a hang; `CTRL-C` stops it, and nothing has been changed by
-  then. `:HexPairDiffNext` reports the same way.
+  straddles a page boundary, which is marked on both pages it touches.
+  `/` could never do this: it searches the page on screen, which is
+  a window on the file. A search reads the file a megabyte at a time, and
+  from 16 MB up says how far it has got, since a scan of a large file takes
+  long enough to look like a hang; `CTRL-C` stops it, and nothing has been
+  changed by then. `:HexPairDiffNext` reports the same way.
 - **Replacing what was found.** `:HexPairReplace {bytes}` over the match
   under the cursor, `:HexPairReplaceAllInPage {pattern} / {bytes}` over
   every match on the page in view - the scope is in the name, because
@@ -432,7 +432,7 @@ in one place:
   not on `PATH`.
 - Vim help documentation (`:help hexpair`).
 
-[v2.1.0-devel]: https://github.com/michal-ruzicka/hexpair/compare/v2.0.0...devel
+[v2.1.0]: https://github.com/michal-ruzicka/hexpair/compare/v2.0.0...v2.1.0
 [v2.0.0]: https://github.com/michal-ruzicka/hexpair/compare/v1.1.0...v2.0.0
 [v1.1.0]: https://github.com/michal-ruzicka/hexpair/compare/v1.0.0...v1.1.0
 [v1.0.0]: https://github.com/michal-ruzicka/hexpair/releases/tag/v1.0.0
