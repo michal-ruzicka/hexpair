@@ -724,6 +724,17 @@ was designed and built in Stage 2 - see "What Stage 2 decided".
   with a handful of differences and 260 ms when every byte differs. The
   block is 1024 bytes because that is where skipping matching bytes
   faster and taking apart differing ones slower meet (256…16384 measured).
+- `s:ModifiedRuns()` / `s:ModifiedJump()` — walking the bytes edited and
+  not yet written, the way the diff jumps walk changes. **Page-scoped by
+  nature, not by limitation**: turning a page needs an unmodified buffer
+  or a bang that discards, so edited bytes only ever exist on the page in
+  view — which is why this needs no file-wide scan. The runs come from
+  `HexPairPagedDifferingByteRuns()` in the hex view (the page's payload
+  against `b:hexpair_page_hex`) and from `HexPairPagedTextRuns()` per line
+  in the text view, and `HexPairPagedJoinRuns()` puts touching ones
+  together — the text view compares line by line, so an edit spanning a
+  line break arrives as two. Cached against `b:changedtick`, because the
+  hex view's half is a whole-page scan and the key gets pressed repeatedly.
 - `s:Progress()` / `HexPairPagedProgressText()` — a file-wide scan reads a
   megabyte at a time and can run for minutes, which is indistinguishable
   from a hang, so from 16 MB up it says how far it has got. **The redraw

@@ -130,6 +130,13 @@ call s:Map('n', '<Leader>F', '<Plug>(HexPairFindPrev)')
 " Stop marking the matches.
 call s:Map('n', '<Leader>c', '<Plug>(HexPairFindClear)')
 
+" --- Walking your own edits ----------------------------------------------
+" Next and previous run of bytes edited and not yet written, on this page -
+" the same idea as ] and [ below, applied to what you have changed rather
+" than to what another file has.
+call s:Map('n', '<Leader>e', '<Plug>(HexPairModifiedNext)')
+call s:Map('n', '<Leader>E', '<Plug>(HexPairModifiedPrev)')
+
 " --- Comparing with another file -----------------------------------------
 " Next and previous CHANGE against the file :HexPairDiff compares with - a
 " run of differing bytes is one change however long it is - and ] and [ as

@@ -90,9 +90,12 @@ code, releases and issue tracker.
   found, turning the page on the way; `?` stands for any nibble, and
   `:HexPairFindText` takes a string. `:HexPairReplace` and
   `:HexPairReplaceAllInPage` put new bytes over what was found.
-- **Changed bytes are visible.** Everything edited and not yet written is
-  marked in both columns (`HexPairModified`), so an edit in a dump does
-  not look exactly like everything around it. The marking groups link to
+- **Changed bytes are visible, and walkable.** Everything edited and not
+  yet written is marked in both columns (`HexPairModified`), so an edit in
+  a dump does not look exactly like everything around it, and
+  `:HexPairModifiedNext` / `:HexPairModifiedPrev` move between the runs of
+  them the way `:HexPairDiffNext` moves between changes against another
+  file. The marking groups link to
   your colour scheme's diff and search colours rather than naming colours
   of their own — with stock Vim and with every scheme it ships, that
   resolves to something readable on a light and a dark background alike,
@@ -212,6 +215,8 @@ nmap <Leader>/ <Plug>(HexPairFind)          " prompt for bytes to find
 nmap <Leader>t <Plug>(HexPairFindText)      " prompt for text to find
 nmap <Leader>f <Plug>(HexPairFindNext)      " next match of the last pattern
 nmap <Leader>F <Plug>(HexPairFindPrev)      " previous match
+nmap <Leader>e <Plug>(HexPairModifiedNext)  " next run of bytes you edited
+nmap <Leader>E <Plug>(HexPairModifiedPrev)  " previous one
 nmap <Leader>] <Plug>(HexPairDiffNext)      " next change against that file
 nmap <Leader>[ <Plug>(HexPairDiffPrev)      " previous one
 nmap <Leader>c <Plug>(HexPairFindClear)     " stop marking the matches

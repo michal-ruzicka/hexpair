@@ -3483,6 +3483,94 @@ check "an empty file is 100%" \
     "hexpair: searching back 100% of 0 bytes (CTRL-C stops)" \
     "$(sed -n 4p "$WORK/tprog.out")"
 
+# --- Walking the edits that have not been written yet -----------------------
+# The same idea as walking the changes against another file, applied to
+# what is edited and not yet saved - and page-scoped by nature, since
+# turning a page needs an unmodified buffer or a bang that discards, so
+# edited bytes only ever exist on the page in view.
+cat > "$WORK/tmodjump.vim" <<EOF
+$(printf "$HEX")
+let out = []
+call add(out, string([HexPairPagedDifferingByteRuns('00112233', '00112233'), HexPairPagedDifferingByteRuns('00ff2233', '00112233'), HexPairPagedDifferingByteRuns('00ffee33', '00112233'), HexPairPagedDifferingByteRuns('00112233', '0011'), HexPairPagedDifferingByteRuns('0011', '00112233')]))
+call add(out, string(HexPairPagedJoinRuns([[7, 3], [5, 2], [20, 1], [1, 1]])))
+HexPairOpen $WORK/short1.bin 1
+redir => m0
+silent HexPairModifiedNext
+redir END
+call add(out, matchstr(m0, 'hexpair:[^ ]*.*'))
+call setline(3, substitute(getline(3), '^\\(00000010: \\)\\S\\S \\S\\S', '\\1ff ee', ''))
+call setline(8, substitute(getline(8), '^\\(00000060: \\)\\S\\S', '\\1aa', ''))
+HexPairGoOffset 1
+redir => m1
+silent HexPairModifiedNext
+redir END
+call add(out, matchstr(m1, 'hexpair:[^\n]*') . ' | ' . HexPairStatus())
+redir => m2
+silent HexPairModifiedNext
+redir END
+call add(out, matchstr(m2, 'hexpair:[^\n]*') . ' | ' . HexPairStatus())
+redir => m3
+silent HexPairModifiedNext
+redir END
+call add(out, matchstr(m3, 'hexpair:[^\n]*'))
+redir => m4
+silent HexPairModifiedPrev
+redir END
+call add(out, matchstr(m4, 'hexpair:[^\n]*') . ' | ' . HexPairStatus())
+call writefile(out, '$WORK/tmodjump.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tmodjump.vim" < /dev/null
+# A run of differing bytes, from either side of a length change: bytes the
+# shorter run does not reach are a difference that carries on to its end.
+check "the differing bytes come out as runs" \
+    "[[], [[1, 1]], [[1, 2]], [[2, 2]], []]" "$(sed -n 1p "$WORK/tmodjump.out")"
+check "and runs that touch are one run" "[[1, 1], [5, 5], [20, 1]]" \
+    "$(sed -n 2p "$WORK/tmodjump.out")"
+check "an unedited page says there is nothing to walk" \
+    "hexpair: nothing edited on this page" "$(sed -n 3p "$WORK/tmodjump.out")"
+check "the first edit is where the first edited byte is" \
+    "hexpair: edit 1 of 2 on this page, at byte 17 (0x11) | hex 1/10+ @0x11 (17)" \
+    "$(sed -n 4p "$WORK/tmodjump.out")"
+check "then the next one, wherever it is on the page" \
+    "hexpair: edit 2 of 2 on this page, at byte 97 (0x61) | hex 1/10+ @0x61 (97)" \
+    "$(sed -n 5p "$WORK/tmodjump.out")"
+check "and past the last it says so, without moving" \
+    "hexpair: no edit after byte 97 on this page" "$(sed -n 6p "$WORK/tmodjump.out")"
+check "backwards walks them the other way" \
+    "hexpair: edit 1 of 2 on this page, at byte 17 (0x11) | hex 1/10+ @0x11 (17)" \
+    "$(sed -n 7p "$WORK/tmodjump.out")"
+
+# The same from the windowed text view, where the comparison is string
+# against string rather than hex against hex.
+cat > "$WORK/tmodjump2.vim" <<EOF
+$(printf "$HEX")
+let out = []
+HexPairOpen $WORK/tmark1.bin 1
+HexPairToggle
+call setline(2, 'ABxyEFGHIJ')
+call setline(4, 'UVWXYZ99za')
+HexPairGoOffset 1
+for i in range(3)
+  redir => m
+  silent HexPairModifiedNext
+  redir END
+  call add(out, matchstr(m, 'hexpair:[^\n]*') . ' | ' . HexPairStatus())
+endfor
+call writefile(out, '$WORK/tmodjump2.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tmodjump2.vim" < /dev/null
+check "the text view walks its own edits" \
+    "hexpair: edit 1 of 2 on this page, at byte 3 (0x3) | txt 1/1+ @0x3 (3)" \
+    "$(sed -n 1p "$WORK/tmodjump2.out")"
+check "including one that ends a line" \
+    "hexpair: edit 2 of 2 on this page, at byte 29 (0x1d) | txt 1/1+ @0x1d (29)" \
+    "$(sed -n 2p "$WORK/tmodjump2.out")"
+check "and stops at the last of them" \
+    "hexpair: no edit after byte 29 on this page | txt 1/1+ @0x1d (29)" \
+    "$(sed -n 3p "$WORK/tmodjump2.out")"
+
 # --- Everything a user is given is in the release tarball -------------------
 # pack-release.py carries the file list by hand, and a new file that users
 # are told to source can be added to the repo, documented, and then simply

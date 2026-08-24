@@ -57,7 +57,12 @@ and this project adheres to
   view of it.
 - **`HexPairModified`**: the bytes edited and not yet written are marked
   in both columns, so an edit in a dump no longer looks exactly like
-  everything around it (`g:hexpair_show_modified` turns it off). That
+  everything around it (`g:hexpair_show_modified` turns it off), and
+  `:HexPairModifiedNext` / `:HexPairModifiedPrev` walk between the runs of
+  them - bytes that touch are one edit, and the message says which of how
+  many. They need no scan of the file: turning a page needs an unmodified
+  buffer or a bang that discards, so edited bytes only ever exist on the
+  page in view. That
   marking, and the three beside it - what differs from the file being
   compared with, what a search found, and the byte a mark stands on - are
   drawn in the windowed text view too, one column per byte. It links

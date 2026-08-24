@@ -301,6 +301,7 @@ The hex view shows which byte it was.
                              *<Plug>(HexPairFind)* *<Plug>(HexPairFindText)*
                   *<Plug>(HexPairFindNext)* *<Plug>(HexPairFindPrev)*
                   *<Plug>(HexPairDiffNext)* *<Plug>(HexPairDiffPrev)*
+         *<Plug>(HexPairModifiedNext)* *<Plug>(HexPairModifiedPrev)*
                  *<Plug>(HexPairFindClear)* *<Plug>(HexPairDiffClear)*
                                                        *<Plug>(HexPairMarks)*
 The plugin defines NO key mappings by default; it only provides the
@@ -339,6 +340,10 @@ and so do the three that need a name typed - they ask for it: >
     nmap <Leader>t <Plug>(HexPairFindText)
     nmap <Leader>f <Plug>(HexPairFindNext)
     nmap <Leader>F <Plug>(HexPairFindPrev)
+
+    " Walking your own edits
+    nmap <Leader>e <Plug>(HexPairModifiedNext)
+    nmap <Leader>E <Plug>(HexPairModifiedPrev)
 
     " Comparing with another file
     nmap <Leader>] <Plug>(HexPairDiffNext)
@@ -970,6 +975,22 @@ HexPairOpenFile({file} [, {page}])
                         |:HexPairFindNext| do the same; nothing has been
                         changed by the time either of them can be
                         interrupted, since both only read.
+
+                                 *:HexPairModifiedNext* *:HexPairModifiedPrev*
+:HexPairModifiedNext    Go to the next run of bytes edited and not yet
+:HexPairModifiedPrev    written, or the previous one - the same idea as
+                        |:HexPairDiffNext|, applied to your own changes
+                        rather than to another file's.  Bytes that touch
+                        are one edit, however they were typed, and the
+                        cursor lands on the first byte of each; the
+                        message says which of how many.
+
+                        This one does not scan the file, and does not need
+                        to: turning a page needs an unmodified buffer or a
+                        bang that discards, so bytes edited and not yet
+                        written only ever exist on the page in view.  Both
+                        views walk their own - see |hexpair-marking-views|
+                        for the one thing the text view cannot tell apart.
 
                         *:HexPairMark* *:HexPairGoMark* *:HexPairMarks*
                                                      *:HexPairMarkDelete*

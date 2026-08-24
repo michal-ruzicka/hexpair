@@ -3923,6 +3923,61 @@ endfunction
 " Against the page as it was READ, not as the buffer now holds it: this
 " is the answer to "how do these two files compare", which unwritten
 " edits of mine are no part of. The marking on screen is the live one.
+" Where two runs of hex differ, as [offset, length] BYTE runs. The same
+" block skipping as the counting above - a block that matches is one
+" string comparison - and the runs come out of the differing indices, a
+" run being the ones that follow each other.
+function! HexPairPagedDifferingByteRuns(mine, theirs) abort
+  let out = []
+  if a:mine ==# a:theirs
+    return out
+  endif
+  let bytes  = strlen(a:mine) / 2
+  let theirs = strlen(a:theirs) / 2
+  let common = theirs < bytes ? theirs : bytes
+  let from = -1
+  let at = 0
+  while at < common
+    let span = s:cmpblock < common - at ? s:cmpblock : common - at
+    let lhs = strpart(a:mine, at * 2, span * 2)
+    let rhs = strpart(a:theirs, at * 2, span * 2)
+    if lhs ==# rhs
+      if from >= 0
+        call add(out, [from, at - from])
+        let from = -1
+      endif
+      let at += span
+      continue
+    endif
+    let l = split(lhs, '..\zs')
+    let r = split(rhs, '..\zs')
+    let i = 0
+    while i < span
+      if l[i] !=# r[i]
+        if from < 0
+          let from = at + i
+        endif
+      elseif from >= 0
+        call add(out, [from, at + i - from])
+        let from = -1
+      endif
+      let i += 1
+    endwhile
+    let at += span
+  endwhile
+  " Bytes the other run does not reach are a difference of their own, and
+  " they carry on from whatever run was open.
+  if bytes > common
+    if from < 0
+      let from = common
+    endif
+    call add(out, [from, bytes - from])
+  elseif from >= 0
+    call add(out, [from, common - from])
+  endif
+  return out
+endfunction
+
 function! s:DiffCount(hex) abort
   let mine = get(b:, 'hexpair_page_hex', '')
   if mine ==# '' || a:hex ==# ''
@@ -4146,6 +4201,109 @@ function! s:DiffSearch(from, forward) abort
   endif
   let at = s:DifferenceBefore(other, a:from, total)
   return at < 0 ? -1 : s:AgreementBefore(other, at, total) + 1
+endfunction
+
+" The edited bytes of THIS PAGE as [offset, length] runs, page-relative.
+"
+" Page-scoped is the whole truth rather than a limitation: turning a page
+" needs an unmodified buffer or a bang that discards, so bytes edited and
+" not yet written only ever exist on the page in view. Which is also why
+" this needs no file-wide scan, unlike |:HexPairFind| and |:HexPairDiff|.
+"
+" Kept against b:changedtick, so pressing the key again costs nothing -
+" the hex view's half of it is a whole-page scan.
+function! s:ModifiedRuns() abort
+  let hex = get(b:, 'hexpair_page_hex', '')
+  if hex ==# '' || !&l:modified
+    return []
+  endif
+  if get(b:, 'hexpair_modruns_tick', -1) == b:changedtick
+    return b:hexpair_modruns
+  endif
+  let runs = []
+  if s:IsHexView()
+    let scan = s:PagedScan(0)
+    if empty(scan.err)
+      let flat = substitute(join(scan.lines, ''), '[^0-9a-fA-F]', '', 'g')
+      let runs = HexPairPagedDifferingByteRuns(tolower(flat), hex)
+    endif
+  else
+    " The text view compares in its own spelling, line by line, the way
+    " its markings do (|hexpair-marking-views|); an edit that spans a line
+    " break therefore arrives as two runs, and adjacent ones are put back
+    " together below.
+    let theirs = s:BytesAsText('page', hex)
+    if theirs !=# ''
+      for span in s:TextSpans(1, line('$'))
+        if span[2] > 0
+          call extend(runs, HexPairPagedTextRuns(getline(span[0]),
+                \ strpart(theirs, span[1], span[2]), span[1]))
+        endif
+      endfor
+    endif
+  endif
+  let b:hexpair_modruns_tick = b:changedtick
+  let b:hexpair_modruns = HexPairPagedJoinRuns(runs)
+  return b:hexpair_modruns
+endfunction
+
+" Runs that touch are one run: what the eye sees as one edit is one place
+" to jump to, however it was arrived at.
+function! HexPairPagedJoinRuns(runs) abort
+  let out = []
+  for run in sort(copy(a:runs), 's:ByStart')
+    if !empty(out) && run[0] <= out[-1][0] + out[-1][1]
+      let end = run[0] + run[1]
+      let out[-1][1] = end - out[-1][0] > out[-1][1] ? end - out[-1][0] : out[-1][1]
+    else
+      call add(out, [run[0], run[1]])
+    endif
+  endfor
+  return out
+endfunction
+
+function! s:ByStart(a, b) abort
+  return a:a[0] - a:b[0]
+endfunction
+
+" The next (or previous) run of edited bytes, by its first byte - the same
+" idea as walking the changes against another file, on the edits that have
+" not been written yet.
+function! s:ModifiedJump(forward) abort
+  if !s:RequirePaged()
+    return
+  endif
+  let runs = s:ModifiedRuns()
+  if empty(runs)
+    echo 'hexpair: nothing edited on this page'
+    return
+  endif
+  " The runs are in order, so forward is the first one past the cursor and
+  " backward the last one before it.
+  let rel = s:Here() - b:hexpair_page_base
+  let at = -1
+  let nth = 0
+  let i = 0
+  while i < len(runs)
+    if a:forward && runs[i][0] > rel
+      let at = runs[i][0]
+      let nth = i + 1
+      break
+    elseif !a:forward && runs[i][0] < rel
+      let at = runs[i][0]
+      let nth = i + 1
+    endif
+    let i += 1
+  endwhile
+  if at < 0
+    echo printf('hexpair: no edit %s byte %d on this page',
+          \ a:forward ? 'after' : 'before', b:hexpair_page_base + rel + 1)
+    return
+  endif
+  let abs = b:hexpair_page_base + at
+  call s:GotoOffset(string(abs + 1), 0)
+  echo printf('hexpair: edit %d of %d on this page, at byte %d (0x%x)',
+        \ nth, len(runs), abs + 1, abs + 1)
 endfunction
 
 function! s:DiffJump(forward) abort
@@ -5270,6 +5428,8 @@ command! -bar -nargs=+ HexPairReplace call s:Replace(<q-args>)
 command! -bar -nargs=+ HexPairReplaceAllInPage call s:ReplaceAll(<q-args>)
 command! -bar HexPairDiffNext call s:DiffJump(1)
 command! -bar HexPairDiffPrev call s:DiffJump(0)
+command! -bar HexPairModifiedNext call s:ModifiedJump(1)
+command! -bar HexPairModifiedPrev call s:ModifiedJump(0)
 command! -bar -nargs=? HexPairSplit  call s:SplitView(0, <f-args>)
 command! -bar -nargs=? HexPairVSplit call s:SplitView(1, <f-args>)
 
@@ -5310,6 +5470,8 @@ if g:hexpair_short_commands
         \ ['-bar -bang -nargs=? -complete=file', 'HPDiff', 'HexPairDiff'],
         \ ['-bar', 'HPDiffNext', 'HexPairDiffNext'],
         \ ['-bar', 'HPDiffPrev', 'HexPairDiffPrev'],
+        \ ['-bar', 'HPModifiedNext', 'HexPairModifiedNext'],
+        \ ['-bar', 'HPModifiedPrev', 'HexPairModifiedPrev'],
         \ ['-bar -bang -nargs=*', 'HPFind', 'HexPairFind'],
         \ ['-bar -nargs=+', 'HPFindText', 'HexPairFindText'],
         \ ['-bar', 'HPFindNext', 'HexPairFindNext'],
@@ -5367,6 +5529,8 @@ nnoremap <silent> <Plug>(HexPairFindNext) :<C-U>HexPairFindNext<CR>
 nnoremap <silent> <Plug>(HexPairFindPrev) :<C-U>HexPairFindPrev<CR>
 nnoremap <silent> <Plug>(HexPairDiffNext) :<C-U>HexPairDiffNext<CR>
 nnoremap <silent> <Plug>(HexPairDiffPrev) :<C-U>HexPairDiffPrev<CR>
+nnoremap <silent> <Plug>(HexPairModifiedNext) :<C-U>HexPairModifiedNext<CR>
+nnoremap <silent> <Plug>(HexPairModifiedPrev) :<C-U>HexPairModifiedPrev<CR>
 " Turning the markings off is what the bang on either command does, and
 " both are worth a key: they are how a page stops being covered in
 " matches once the thing has been found.
