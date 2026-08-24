@@ -3483,6 +3483,22 @@ check "an empty file is 100%" \
     "hexpair: searching back 100% of 0 bytes (CTRL-C stops)" \
     "$(sed -n 4p "$WORK/tprog.out")"
 
+# --- Everything a user is given is in the release tarball -------------------
+# pack-release.py carries the file list by hand, and a new file that users
+# are told to source can be added to the repo, documented, and then simply
+# not ship - which is exactly what happened to hexpair.vimrc between one
+# commit and the next. The rule is mechanical: every .md, .vim, .txt and
+# hexpair.* outside the test directory is something a user gets.
+shipped=$(cd "$ROOT" && find . -maxdepth 2 -type f \
+    \( -name '*.md' -o -name '*.vim' -o -name '*.txt' -o -name 'hexpair.*' \) \
+    ! -path './test/*' ! -path './.git/*' ! -path './dist/*' \
+    | sed 's|^\./||' | sort | tr '\n' ' ')
+packed=$(sed -n '/^FILES/,/^]/p' "$ROOT/pack-release.py" \
+    | grep -o '"hexpair/[^"]*"' | tr -d '"' | sed 's|^hexpair/||' | sort \
+    | tr '\n' ' ')
+check "the packaging list is what the repository gives a user" \
+    "$shipped" "$packed"
+
 # --- The mappings file the plugin ships ------------------------------------
 # hexpair.vimrc is the maintainer's own set of mappings, kept in the repo so
 # that a vimrc can source it instead of copying it. Three things have to
