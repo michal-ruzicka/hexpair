@@ -281,6 +281,7 @@ come back**; each names the test that would catch it.
 | The diff jumps stepped byte by byte through one change instead of between changes — `]` fifty times to cross fifty differing bytes | "and the next jump clears the whole of it" + the block around it |
 | Every match on the PAGE was found and then tested against every visible line: `:HexPairFind 2?` cost a second per page | "a match over a line end is marked on both lines" (the positions are window-scoped now) |
 | A new file users are told to source (`hexpair.vimrc`) was in the repo and the docs but not in `pack-release.py`'s hand-written `FILES`, so it did not ship | "the packaging list is what the repository gives a user" — every `.md`, `.vim`, `.txt` and `hexpair.*` outside `test/` must be in the list |
+| A page turn left the bound windows scrolling around a stale offset: `'scrollbind'` syncs RELATIVE movement from the position each window was bound at, and loading a page moves a window without telling Vim that this is the new zero | not testable headlessly (a `vim -es` window has no geometry: `line('w0')` came back above `line('w$')`) — checked in tmux, and `:syncbind` after a bound turn is the fix |
 | A search match straddling a page boundary was marked on neither page: it fits whole inside neither, and each page was searched alone | "and the page it starts on marks the byte it has" — `s:PageHexForSearch()` reads the page with span-1 bytes of each neighbour |
 | Mark completion with nothing typed yet offered nothing: `v:val[0 : strlen('') - 1]` is `[0 : -1]`, the whole name, which matches no empty lead | "mark completion offers all the names, and the matching ones" |
 | A selection report echoed from a Visual-mode mapping was painted over by `-- VISUAL --` before it could be read | not testable headlessly — the tmux recipe above, and the hit-enter prompt is the fix |
@@ -756,7 +757,11 @@ was designed and built in Stage 2 - see "What Stage 2 decided".
   drag the window the turn came from. A window with unwritten changes, or
   whose file does not reach that far, is left where it is **and says so** —
   a bound window quietly showing something else is the bug being fixed.
-  `g:hexpair_bind_pages` turns the whole thing off.
+  `g:hexpair_bind_pages` turns the whole thing off. It ends with
+  `:syncbind`: 'scrollbind' syncs RELATIVE movement from wherever each
+  window was when it was bound, and a page load moves a window without
+  saying that this is the new zero - so without it the two scroll in step
+  around whatever offset they happened to have before the turn.
 - **The markings are drawn in both views**, and `HexPairPagedMarkingPositions(layer, first, last)`
   is the one entry point that says where — dispatching on the view so the
   four layers cannot drift apart about which one they are drawing in, and

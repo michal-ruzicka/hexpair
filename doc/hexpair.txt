@@ -515,6 +515,10 @@ g:hexpair_bind_pages    Whether a page turn in this window is passed on to
                         number - two views need not be paged the same way
                         - and its cursor lands on that byte, so the two
                         dumps line up rather than merely scroll together.
+                        The scrolling is levelled again afterwards
+                        (|:syncbind|), since 'scrollbind' otherwise keeps
+                        following the offset the two windows had before
+                        the page turn.
                         A window is left where it is, with a message
                         saying so, when following would mean discarding
                         unwritten changes, or when its own file does not

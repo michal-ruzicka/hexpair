@@ -1153,19 +1153,58 @@ function! s:BindPageTurn(offset) abort
   endif
   let here = winnr()
   let s:binding = 1
+  let moved = []
   try
     let w = 1
     while w <= winnr('$')
       if w != here && getbufvar(winbufnr(w), 'hexpair_page_active', 0)
         noautocmd execute w . 'wincmd w'
-        call s:FollowPageTurn(a:offset)
+        if s:FollowPageTurn(a:offset)
+          call add(moved, w)
+        endif
       endif
       let w += 1
     endwhile
   finally
     let s:binding = 0
     noautocmd execute here . 'wincmd w'
+    " 'scrollbind' syncs RELATIVE movement, and each window keeps the
+    " position it was bound at as the baseline. Loading a page puts a
+    " window back at its first line without telling Vim that this is the
+    " new zero, so the two then scroll in step around an offset that is
+    " whatever they happened to differ by before the turn - the windows
+    " end up level nowhere. :syncbind is what says "here is level now".
+    "
+    " It can move a cursor of its own accord, though - a window it scrolls
+    " has to keep its cursor on screen - so the windows that followed are
+    " put back on the byte afterwards. That is the promise: not that they
+    " scroll together, but that they are on the same byte.
+    if &l:scrollbind
+      " Including this window's own cursor: :syncbind may scroll it too,
+      " and a window it scrolls keeps its cursor on screen by moving it.
+      let pos = getpos('.')
+      syncbind
+      for w in moved
+        noautocmd execute w . 'wincmd w'
+        call s:PutCursorOnByte(a:offset)
+      endfor
+      noautocmd execute here . 'wincmd w'
+      call setpos('.', pos)
+    endif
   endtry
+endfunction
+
+" The cursor on an absolute byte of the page this window holds, in
+" whichever view it is showing.
+function! s:PutCursorOnByte(offset) abort
+  if !get(b:, 'hexpair_page_active', 0)
+    return
+  endif
+  if s:IsHexView()
+    call s:PagedGotoOffset(a:offset)
+  else
+    call s:TextGotoOffset(a:offset)
+  endif
 endfunction
 
 " The bound window's half of it, run with that window current. Its own
@@ -1173,35 +1212,36 @@ endfunction
 " scrolls, and a scroll here would drag the window the turn came from.
 function! s:FollowPageTurn(offset) abort
   if !&l:scrollbind || !get(b:, 'hexpair_page_active', 0)
-    return
+    return 0
   endif
   let page = a:offset / b:hexpair_page_size
   if page == b:hexpair_page_index
-    return
+    return 0
   endif
   if &l:modified
     call s:Stayed('has unsaved changes')
-    return
+    return 0
   endif
   if page >= HexPairPagedTotalPages(b:hexpair_page_size,
         \ getfsize(b:hexpair_page_file))
     call s:Stayed(printf('has no page %d', page + 1))
-    return
+    return 0
   endif
   let bound = &l:scrollbind
   setlocal noscrollbind
+  let done = 0
   try
     if s:LoadPageInView(page)
+      call s:PutCursorOnByte(a:offset)
       if s:IsHexView()
-        call s:PagedGotoOffset(a:offset)
         call s:PagedHighlight()
-      else
-        call s:TextGotoOffset(a:offset)
       endif
+      let done = 1
     endif
   finally
     let &l:scrollbind = bound
   endtry
+  return done
 endfunction
 
 function! s:Stayed(why) abort
