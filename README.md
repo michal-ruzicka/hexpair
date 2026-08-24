@@ -92,7 +92,11 @@ code, releases and issue tracker.
   `:HexPairReplaceAllInPage` put new bytes over what was found.
 - **Changed bytes are visible.** Everything edited and not yet written is
   marked in both columns (`HexPairModified`), so an edit in a dump does
-  not look exactly like everything around it.
+  not look exactly like everything around it. The marking groups link to
+  your colour scheme's diff and search colours rather than naming colours
+  of their own — with stock Vim and with every scheme it ships, that
+  resolves to something readable on a light and a dark background alike,
+  and `:highlight HexPairModified` says what yours came out as.
 - **Compare with another file.** `:HexPairDiff other.bin` marks every byte
   of the page that differs from the same offset of `other.bin`, and
   `:HexPairDiffNext` walks the whole file for the next disagreement. The
@@ -626,9 +630,10 @@ values shown are the defaults, so uncomment a line only to change one.
 " other column, the banner (and ruler) lines, the bytes changed since the
 " page was read, the bytes that differ from the file being compared
 " against, and the matches of the last search. The values below are the
-" defaults; an override should set a foreground AND a background, since
-" giving only one leaves the other at the colour scheme's and the two can
-" land on top of each other.
+" defaults - links, so that the markings look like whatever your colour
+" scheme does with a diff or a search. An override should set a foreground
+" AND a background, since giving only one leaves the other at the colour
+" scheme's and the two can land on top of each other.
 " highlight HexPairActive cterm=underline gui=underline
 " highlight link HexPairMirror IncSearch
 " highlight link HexPairPageBanner Comment

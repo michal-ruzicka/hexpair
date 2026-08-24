@@ -233,11 +233,14 @@ call s:Map('n', '<Leader>C', '<Plug>(HexPairDiffClear)')
 "highlight HexPairPageBanner ctermfg=244 guifg=#808080
 "
 " The bytes edited and not yet written, the bytes that differ from the file
-" being compared with, and the matches of a search. Their defaults link to
-" the colour scheme's diff and search groups, which usually set a
-" background and no foreground - so the text keeps whatever colour it had,
-" and dark-on-dark is what that can come to. Setting BOTH is what makes a
-" marking readable whatever the scheme does:
+" being compared with, and the matches of a search. Their defaults LINK to
+" the colour scheme's diff and search groups, which is what makes them look
+" like the rest of the editor - stock Vim and every scheme shipped with it
+" resolve to something readable, so this is taste rather than repair. If
+" you do override, set a foreground AND a background: giving one and
+" leaving the other to the scheme is how the two land on top of each other.
+" Note that these are light-background pastels and the cterm numbers want a
+" 256-colour terminal:
 "highlight HexPairModified ctermbg=224 ctermfg=88  guibg=#ffd7d7 guifg=#870000
 "highlight HexPairDiff     ctermbg=194 ctermfg=22  guibg=#d7ffd7 guifg=#005f00
 "highlight HexPairFind     ctermbg=229 ctermfg=94  guibg=#ffffaf guifg=#875f00

@@ -624,15 +624,38 @@ coexists with a colour scheme instead of competing with it, and where a
 mark lands on a byte that is also edited, differing or found, the
 colouring wins - the markings do not blend, so one of them has to.
 
-An override wants a foreground AND a background: >
+Linking rather than naming colours is what makes the markings look like
+the rest of the editor: whatever your colour scheme does with a diff or a
+search, hexpair does with these.  It is also why the first of them is
+DiffChange and not the closer-sounding DiffText - Vim's own DiffText is
+`guibg=Red` with no foreground at all, so on a light background it comes
+out black on red, which is what this default used to be and no longer is.
+
+What the three resolve to is worth knowing before overriding them.  With
+no colour scheme at all Vim's own DiffChange, DiffAdd and Search set a
+background and leave the foreground to |hl-Normal|, and Vim picks those
+backgrounds to suit its own Normal - readable with 'background' either
+way.  Every colour scheme shipped with Vim sets both.  So an override is
+usually taste, not repair; where it IS repair, the scheme in question
+makes |:diffthis| and |hlsearch| just as hard to read, and that is the
+thing to fix.
+
+To see what yours does: >
+
+    :highlight HexPairModified
+    :verbose highlight DiffChange
+<
+An override wants a foreground AND a background, because giving one and
+leaving the other to the scheme is how the two end up on top of each
+other: >
 
     highlight HexPairModified ctermbg=224 ctermfg=88 guibg=#ffd7d7 guifg=#870000
+    highlight HexPairDiff     ctermbg=194 ctermfg=22 guibg=#d7ffd7 guifg=#005f00
+    highlight HexPairFind     ctermbg=229 ctermfg=94 guibg=#ffffaf guifg=#875f00
 <
-Giving only one of the two leaves the other at whatever the colour scheme
-has, and the two can land on top of each other - which is why the default
-above is DiffChange and not the closer-sounding DiffText: Vim's own
-DiffText is `guibg=Red` with no foreground at all, so with a light
-background it comes out black on red.
+Those are light-background pastels, and the cterm numbers need a
+256-colour terminal; on a dark scheme or an 8-colour terminal they are
+the wrong answer, which is the other reason the defaults are links.
                                                 *HexPairActive* *HexPairMirror*
 HexPairActive           Highlight for the byte representation in the column
                         the cursor is currently in.  Default: underline.
