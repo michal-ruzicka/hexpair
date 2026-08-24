@@ -37,6 +37,19 @@ hexpair.bashrc        - the `vimhex` shell wrapper, sourced from the
                         user's ~/.bashrc; opens a file (or piped input)
                         straight in the hex view, and is bundled in the
                         release tarball
+hexpair.vimrc         - the mappings the maintainer uses, in a form a
+                        vimrc can source rather than copy:
+                        `runtime pack/*/start/hexpair/hexpair.vimrc`,
+                        which resolves on Linux and Windows alike because
+                        'runtimepath' already names each platform's own
+                        per-user directory (~/.vim, ~/vimfiles). Package
+                        directories are NOT on 'runtimepath' yet while a
+                        vimrc runs, which is why the wildcard path is the
+                        recommended form and a bare `runtime hexpair.vimrc`
+                        only works for plugin-manager installs. Guarded by
+                        g:loaded_hexpair_vimrc, restores 'cpoptions', and
+                        never takes a key the user has already mapped.
+                        Bundled in the release tarball.
 pack-release          - POSIX wrapper around pack-release.py
 pack-release.cmd      - Windows wrapper around pack-release.py
 pack-release.py       - the packaging implementation (python3, stdlib
@@ -267,6 +280,7 @@ come back**; each names the test that would catch it.
 | A page turn left the scroll-bound window on its old page, so `vimhexdiff` scrolled two windows in step through different parts of two files | "a bound window turns to the same page" and the four refusals beside it |
 | The diff jumps stepped byte by byte through one change instead of between changes — `]` fifty times to cross fifty differing bytes | "and the next jump clears the whole of it" + the block around it |
 | Every match on the PAGE was found and then tested against every visible line: `:HexPairFind 2?` cost a second per page | "a match over a line end is marked on both lines" (the positions are window-scoped now) |
+| Mark completion with nothing typed yet offered nothing: `v:val[0 : strlen('') - 1]` is `[0 : -1]`, the whole name, which matches no empty lead | "mark completion offers all the names, and the matching ones" |
 | A selection report echoed from a Visual-mode mapping was painted over by `-- VISUAL --` before it could be read | not testable headlessly — the tmux recipe above, and the hit-enter prompt is the fix |
 | Refreshing the other windows (a `wincmd w` there and back) ENDED the Visual selection on every cursor movement, so Visual mode was unusable in `vimhexdiff` | "a Visual or Insert mode keeps this window" — the modes are a pure function, since mode() cannot be driven into a Visual one here |
 | The window's markings survived a toggle to the text view and sat there at the columns the hex view had put them | "the text view is left unmarked, not marked in the wrong columns" |

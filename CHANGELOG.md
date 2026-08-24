@@ -48,7 +48,10 @@ and this project adheres to
 - **Marks in the file**: `:HexPairMark {name}`, `:HexPairGoMark {name}`,
   `:HexPairMarks`, `:HexPairMarkDelete {name}`, and the byte a mark
   stands on underlined on the page (`HexPairMark`,
-  `g:hexpair_show_marks`). Vim's own marks are positions in a buffer, and
+  `g:hexpair_show_marks`). All of them are reachable from a key: the
+  three that need a name ask for it and complete the names that exist
+  (`<Plug>(HexPairMark)`, `<Plug>(HexPairMarkDelete)`,
+  `<Plug>(HexPairGoMark)`). Vim's own marks are positions in a buffer, and
   a paged buffer holds a different part of the file from one page to the
   next; these are absolute byte offsets kept per file, shared by every
   view of it.
@@ -61,6 +64,13 @@ and this project adheres to
   to `DiffChange` rather than the closer-sounding `DiffText`, whose own
   default is a red background with no foreground — black on red for
   anyone with a light background.
+- **`hexpair.vimrc`**: the mappings the maintainer uses, shipped in the
+  repository and the release tarball so that a vimrc can source them
+  rather than copy them - `runtime pack/*/start/hexpair/hexpair.vimrc`,
+  one line that resolves on Linux, Windows and WSL alike because
+  `'runtimepath'` already names each platform's own per-user directory.
+  It never takes a key that is already mapped, and carries every option
+  and highlight group as a commented-out example.
 - **Every command under a short name too**: `:HPFind`, `:HPToggle`,
   `:HPReplaceAllInPage` - same arguments, same bang, same completion,
   because `:HexPair…` is a lot to type at a `:` prompt.

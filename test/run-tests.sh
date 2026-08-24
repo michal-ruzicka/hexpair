@@ -3483,6 +3483,56 @@ check "an empty file is 100%" \
     "hexpair: searching back 100% of 0 bytes (CTRL-C stops)" \
     "$(sed -n 4p "$WORK/tprog.out")"
 
+# --- The mappings file the plugin ships ------------------------------------
+# hexpair.vimrc is the maintainer's own set of mappings, kept in the repo so
+# that a vimrc can source it instead of copying it. Three things have to
+# hold: it defines what it says it does, it does NOT take a key the user has
+# already used, and it covers every <Plug> target the plugin defines - a
+# target with no key in here is one nobody would find.
+cat > "$WORK/tvimrc.vim" <<EOF
+let mapleader = ','
+nnoremap ,h :echo 'the user got there first'<CR>
+let g:cpo_before = &cpoptions
+source $ROOT/hexpair.vimrc
+let out = []
+call add(out, string([exists('g:loaded_hexpair_vimrc'), maparg(',h', 'n'), maparg(',ml', 'n'), maparg(',ms', 'n'), maparg(',md', 'n'), maparg(',mg', 'n')]))
+call add(out, string([maparg(',s', 'x'), maparg(',J', 'n'), &cpoptions ==# g:cpo_before]))
+let mapped = execute('map')
+let missing = []
+for line in split(execute('map <Plug>'), '\n')
+  let target = matchstr(line, '<Plug>(HexPair[^)]*)')
+  if target !=# '' && stridx(mapped, target) < 0
+    call add(missing, target)
+  endif
+endfor
+call add(out, 'unmapped targets: ' . string(missing))
+call writefile(out, '$WORK/tvimrc.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tvimrc.vim" < /dev/null
+# Completion with nothing typed yet has to offer everything: pressing <Tab>
+# straight away is how anyone asks which marks there are.
+cat > "$WORK/tcompl.vim" <<EOF
+$(printf "$HEX")
+HexPairOpen $WORK/short1.bin 1
+HexPairMark header
+HexPairMark tail
+call writefile([string([HexPairPagedMarkComplete('', '', 0), HexPairPagedMarkComplete('h', '', 0), HexPairPagedMarkComplete('x', '', 0)])], '$WORK/tcompl.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tcompl.vim" < /dev/null
+check "mark completion offers all the names, and the matching ones" \
+    "[['header', 'tail'], ['header'], []]" "$(cat "$WORK/tcompl.out")"
+
+check "the mappings file defines the marks under one prefix" \
+    "[1, ':echo ''the user got there first''<CR>', '<Plug>(HexPairMarks)', '<Plug>(HexPairMark)', '<Plug>(HexPairMarkDelete)', '<Plug>(HexPairGoMark)']" \
+    "$(sed -n 1p "$WORK/tvimrc.out")"
+check "in Visual mode too, and puts 'cpoptions' back" \
+    "['<Plug>(HexPairSelection)', ':HexPairPageNext!<CR>', 1]" \
+    "$(sed -n 2p "$WORK/tvimrc.out")"
+check "and leaves no <Plug> target without a key" "unmapped targets: []" \
+    "$(sed -n 3p "$WORK/tvimrc.out")"
+
 # --- Leaving the window is not free, and not always allowed ---------------
 # Refreshing another window means going to it and back, which is also what
 # ENDS a Visual selection and would take Insert mode with it: in

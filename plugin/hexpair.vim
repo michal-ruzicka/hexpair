@@ -4394,6 +4394,39 @@ function! s:GoMarkPrompt(force) abort
   endif
 endfunction
 
+" Setting and dropping a mark ask for the name the same way, so that all
+" four mark commands are reachable from a key rather than three of them
+" from a key and one from the command line. Setting completes the names
+" too: typing one that exists is how a mark is MOVED to the byte under the
+" cursor, and it is easier to do that on purpose than by accident.
+function! s:MarkPrompt() abort
+  if !s:RequirePaged()
+    return
+  endif
+  let name = input('hexpair: set mark: ', '',
+        \ 'customlist,HexPairPagedMarkComplete')
+  redraw
+  if !empty(name)
+    call s:SetMark(name)
+  endif
+endfunction
+
+function! s:MarkDeletePrompt() abort
+  if !s:RequirePaged()
+    return
+  endif
+  if empty(s:MarksOf(b:hexpair_page_file))
+    echo 'hexpair: no marks in this file'
+    return
+  endif
+  let name = input('hexpair: delete mark: ', '',
+        \ 'customlist,HexPairPagedMarkComplete')
+  redraw
+  if !empty(name)
+    call s:DeleteMark(name)
+  endif
+endfunction
+
 " The same for the two searches: |:HexPairFind| and |:HexPairFindText|
 " take what they look for as an argument, so their <Plug> targets ask.
 function! s:FindPrompt() abort
@@ -4433,8 +4466,11 @@ function! HexPairPagedMarkComplete(lead, cmdline, pos) abort
   if !get(b:, 'hexpair_page_active', 0)
     return []
   endif
+  " stridx() rather than a slice: with nothing typed yet, v:val[0 : -1] is
+  " the whole name and matches no empty lead, so pressing <Tab> straight
+  " away - the way anyone asks "which marks are there?" - offered nothing.
   return sort(filter(keys(s:MarksFor(b:hexpair_page_file)),
-        \ 'v:val[0 : strlen(a:lead) - 1] ==# a:lead'))
+        \ 'stridx(v:val, a:lead) == 0'))
 endfunction
 
 " ---------------------------------------------------------------------------
@@ -5321,6 +5357,8 @@ nnoremap <silent> <Plug>(HexPairSelection) :<C-U>HexPairSelection<CR>
 nnoremap <silent> <Plug>(HexPairInspect) :<C-U>HexPairInspect<CR>
 nnoremap <silent> <Plug>(HexPairMarks) :<C-U>HexPairMarks<CR>
 " The prompting counterparts of the commands that need an argument.
+nnoremap <silent> <Plug>(HexPairMark) :<C-U>call <SID>MarkPrompt()<CR>
+nnoremap <silent> <Plug>(HexPairMarkDelete) :<C-U>call <SID>MarkDeletePrompt()<CR>
 nnoremap <silent> <Plug>(HexPairGoMark) :<C-U>call <SID>GoMarkPrompt(0)<CR>
 nnoremap <silent> <Plug>(HexPairGoMarkForce) :<C-U>call <SID>GoMarkPrompt(1)<CR>
 nnoremap <silent> <Plug>(HexPairFind) :<C-U>call <SID>FindPrompt()<CR>

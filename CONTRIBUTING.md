@@ -26,6 +26,7 @@ reports and patches are welcome via the project's
 | `ftplugin/xxd.vim` | Dump-editing defaults for `filetype=xxd`, bundled with the plugin |
 | `doc/hexpair.txt` | Vim help documentation (`:help hexpair`) |
 | `hexpair.bashrc` | The `vimhex` shell wrapper, to be sourced from `~/.bashrc`; bundled in every release tarball |
+| `hexpair.vimrc` | The ready-made mappings, to be sourced from the user's vimrc; bundled in every release tarball |
 | `test/` | Headless regression tests (`run-tests.sh`, see *Testing*) |
 | `.gitattributes` | Line-ending normalization rules |
 | `.gitignore` | Excludes `build/` and `dist/` from version control |

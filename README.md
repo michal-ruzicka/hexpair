@@ -152,8 +152,29 @@ git clone https://github.com/michal-ruzicka/hexpair.git \
 vim -c 'helptags ALL' -c 'q'
 ```
 
-The plugin defines **no key mappings by default**. Add your own to
-`~/.vimrc`:
+The plugin defines **no key mappings by default** — it provides commands
+and `<Plug>` targets, and which keys those go on is yours to decide.
+
+A ready-made set comes with it, in `hexpair.vimrc`. One line in your vimrc,
+after `mapleader` is set, and you have all of it:
+
+```vim
+runtime pack/*/start/hexpair/hexpair.vimrc
+```
+
+That works on Linux, Windows and WSL alike and needs no path of yours in
+it: `'runtimepath'` already points at the per-user Vim directory of the
+platform — `~/.vim` on Unix, `~/vimfiles` on Windows — and `:runtime`
+searches it. (An absolute `source ~/.vim/pack/…` would be wrong on
+Windows for exactly that reason, even though Vim does expand `~` there.
+And package directories are not on `'runtimepath'` yet while a vimrc
+runs, which is why the path above says where to look; with a plugin
+manager, whose directories *are* on it by then, plain `runtime
+hexpair.vimrc` is enough.)
+
+The file never takes a key you have already mapped, so your own mappings
+win: define them before that line. What it sets up, and what to copy if
+you would rather pick your own keys:
 
 ```vim
 " Views
@@ -174,16 +195,19 @@ nmap <Leader>? <Plug>(HexPairPages)         " where am I: page, range, cursor by
 nmap <Leader>i <Plug>(HexPairInspect)       " the bytes at the cursor as numbers
 nmap <Leader>s <Plug>(HexPairSelection)     " how many bytes the last selection was
 xmap <Leader>s <Plug>(HexPairSelection)     " ... and the one being made now (kept)
-nmap <Leader>m <Plug>(HexPairMarks)         " list the marks in this file
-nmap <Leader>M <Plug>(HexPairGoMark)        " prompt for a mark to go to
-" ... and <Plug>(HexPairGoMarkForce) is that prompt discarding unwritten
-" changes, as :HexPairGoMark! does
+
+" Marks - all four under one prefix, because single letters run out
+nmap <Leader>ml <Plug>(HexPairMarks)        " list the marks in this file
+nmap <Leader>ms <Plug>(HexPairMark)         " prompt for a name, mark this byte
+nmap <Leader>md <Plug>(HexPairMarkDelete)   " prompt for a mark to drop
+nmap <Leader>mg <Plug>(HexPairGoMark)       " prompt for a mark to go to
+nmap <Leader>mG <Plug>(HexPairGoMarkForce)  " ... discarding unwritten changes
 
 " Searching, and comparing with another file
 nmap <Leader>/ <Plug>(HexPairFind)          " prompt for bytes to find
 nmap <Leader>t <Plug>(HexPairFindText)      " prompt for text to find
-nmap <Leader>n <Plug>(HexPairFindNext)      " next match of the last pattern
-nmap <Leader>N <Plug>(HexPairFindPrev)      " previous match
+nmap <Leader>f <Plug>(HexPairFindNext)      " next match of the last pattern
+nmap <Leader>F <Plug>(HexPairFindPrev)      " previous match
 nmap <Leader>] <Plug>(HexPairDiffNext)      " next change against that file
 nmap <Leader>[ <Plug>(HexPairDiffPrev)      " previous one
 nmap <Leader>c <Plug>(HexPairFindClear)     " stop marking the matches
@@ -193,7 +217,7 @@ nmap <Leader>C <Plug>(HexPairDiffClear)     " stop comparing, clear the marking
 " asking (like the ! commands) - handy for skimming through a file.
 nnoremap <silent> <Leader>J :HexPairPageNext!<CR>
 nnoremap <silent> <Leader>K :HexPairPagePrev!<CR>
-nmap <Leader>G <Plug>(HexPairPageGotoForce)
+nmap <Leader>P <Plug>(HexPairPageGotoForce)
 nmap <Leader>B <Plug>(HexPairGoOffsetForce)
 ```
 
@@ -202,8 +226,11 @@ Note the `xmap` in the third block: it is the same `<Plug>` target in
 than the last one — and puts the selection back afterwards, since asking
 about it from the `:` line is what ends Visual mode. Every other target is Normal-mode only. The commands
 that take an argument — `:HexPairFind`, `:HexPairReplace`,
-`:HexPairDiff`, `:HexPairMark`, `:HexPairSplit`, `:HexPairOpen` — have no
-`<Plug>` target, so there is nothing to map for them.
+`:HexPairDiff`, `:HexPairSplit`, `:HexPairOpen` — have no `<Plug>`
+target, so there is nothing to map for them. The four mark commands do:
+the two that need a name (`:HexPairMark`, `:HexPairMarkDelete`, and
+`:HexPairGoMark` beside them) ask for it and complete the names that
+exist, the way `<Plug>(HexPairPageGoto)` asks for a page.
 
 `:HexPairOpen {file}` takes an argument, so it has no `<Plug>` target;
 it is meant for the command line or a shell wrapper (see below). For a

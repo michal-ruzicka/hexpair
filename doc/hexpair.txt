@@ -296,6 +296,7 @@ The hex view shows which byte it was.
                             *<Plug>(HexPairGoOffset)* *<Plug>(HexPairGoOffsetForce)*
                                                           *<Plug>(HexPairPages)*
                        *<Plug>(HexPairInspect)* *<Plug>(HexPairSelection)*
+                     *<Plug>(HexPairMark)* *<Plug>(HexPairMarkDelete)*
              *<Plug>(HexPairGoMark)* *<Plug>(HexPairGoMarkForce)*
                              *<Plug>(HexPairFind)* *<Plug>(HexPairFindText)*
                   *<Plug>(HexPairFindNext)* *<Plug>(HexPairFindPrev)*
@@ -303,9 +304,10 @@ The hex view shows which byte it was.
                  *<Plug>(HexPairFindClear)* *<Plug>(HexPairDiffClear)*
                                                        *<Plug>(HexPairMarks)*
 The plugin defines NO key mappings by default; it only provides the
-commands above and <Plug> mappings.  Choose your own keys in your vimrc.
-Every command that takes no argument has a target; the whole set, on a
-<Leader> prefix: >
+commands above and <Plug> mappings.  Choose your own keys in your vimrc -
+or source the set below, which ships with the plugin as `hexpair.vimrc`
+(|hexpair-vimrc|).  Every command that takes no argument has a target,
+and so do the three that need a name typed - they ask for it: >
 
     " Views
     nmap <Leader>h <Plug>(HexPairToggle)
@@ -325,14 +327,18 @@ Every command that takes no argument has a target; the whole set, on a
     nmap <Leader>i <Plug>(HexPairInspect)
     nmap <Leader>s <Plug>(HexPairSelection)
     xmap <Leader>s <Plug>(HexPairSelection)
-    nmap <Leader>m <Plug>(HexPairMarks)
-    nmap <Leader>M <Plug>(HexPairGoMark)
+    " Marks - all four under one prefix, because single letters run out
+    nmap <Leader>ml <Plug>(HexPairMarks)
+    nmap <Leader>ms <Plug>(HexPairMark)
+    nmap <Leader>md <Plug>(HexPairMarkDelete)
+    nmap <Leader>mg <Plug>(HexPairGoMark)
+    nmap <Leader>mG <Plug>(HexPairGoMarkForce)
 
     " Searching
     nmap <Leader>/ <Plug>(HexPairFind)
     nmap <Leader>t <Plug>(HexPairFindText)
-    nmap <Leader>n <Plug>(HexPairFindNext)
-    nmap <Leader>N <Plug>(HexPairFindPrev)
+    nmap <Leader>f <Plug>(HexPairFindNext)
+    nmap <Leader>F <Plug>(HexPairFindPrev)
 
     " Comparing with another file
     nmap <Leader>] <Plug>(HexPairDiffNext)
@@ -346,7 +352,7 @@ Every command that takes no argument has a target; the whole set, on a
     " commands do; handy for reading through a file rather than editing it
     nnoremap <silent> <Leader>J :HexPairPageNext!<CR>
     nnoremap <silent> <Leader>K :HexPairPagePrev!<CR>
-    nmap <Leader>G <Plug>(HexPairPageGotoForce)
+    nmap <Leader>P <Plug>(HexPairPageGotoForce)
     nmap <Leader>B <Plug>(HexPairGoOffsetForce)
 <
 |:HexPairOpen| takes a file name, so it has no <Plug> target - it is for
@@ -953,6 +959,18 @@ HexPairOpenFile({file} [, {page}])
 :HexPairMarkDelete {name}
                         Drop one.
 
+                        All four have a mapping target, and the three that
+                        need a name ask for it - completing the names that
+                        exist, the way |<Plug>(HexPairPageGoto)| asks for a
+                        page: |<Plug>(HexPairMark)| to set one (typing a
+                        name that exists is how a mark is MOVED to the byte
+                        under the cursor), |<Plug>(HexPairMarkDelete)| to
+                        drop one, |<Plug>(HexPairGoMark)| to go there and
+                        |<Plug>(HexPairGoMarkForce)| to go there discarding
+                        unwritten changes.  |<Plug>(HexPairMarks)| lists
+                        them.  hexpair.vimrc puts all five under one
+                        prefix (|hexpair-vimrc|).
+
                         Vim's own |mark|s are positions in a BUFFER, and a
                         paged buffer holds a different part of the file
                         from one page to the next, so a mark set on page 3
@@ -1178,6 +1196,33 @@ g:hexpair_page_confirm  Whether a write that changed the page's length
                         automatically, e.g. in a script: >
                             let g:hexpair_page_confirm = 0
 <
+                                                             *hexpair-vimrc*
+The set of mappings above ships with the plugin as hexpair.vimrc, next to
+this help file, so that a vimrc can source it rather than copy it.  One
+line, after 'mapleader' is set: >
+
+    runtime pack/*/start/hexpair/hexpair.vimrc
+<
+That works on Linux, Windows and WSL alike, and names no directory of
+yours: 'runtimepath' already points at the per-user Vim directory of the
+platform - ~/.vim on Unix, ~/vimfiles on Windows - and |:runtime| searches
+it.  An absolute `source ~/.vim/pack/...` would be wrong on Windows for
+exactly that reason, even though Vim does expand `~` there.
+
+The path is spelled out because a vimrc runs BEFORE packages are added to
+'runtimepath' (|packload|), so a bare `runtime hexpair.vimrc` finds
+nothing at that point.  With a plugin manager, whose directories are on
+'runtimepath' by the time your vimrc reaches that line, the short form
+works: >
+
+    runtime hexpair.vimrc
+<
+The file never takes a key that is already mapped, so your own mappings
+win - define them before that line.  It also carries every option and
+highlight group as a commented-out example, and a note on adding
+|HexPairStatus()| to 'statusline'.  Reading it is the fastest tour of
+what there is to map.
+
                                                             *hexpair-vimhex*
 A shell wrapper for opening a file - or piped input - straight in the hex
 view ships with the plugin as hexpair.bashrc, next to this help file.
