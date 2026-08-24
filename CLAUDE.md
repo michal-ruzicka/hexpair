@@ -33,6 +33,23 @@ CONTRIBUTING.md       - developer docs (bundled in the release tarball)
 CHANGELOG.md          - Keep-a-Changelog formatted release notes
 LICENSE.md            - Vim License + copyright notice
 CLAUDE.md             - this file
+hexpair.bashrc        - the `vimhex` shell wrapper, sourced from the
+                        user's ~/.bashrc; opens a file (or piped input)
+                        straight in the hex view, and is bundled in the
+                        release tarball
+hexpair.vimrc         - the mappings the maintainer uses, in a form a
+                        vimrc can source rather than copy:
+                        `runtime pack/*/start/hexpair/hexpair.vimrc`,
+                        which resolves on Linux and Windows alike because
+                        'runtimepath' already names each platform's own
+                        per-user directory (~/.vim, ~/vimfiles). Package
+                        directories are NOT on 'runtimepath' yet while a
+                        vimrc runs, which is why the wildcard path is the
+                        recommended form and a bare `runtime hexpair.vimrc`
+                        only works for plugin-manager installs. Guarded by
+                        g:loaded_hexpair_vimrc, restores 'cpoptions', and
+                        never takes a key the user has already mapped.
+                        Bundled in the release tarball.
 pack-release          - POSIX wrapper around pack-release.py
 pack-release.cmd      - Windows wrapper around pack-release.py
 pack-release.py       - the packaging implementation (python3, stdlib
@@ -147,8 +164,14 @@ Key function map:
   then may `b:undo_ftplugin` revert them), and when the restored
   filetype is empty no `FileType` event fires, so the plugin executes
   `b:undo_ftplugin` and clears `b:did_ftplugin` itself.
-- `g:hexpair_debug` — echomsg trace of every position mapping step
-  (`:messages`); keep it working, it has already caught two field bugs.
+- `g:hexpair_debug` — `s:Debug()`, an echomsg trace of every position
+  mapping step (`:messages`); keep it working, it has already caught two
+  field bugs. The Stage 2 rewrite dropped every call site while the docs
+  went on promising it; it is back at the *transitions* (page load,
+  `++bin` reload, offset→position and position→offset in both views,
+  what a write found), deliberately not on `CursorMoved`. Both
+  directions print in the same terms, so a mismatch between them is
+  visible at a glance.
 
 ### Invariants — do not break
 
@@ -165,6 +188,13 @@ Key function map:
 4. No default key mappings; commands + `<Plug>` only.
 5. English only: code, comments, docs, commit messages.
 6. Author attribution: `Michal Růžička <ruzicka.mich@gmail.com>`.
+7. A dump line is buffer line `k + s:HeaderLines()`, **never** a literal
+   2: `g:hexpair_ruler` puts a second line above the dump. Every mapping
+   between a line number and a byte offset — `s:PagedLineBase()`,
+   `s:PagedGotoOffset()`, `s:PosOffset()`, `HexPairStatus()`, the line
+   count `s:LoadPage()` checks xxd's output against — goes through it.
+   The text view has no ruler, so its own header is always the one
+   banner line, matched by exact text (`s:TextBodyRange()`).
 
 ## Testing
 
@@ -234,6 +264,110 @@ come back**; each names the test that would catch it.
 | Opening a page could abandon a modified buffer | "opening a page refuses to abandon a modified buffer" |
 | A plain `:w` took the save-as path on Windows, where one file has more than one spelling. Save-as truncates its target before reading the source, so this would have destroyed a multi-page file | "on Windows, separators and case are not" + "writing to the same file spelled longhand patches the page" |
 | Growing a page in place needed three times the tail in temporary space — it copied the whole tail aside before moving it | "an insert grows the file, in place, and leaves no temp behind" + the cost table in `README.md` |
+| The whole-page scan read a line differently from the per-line rule (a `\zs` anchor that consumed the newline; a negated collection that matched the end-of-line only on a long string) | "the whole-page scan says what the per-line rule says" — on a 6250-line page, since neither shows up on a short one |
+| `count()` over a string (patch 8.0.0794) and Blob literals (8.1.0735) broke the documented Vim 8.0 baseline: everything past *displaying* a page failed with E712 | the baseline run below, and no `count()`/`0z` left in the plugin |
+| `g:hexpair_debug` was documented but no longer implemented at all | "the trace says both directions of the mapping" |
+| A second `:HexPairOpen` of one file died with E95: the buffer name was the file's alone | "a split is a second view, on the page it names" |
+| Freshness keyed on the file's mtime, so one view writing locked every other view of that file out of writing | "one view writing does not lock the other out" — and its counter-case, two views of the SAME page |
+| `:HexPairReplace` decided "is the cursor on a match?" from the page as READ, so a second replace on the same spot overwrote bytes that were no longer a match | "the cursor has to be on a match to replace it" |
+| A hex index is a nibble: `match()` on a run of hex finds patterns starting on the wrong half of a byte | "a match must start on a byte, not between two" |
+| The cursor in the gap between the hex and ASCII columns reported the NEXT line's first byte, because the pairs counted before it were the whole line's | "and it is the byte the layout says" — which pins the gap column too |
+| `count` is a read-only Vim variable (`v:count`), so a local named that aborts the function it is in with E46 | caught by the selection tests; do not name a local `count`, `errmsg`, `line`… |
+| A replacement rebuilt the page through the path that LOADS one, which clears the undo history on purpose — so a command's edit could not be undone the way a typed one can | "and one undo takes the whole replacement back" |
+| A window scrolled without being ENTERED (`'scrollbind'`, which `vimhexdiff` sets up) raises no event, so its markings stopped part way down | "refreshing the other windows leaves this one current" |
+| A temp-hygiene test asked how many files `tempname()`'s directory HOLDS; on Windows that is the shared `%TEMP%`, with sixteen of other people's in it | "a page of a file this user cannot write is read-only" — count what a write ADDED |
+| Counting the bytes that differ walked the page, two `strpart()`s per byte: 4.9 s a page, paid twice by `vimhexdiff` — it looked hung | "counting the differing bytes" / "on a page-sized run, one byte in" |
+| A page turn left the scroll-bound window on its old page, so `vimhexdiff` scrolled two windows in step through different parts of two files | "a bound window turns to the same page" and the four refusals beside it |
+| The diff jumps stepped byte by byte through one change instead of between changes — `]` fifty times to cross fifty differing bytes | "and the next jump clears the whole of it" + the block around it |
+| Every match on the PAGE was found and then tested against every visible line: `:HexPairFind 2?` cost a second per page | "a match over a line end is marked on both lines" (the positions are window-scoped now) |
+| A new file users are told to source (`hexpair.vimrc`) was in the repo and the docs but not in `pack-release.py`'s hand-written `FILES`, so it did not ship | "the packaging list is what the repository gives a user" — every `.md`, `.vim`, `.txt` and `hexpair.*` outside `test/` must be in the list |
+| A page turn left the bound windows scrolling around a stale offset: `'scrollbind'` syncs RELATIVE movement from the position each window was bound at, and loading a page moves a window without telling Vim that this is the new zero | not testable headlessly (a `vim -es` window has no geometry: `line('w0')` came back above `line('w$')`) — checked in tmux, and `:syncbind` after a bound turn is the fix |
+| A search match straddling a page boundary was marked on neither page: it fits whole inside neither, and each page was searched alone | "and the page it starts on marks the byte it has" — `s:PageHexForSearch()` reads the page with span-1 bytes of each neighbour |
+| Mark completion with nothing typed yet offered nothing: `v:val[0 : strlen('') - 1]` is `[0 : -1]`, the whole name, which matches no empty lead | "mark completion offers all the names, and the matching ones" |
+| A selection report echoed from a Visual-mode mapping was painted over by `-- VISUAL --` before it could be read | not testable headlessly — the tmux recipe above, and the hit-enter prompt is the fix |
+| Refreshing the other windows (a `wincmd w` there and back) ENDED the Visual selection on every cursor movement, so Visual mode was unusable in `vimhexdiff` | "a Visual or Insert mode keeps this window" — the modes are a pure function, since mode() cannot be driven into a Visual one here |
+| The window's markings survived a toggle to the text view and sat there at the columns the hex view had put them | "the text view is left unmarked, not marked in the wrong columns" |
+
+**The Vim version floor is a claim that has to be run.** The plugin says
+everything but the splice works on Vim 8.0; it did not, for a year, and
+nothing noticed because CI only ever ran a current Vim. Build the oldest
+one and point the suite at it:
+
+```sh
+curl -sSLO https://github.com/vim/vim/archive/refs/tags/v8.0.0000.tar.gz
+tar xzf v8.0.0000.tar.gz && cd vim-8.0.0000
+CFLAGS="-O1 -w -Wno-error=implicit-function-declaration \
+-Wno-error=int-conversion -Wno-error=incompatible-pointer-types" \
+    ./configure --with-features=normal --disable-gui --without-x \
+                --disable-nls --with-tlib=ncurses
+make -j4 vim     # `make` alone stops at xxd/xxd.c, whose K&R prototypes
+                 # no modern GCC compiles - use the system xxd instead
+HEXPAIR_VIM=$PWD/src/vim VIMRUNTIME=$PWD/runtime test/run-tests.sh
+```
+ The expected result
+is 33 failures, all of them inside the splice and save-as scripts —
+shortening a file, `:w {file}`, and a grow whose tail is more than half
+the file — each refused with the `readblob()` gate message, plus the
+assertions that follow such a refusal in the same script. Anything else
+failing there is a regression in the baseline; the count itself moves
+whenever a test is added to one of those scripts, so read the names, not
+the number. The suite itself must stay 8.0-clean
+too: no `trim()`, no Blob literal, no `count()` over a string.
+
+**Linting is worth doing by hand, and is not worth automating** (the
+maintainer's call, and the numbers back it): `vint` over the two
+`.vim` files gives one finding, and it is a false positive — a string
+that must be double-quoted because it contains `\n`. `shellcheck -s sh`
+over `test/run-tests.sh` and `pack-release` gives 84, of which 81 are
+this suite's own deliberate idiom (`printf "$HEX"`, where the format
+string IS data with escapes in it) or escaped quotes inside `tr`. The
+three that were real have been fixed: a `cd` without `|| exit`, and two
+baseline hashes computed and never compared — which is to say two tests
+that did not check what their own comment said they did. That last class
+is what a manual run before a release is for.
+
+**What the message line SHOWS is not observable from inside Vim**, and
+`vim -es` has no message line at all. A message echoed from a mapping can
+be drawn over by whatever Vim paints next - `-- VISUAL --` after a `gv`
+is the case that bit - and the only way to find out is to look at a real
+terminal:
+
+```sh
+tmux new-session -d -s hp -x 100 -y 20 "vim -u rc.vim -c 'HexPairOpen f.bin 2'"
+python3 -c "import time; time.sleep(1.5)"      # let Vim draw
+tmux send-keys -t hp -l 'jvll'                 # keys, one -l string at a time;
+tmux send-keys -t hp -l '\\'                     # a backslash needs '\\'
+tmux send-keys -t hp -l 's'
+python3 -c "import time; time.sleep(0.8)"
+tmux capture-pane -t hp -p | tail -3           # what is actually on screen
+tmux kill-session -t hp
+```
+
+That is how the hit-enter prompt on the selection report, and the
+progress line during a scan, were established rather than assumed. Two
+traps in the recipe itself: a test vimrc needs `set nocompatible` before
+any `<>` key notation (`'compatible'` puts `<` in `'cpoptions'`, and the
+mappings are then silently not what they read as), and packages in
+`~/.vim/pack` load even under `-u`, so a plugin can be loaded twice.
+
+**Read the check COUNT, not just the last line.** The suite is one long
+sequence of blocks, and an edit that replaces a span of it can swallow
+whole blocks that happen to live inside that span - which the suite then
+reports as "All tests passed", because what is gone is not failing, it is
+absent. `test/run-tests.sh | grep -c '^ok'` against the number before the
+change is the tripwire; touching one block at a time is the way not to
+need it.
+
+**The property test** (`test/run-tests.sh`, "Property: any shape of dump
+writes the bytes it spells") renders one page's bytes in six shapes a
+seeded generator invents — offsets or not, ASCII column or not, either
+case, lines of two to sixty-four digits, empty lines through the middle —
+and requires each write to produce exactly the bytes python says. When it
+fails, the round number names the shape. Note the one shape it must NOT
+generate, and why: a line with an ASCII column but no offset column,
+whose ASCII part contains a ':' (byte 0x3a), has that colon read as the
+end of an offset column — the rule working as written (invariant 1), not
+a case to hold the write path to.
 
 **Gotcha for any new `plugin/*.vim` file**: `vim -es -u NONE` (this
 suite's harness, with no vimrc) starts in `'compatible'` mode, whose
@@ -434,7 +568,11 @@ just that write, everything else keeps working), instead of a
 load-time refusal of the entire feature. `HexPairPagedGateMessage()`'s
 existing shape (global, pure, parameterized by an explicit boolean for
 testability) carries over unchanged to wherever this check ends up
-living.
+living. It takes the OPERATION as its second argument for the same
+reason: the message used to state flatly that "only same-length edits
+can be written", which stopped being true the moment an insert started
+moving the tail in place, so each caller names the operation that
+actually needs the newer Vim rather than restating the sentence.
 
 ### Reading a page: the `:HexPairOpen` population path
 
@@ -455,12 +593,12 @@ was designed and built in Stage 2 - see "What Stage 2 decided".
   that same buffer in place (matching how the base plugin's
   `s:ToHex()` already behaves) — likely NOT `buftype=acwrite` for that
   path, since it is a real, already-named, non-synthetic buffer;
-  Stage 2 needs to work out whether `BufWritePre`/`BufWritePost` (the
-  base plugin's existing mechanism) or `BufWriteCmd` fits it better,
-  and how the two population paths converge on identical buffer state
-  (same buffer-local variables below, same commands available)
-  afterward, so the rest of the plugin cannot tell which path a given
-  Hex-page-view buffer took to get there.
+  Stage 2 settled both questions, and they are settled still: every
+  hex-mode buffer is `buftype=acwrite` with a `BufWriteCmd` (see "What
+  Stage 2 decided"), because letting Vim do the writing would put a
+  buffer holding one page over the whole file; and both population paths
+  end in `s:SetupPagedBuffer()`, so the rest of the plugin cannot tell
+  which one a given Hex-page-view buffer took to get there.
 - Buffer-local state: `b:hexpair_page_file`, `b:hexpair_page_index`
   (0-based internally, 1-based in the UI), `b:hexpair_page_size`,
   `b:hexpair_page_base`, `b:hexpair_page_len` (shorter on the last
@@ -494,11 +632,234 @@ was designed and built in Stage 2 - see "What Stage 2 decided".
   also handles a line with no offset column.
 - Pair highlighting, from the base plugin's `s:Highlight()` (see
   above), additionally skips banner lines entirely (see "Page banner").
-- `s:PagedScan(lnum)` — ONE walk over the page returning `err`
+- `s:PagedScan(lnum)` — ONE pass over the page returning `err`
   (validation), `lines` (stripped payload) and `bytes` (bytes before
   `lnum`), which is what a write needs. It replaced three separate
-  walks; folding them cut a write on a 128 KiB page from 0.5 s to
-  0.32 s, and scales with the page size.
+  walks, and the walk itself is gone too: `s:PagedPayloadText()` applies
+  the three rules as **whole-page regexes** (banner lines, then offset
+  columns, then ASCII columns), because VimScript's per-iteration
+  overhead - not the matching - was what a walk over 8192 lines cost.
+  A same-length write on the default page went 571 ms → 129 ms this way,
+  `:HexPairPages` 274 ms → under a millisecond (that one via the
+  canonical fast path below). The per-line `s:PagedPayload()` stays the
+  reference implementation and still locates the offending line when a
+  page is rejected; `HexPairPagedScanLines()` lets the suite hold the
+  two against each other on a full-size page.
+- **Two Vim regex traps live in that pass. Do not undo them:**
+  - `'\%(^\|\n\)\zs…'` still CONSUMES the newline it matched, so a
+    line whose strip comes out empty (a banner, an empty line) leaves
+    the scan inside the *next* line, whose offset column then survives
+    into the payload. The newline is matched and put back with `\1`.
+    A lookbehind is correct and quadratic: ten seconds on one page.
+  - a negated collection matches the end-of-line whatever is listed in
+    it (`:help /[\n]`), so `'[^0-9a-fA-F \n]'` does not mean what it
+    reads as - and *looks* right on a short string: the same page
+    validated at 2000 lines and was rejected at 4000. Line breaks are
+    removed with the `\n` ATOM (`s:PagedFlatten()`) before any
+    collection is applied. This is why the scan is tested against a
+    6250-line page and not a handful of lines.
+- `s:PagedLineBase()` / `s:PagedOffsetAt()` — position → byte offset for
+  ANY position, not just the cursor's (`s:PagedByteOffset()` is the
+  cursor wrapper; the selection report needs the same mapping for the
+  two ends of a selection). While the buffer is **unmodified** the page
+  is exactly what xxd produced, so the bytes above a line are
+  `(line - 1 - header) * n` and no pass is needed; the within-line part
+  goes through the same `s:PagedLineIndexAt()` either way, so the two
+  paths cannot read a line differently. This is what keeps `:w` (which
+  reports the cursor byte when it finishes) off a second pass, and what
+  makes `HexPairStatus()` safe to call on every cursor movement.
+- `b:hexpair_page_header` / `s:HeaderLines()` — how many lines sit above
+  the first dump line: the banner, plus the ruler when
+  `g:hexpair_ruler` was on at page load (snapshotted like `b:hexpair_n`,
+  and for the same reason). See invariant 7.
+- `s:RulerLine()` / `s:HexViewLines()` — the ruler is built for the
+  page's FIRST line's layout, and starts with `"`, which is what already
+  makes a line contribute no bytes. `s:HexViewLines()` is the one place
+  the hex view's shape (banner, ruler, dump, banner) is spelled out, so
+  `s:LoadPage()` and `s:ToHexView()` cannot build different views.
+- `s:PageDigest()` / `s:CheckFresh()` — freshness is about THIS PAGE,
+  not about the file: the size must be unchanged (a different length
+  moves every page after the change) and the page's own bytes must hash
+  to what they did when it was read. The modification time is only the
+  fallback for a Vim without `sha256()` — it cannot see a change made
+  within the same second, and it cannot tell a change to this page from
+  a change to the rest of the file, which is what made two views of one
+  file impossible to write from (see below). A successful check adopts
+  the new mtime, so the fallback path does not go on complaining.
+- Finding, comparing and marking all rest on **one file read helper**,
+  `s:FileHex(file, off, len)` — a byte range of any file as one flat run
+  of lowercase hex. What it strips from xxd's output is the line breaks,
+  and it does that as **two passes over one character each** (`\n`, then
+  `\r` for a Windows xxd) rather than one over a negated collection:
+  measured on the 2 MB of hex a 1 MiB block comes to, 16 ms against
+  51 ms, and a scan of a large file is thousands of those. A 64 MiB
+  `:HexPairDiffNext` went 11.4 s → 5.4 s on that change alone; what is
+  left is `system()` and xxd themselves (4.2 s of the 5.4 s), which is
+  the floor for as long as reading a range of a file means running xxd.
+  Two ways of looking at such a run:
+  - `HexPairPagedFindInHex()` — where a pattern matches, **on a byte
+    boundary**: an index into hex is a nibble and half of them are the
+    wrong half, which is the one thing every caller of `match()` here
+    has to remember.
+  - `HexPairPagedFirstAgreement()` / `LastAgreement()` — where they agree
+    again, which is what makes a CHANGE (a run of differing bytes) a
+    thing the jumps can move between. Agreement is not a prefix property,
+    so it cannot be halved: a chunk that is identical is one comparison
+    and agreement at its first byte, and only a chunk that is not gets
+    taken apart with `split()`/`filter()`. A change that runs to the end
+    of a large file therefore costs a read of the rest of it — which is
+    also what "is there another change?" honestly costs.
+  - `HexPairPagedFirstDifference()` / `LastDifference()` — where two runs
+    part company, by **halving**, never by walking: comparing two strings
+    is one C-level operation and a block is megabytes of hex. One string
+    being a prefix of the other IS a difference, at the point where the
+    shorter one ends (that is how a longer file compares).
+  Blocks overlap by the pattern's length less one byte, so a match across
+  a seam is whole in one of them; the diff needs no overlap, since a
+  difference is one byte wide.
+- `HexPairPagedCountDifferences(mine, theirs)` — how many bytes of a page
+  differ and where the first one is. **Never walk two runs of hex**: a
+  block that matches is one string comparison, and only a block that
+  differs is taken apart (with `split()` into pairs and `filter()`, which
+  beats a loop even when everything differs). Measured over a 128 KiB
+  page: a walk cost 4.9 s, this costs 0.6 ms when the pages match, 8 ms
+  with a handful of differences and 260 ms when every byte differs. The
+  block is 1024 bytes because that is where skipping matching bytes
+  faster and taking apart differing ones slower meet (256…16384 measured).
+- `s:ModifiedRuns()` / `s:ModifiedJump()` — walking the bytes edited and
+  not yet written, the way the diff jumps walk changes. **Page-scoped by
+  nature, not by limitation**: turning a page needs an unmodified buffer
+  or a bang that discards, so edited bytes only ever exist on the page in
+  view — which is why this needs no file-wide scan. The runs come from
+  `HexPairPagedDifferingByteRuns()` in the hex view (the page's payload
+  against `b:hexpair_page_hex`) and from `HexPairPagedTextRuns()` per line
+  in the text view, and `HexPairPagedJoinRuns()` puts touching ones
+  together — the text view compares line by line, so an edit spanning a
+  line break arrives as two. Cached against `b:changedtick`, because the
+  hex view's half is a whole-page scan and the key gets pressed repeatedly.
+- `s:Progress()` / `HexPairPagedProgressText()` — a file-wide scan reads a
+  megabyte at a time and can run for minutes, which is indistinguishable
+  from a hang, so from 16 MB up it says how far it has got. **The redraw
+  goes after the echo, and it has to be `redraw!`**: measured in a
+  terminal over five updates, a plain `redraw` before the echo showed one
+  of them, after it two, and `redraw!` all five — Vim skips a redraw it
+  believes changes nothing. It costs about 5 ms per update, ~5% of a
+  scan. `CTRL-C` interrupts, which is safe because a scan only reads.
+- `s:BindPageTurn()` / `s:FollowPageTurn()` — `'scrollbind'` is Vim's own
+  "these windows move together", and a page turn is the one kind of
+  scrolling it cannot follow: the bound window keeps its page and the two
+  then scroll in step through different parts of their files, which is
+  what `vimhexdiff` looked like it was doing wrong. Every bound window
+  showing a page follows by BYTE (two views need not be paged the same
+  way), cursor included. `s:binding` stops a followed turn from being
+  passed back; the followed window's own `'scrollbind'` comes off while
+  its page loads, since filling a window scrolls it and that scroll would
+  drag the window the turn came from. A window with unwritten changes, or
+  whose file does not reach that far, is left where it is **and says so** —
+  a bound window quietly showing something else is the bug being fixed.
+  `g:hexpair_bind_pages` turns the whole thing off. It ends with
+  `:syncbind`: 'scrollbind' syncs RELATIVE movement from wherever each
+  window was when it was bound, and a page load moves a window without
+  saying that this is the new zero - so without it the two scroll in step
+  around whatever offset they happened to have before the turn.
+- **The markings are drawn in both views**, and `HexPairPagedMarkingPositions(layer, first, last)`
+  is the one entry point that says where — dispatching on the view so the
+  four layers cannot drift apart about which one they are drawing in, and
+  so the suite can ask for lines a headless window (one line tall) never
+  shows. The text view builds them out of byte RUNS (`[offset, length]`,
+  page-relative) and one mapper (`HexPairPagedTextPositions()`) puts the
+  runs on the lines: a dump has three columns per byte, a page of text
+  one, and the line break ending a line is a byte with no column, so it
+  is the one byte never marked.
+  The two comparing layers there work **string against string in the text
+  view's own spelling** (`HexPairPagedTextRuns()`), not by turning the
+  buffer back into hex: a Vim string cannot hold a NUL and both sides
+  write one as a line break, since both come from `readfile(..., 'b')`.
+  That costs one documented blind spot — a NUL replaced by a line break
+  at the same offset is not marked — and buys a comparison that needs no
+  per-byte conversion. Everything else is in bytes and stays right on the
+  two inputs a test rarely has: CRLF line endings (the CR is data, and
+  `s:SetupPagedBuffer()` forces `'fileformat'` unix so `line2byte()`
+  counts one byte per break on Windows too) and multi-byte characters
+  (`strlen()`, `strpart()` and `matchaddpos()`'s columns are all byte
+  counts). The one thing a byte offset cannot do there is put the cursor
+  INSIDE a character; the hex view reaches every byte.
+  Guard: "a paged buffer is 'fileformat' unix whatever the platform
+  prefers" and the block of checks under it. The other side of each comparison (the page as
+  read, the file being compared with) is one `xxd -r -p` per page, kept
+  against the hex it was made from (`s:BytesAsText()`), so a redraw pays
+  nothing for it.
+- `HexPairPagedComparePositions(first, last, hex)` — the shared body of
+  every byte-level marking: compare the lines on screen against a run of
+  hex at the position the layout puts them, and give back
+  `matchaddpos()` runs for both columns. Three callers, three groups:
+  the modified bytes (against `b:hexpair_page_hex`, the page as read),
+  the diff (against the other file's bytes for this page), and the
+  search (`HexPairPagedFindPositions()`, from the match list). Each
+  caches on its own `w:` state (`[pattern/tick, page, w0, w$]`) so a
+  plain cursor movement redraws nothing.
+- **`:HexPairReplace` checks the BUFFER, the marking shows the FILE.**
+  The two part company as soon as anything is replaced — the file still
+  holds the pattern where the buffer no longer does — and a second
+  replace on the spot would otherwise overwrite bytes that are no longer
+  a match. The marking stays about the file because that is what makes
+  it free to draw; an edit shows as a changed byte instead.
+- `s:SpliceIntoPage()` — how both replace commands edit: splice the new
+  hex into the page's current digit run and rebuild the view through the
+  same `s:CanonicalDump()`/`s:HexViewLines()` the toggle uses. Nothing
+  new touches the file: `:w` writes it, and a length change meets the
+  same confirmation as any other insert or delete.
+- `s:marks` — absolute byte offsets per FILE, not per buffer, so two
+  views share them and a page turn cannot disturb them. Vim's own marks
+  cannot do this: a paged buffer holds a different part of the file from
+  one page to the next.
+- `s:WindowView()` — the `WinEnter` half of the same feature, behind
+  `g:hexpair_split_views` (default 0): a window that has just become the
+  SECOND one showing a page turns into a view of its own. `WinEnter`
+  rather than `WinNew` (8.1.1058, past the baseline) or `BufWinEnter`
+  (does not fire when an already-displayed buffer is shown again —
+  measured). It runs once per window because every window holding a view
+  is marked `w:hexpair_own_view`, and **window-local variables are not
+  copied into the window a `:split` creates** — measured too, and the
+  whole reason the mark can mean "this window was here first". The
+  windows are counted across all tabs (`tabpagebuflist()`), so
+  `:tab split` counts.
+- `s:NewViewHere()` — the one place a window becomes a fresh view:
+  marks the window first (so the events its own `s:Open()` raises cannot
+  re-enter `s:WindowView()`), then reopens and puts the cursor back on
+  the byte, in the same view (hex/text) the window came from.
+- `s:NamePageBuffer()` / `s:SplitView()` — a second view of one file.
+  The buffer name is the file's plus a tag, numbered when that name is
+  taken; the collision is detected by TRYING the rename and catching
+  E95, because Vim's own rules for when two buffer names are the same
+  (a relative path and its absolute form, case on Windows) are not
+  worth reimplementing. `:HexPairSplit`/`:HexPairVSplit` resolve the
+  requested page in the CURRENT view's terms and hand the new view the
+  byte it starts at, so the two agree even if `g:hexpair_page_size`
+  changed in between; everything that can be refused is refused before
+  the window is split. A spilled (piped) view refuses to split at all:
+  its temp belongs to that buffer and dies with it.
+- `HexPairStatus()` — `'statusline'` support; empty outside hexpair
+  buffers so one statusline serves every buffer. Must never walk the
+  page: it is called on every cursor movement. On an edited page it
+  marks a `+` and reports the canonical byte, and says so in the help.
+- `HexPairPagedSelectionBytes()` / `HexPairPagedSelectionText()` — what
+  a Visual selection covers, split into geometry and wording. Global and
+  parameterized by the two ends and the mode, like
+  `HexPairPagedSelectionPositions()` next to it, because Visual mode
+  cannot be driven under `vim -es`.
+- The data inspector — `s:InspectBytes()` reads at most eight bytes
+  **from the page as the buffer holds it**, without walking it: out of
+  the payload digits from the cursor onward in the hex view, and through
+  `writefile(..., 'b')` on the two or three lines involved in the text
+  view (the only exact way to get bytes out of a Vim string, where a NUL
+  lives as a NL). Everything downstream of it is pure and tested
+  directly: `HexPairPagedInspectLines()`, `HexPairPagedIeeeText()`
+  (decoded from the BYTES, with the mantissa carried as a Float, so
+  nothing depends on how wide a Number is), `HexPairPagedU64Text()` and
+  `HexPairPagedDecSub()` (a 64-bit pattern with its top bit set has no
+  unsigned form in a signed Number, so it is printed by subtracting in
+  decimal), `HexPairPagedBinaryText()` (no `%b` on the supported Vim).
 - Loading a page happens with `'undolevels'` at **-1, buffer-locally**
   (|clear-undo|), so the undo history never survives a page turn:
   a single `u` afterwards would otherwise put the bytes of a different
@@ -523,9 +884,9 @@ a real file), they are directly testable against a fabricated multi-GiB
 ### Page banner
 
 Leading/trailing single lines the plugin generates and inserts around
-the `xxd` output, e.g. `" hexpair: page 3/21  bytes
-2097153-3145728 of 45678901  bigfile.bin"` / `" hexpair: end of page
-3/21"`. The byte range in this text (and in `:HexPairPages`, via the
+the `xxd` output, e.g. `" hexpair: page 3/349  bytes
+262145-393216 of 45678901  bigfile.bin"` / `" hexpair: end of page
+3/349"`. The byte range in this text (and in `:HexPairPages`, via the
 same formula — `s:BannerTop()`/`s:Pages()`, keep in sync) is
 deliberately **1-based and inclusive** (`base + 1` to `base + len`),
 unlike `b:hexpair_page_base`/`len` themselves or the hex dump's own
@@ -626,10 +987,24 @@ above).
   `:HexPairPageGoto!` — a direct Ex-command test of the bang variant
   covers this pass-through without needing `input()`.
 - `:HexPairPages` — reports `page X of Y, offsets A-B of total S
-  bytes (file)`.
-- `g:hexpair_page_size` — default `1024 * 1024` (1 MiB — overriding an
-  earlier 64 MiB draft of this plan; small enough to set down to e.g.
-  `512` for tests). Validated as a positive multiple of
+  bytes (file)`, plus the byte under the cursor.
+- `:HexPairPageGoto {page}` — `{page}` is a number, `+N`/`-N` to step,
+  or `$` for the last page; `HexPairPagedParsePageInput()` (pure) says
+  which, `HexPairPagedResolvePage()` (pure) turns it into a page number
+  against the one in view, and both feed the prompt as well as the
+  command. A step past either end is REFUSED, not clamped — the same
+  "page N does not exist" a number out of range gets — so a mistyped
+  step does not quietly land somewhere else.
+- `:HexPairInspect`, `:HexPairSelection` — the data inspector and the
+  selection report; see the function map above for how the bytes and
+  the geometry are obtained without walking the page.
+- `g:hexpair_ruler` — see invariant 7; the option is snapshotted into
+  `b:hexpair_page_header` at page load, never read directly by the
+  arithmetic.
+- `g:hexpair_page_size` — default `128 * 1024` (128 KiB; the plan drafted
+  64 MiB, then 1 MiB, and what settled it was how long a page takes to
+  scan rather than how much of the file one wants in view — small enough
+  to set down to e.g. `512` for tests). Validated as a positive multiple of
   `g:hexpair_bytes_per_line` by `HexPairPagedSizeError()`, snapshotted
   into `b:hexpair_page_size` at `:HexPairOpen` time (mirrors
   `b:hexpair_n`'s snapshot of `g:hexpair_bytes_per_line` in the base

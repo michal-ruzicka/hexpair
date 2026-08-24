@@ -166,6 +166,127 @@ last byte, and on a short last line on its last existing byte.
                         |hexpair-refresh|, where the command is described
                         in full.
 
+                                                            *:HexPairInspect*
+:HexPairInspect         Read the bytes at the cursor as the numbers they
+                        could be - 8, 16, 32 and 64 bits wide, unsigned
+                        and signed, little- and big-endian, plus the two
+                        IEEE 754 floats: >
+
+    hexpair: byte 66 (0x42) of 512: 41 42 43 44 45 46 47 48
+      8-bit    65                          char 'A'  bin 01000001  oct 0101
+               little-endian               big-endian
+      16-bit   16961                       16706
+      32-bit   1145258561                  1094861636
+      64-bit   5208208757389214273         4702394921427289928
+      float32  781.035217                  12.141422
+      float64  1.58398e40                  2393736.541207
+      utf-8    U+0041 'A' (1 byte)
+      utf-16   U+4241 '䉁' (2 bytes)       U+4142 '䅂' (2 bytes)
+      utf-32   U+44434241 - past U+10FFFF  U+41424344 - past U+10FFFF
+<
+                        The signed reading follows the unsigned one where
+                        the two differ ("43981 / -21555"), which is
+                        exactly when the top bit is set.
+
+                        The three text rows say what the bytes would be
+                        as characters.  UTF-8 has no byte order to get
+                        wrong; the other two are read each way round like
+                        the numbers above them, and a UTF-16 high
+                        surrogate takes the unit after it along.  Every
+                        way an encoding can be wrong is its own answer
+                        rather than a code point: an overlong UTF-8
+                        sequence, a lone surrogate, a value past
+                        U+10FFFF - none of those is a character, and a
+                        data inspector that reported one for them would
+                        be inventing it.
+
+                        The character itself is shown next to its number
+                        where there is one to show: not for a control
+                        code, not for the private use areas (whatever
+                        appears there means nothing without the font it
+                        was meant to come with), and not at all unless
+                        'encoding' is utf-8, since the message area would
+                        not be reading those bytes as utf-8 either.
+
+                        The bytes are THIS PAGE's, as the buffer holds
+                        them - edits included - and stop at its end, so
+                        near the boundary there may be fewer than eight
+                        and the wider rows say how many are left rather
+                        than reaching into a page that is not on screen.
+                        Works in either view; a banner line has no byte
+                        to read and says so.
+
+                        Widths above 16 bits need a Vim whose |Number| is
+                        64 bits (|+num64|) and the floats need |+float|;
+                        without them those rows are left out rather than
+                        shown wrong.
+
+                                                          *:HexPairSelection*
+:HexPairSelection       Say how many bytes the |Visual| selection covers,
+                        and which: >
+
+    hexpair: 18 bytes selected, 1041-1058 (0x411-0x422) of 5000
+    hexpair: 12 bytes selected in 3 lines (4 per line), 1041-1076
+             (0x411-0x434) of 5000
+<
+                        Characterwise and linewise selections are one run
+                        of bytes and are reported as a range; a blockwise
+                        one is not, so it leads with the count and says
+                        how many lines and how many per line.  The
+                        positions are 1-based, like the page banner's, so
+                        they can be typed straight into |:HexPairGoOffset|.
+
+                        Banner lines contribute no bytes here either; a
+                        selection of nothing else says so.  In the text
+                        view a column is a byte, and a linewise selection
+                        takes in the line break that ends each line -
+                        which in a page of raw bytes is a byte like any
+                        other.
+
+                        From Normal mode it reports the selection made
+                        last ('< and '>), which is also how the Visual
+                        mapping works: |<Plug>(HexPairSelection)| leaves
+                        Visual mode, and that is what sets the marks.
+
+                        It puts the selection back afterwards, and then
+                        waits for a key: Vim draws its own "-- VISUAL --"
+                        over the message line the moment it is back in
+                        Visual mode, so a report that did not wait would
+                        be gone before it could be read.  Press <Enter>
+                        (or any key) to carry on with the selection still
+                        there.  From Normal mode nothing redraws over it,
+                        so nothing waits.
+
+                                                    *hexpair-marking-views*
+Every byte-level marking - the bytes you have edited (|HexPairModified|),
+the bytes that differ from the file being compared with (|HexPairDiff|),
+the matches of the search (|HexPairFind|) and the byte a mark stands on
+(|HexPairMark|) - is drawn in BOTH views, and only over the lines on
+screen.  A dump has three columns per byte and one for its character; a
+page of text has one column per byte, and the line break that ends a line
+is a byte of the page with no column of its own, so it is the one byte
+that is never marked.
+
+In the text view the comparing markings work on the bytes as that view
+spells them, which has exactly one consequence worth knowing: Vim cannot
+hold a NUL in a string and writes one as a line break, so a NUL replaced
+by a line break at the same offset (or the other way round) is not marked
+as changed.  Every other edit is, including one that changes the length.
+
+Everything here is measured in BYTES, so a file of UTF-8 text or one with
+CRLF line endings marks exactly the bytes that are meant: a CR is a byte
+of the page like any other (not a line ending Vim owns - a paged buffer is
+always 'fileformat' unix, so one line break is one byte wherever Vim
+runs), and one byte of a multi-byte character is marked as one byte.  The
+only thing a byte offset cannot do in the text view is put the CURSOR
+inside a character: |:HexPairGoOffset| on the second byte of a two-byte
+character lands on the character, and says so with the offset it reached.
+The hex view has a column per byte and reaches every one of them.
+
+What is MARKED is still the byte; what you SEE is the character it is
+part of, because a character is one cell on screen and Vim colours cells.
+The hex view shows which byte it was.
+
 ==============================================================================
 3. Mappings                                                 *hexpair-mappings*
 
@@ -174,10 +295,20 @@ last byte, and on a short last line on its last existing byte.
                                                        *<Plug>(HexPairRefresh)*
                             *<Plug>(HexPairGoOffset)* *<Plug>(HexPairGoOffsetForce)*
                                                           *<Plug>(HexPairPages)*
+                       *<Plug>(HexPairInspect)* *<Plug>(HexPairSelection)*
+                     *<Plug>(HexPairMark)* *<Plug>(HexPairMarkDelete)*
+             *<Plug>(HexPairGoMark)* *<Plug>(HexPairGoMarkForce)*
+                             *<Plug>(HexPairFind)* *<Plug>(HexPairFindText)*
+                  *<Plug>(HexPairFindNext)* *<Plug>(HexPairFindPrev)*
+                  *<Plug>(HexPairDiffNext)* *<Plug>(HexPairDiffPrev)*
+         *<Plug>(HexPairModifiedNext)* *<Plug>(HexPairModifiedPrev)*
+                 *<Plug>(HexPairFindClear)* *<Plug>(HexPairDiffClear)*
+                                                       *<Plug>(HexPairMarks)*
 The plugin defines NO key mappings by default; it only provides the
-commands above and <Plug> mappings.  Choose your own keys in your vimrc.
-Every command that takes no argument has a target; the whole set, on a
-<Leader> prefix: >
+commands above and <Plug> mappings.  Choose your own keys in your vimrc -
+or source the set below, which ships with the plugin as `hexpair.vimrc`
+(|hexpair-vimrc|).  Every command that takes no argument has a target,
+and so do the three that need a name typed - they ask for it: >
 
     " Views
     nmap <Leader>h <Plug>(HexPairToggle)
@@ -193,11 +324,40 @@ Every command that takes no argument has a target; the whole set, on a
     nmap <Leader>b <Plug>(HexPairGoOffset)
     nmap <Leader>? <Plug>(HexPairPages)
 
+    " Reading the bytes
+    nmap <Leader>i <Plug>(HexPairInspect)
+    nmap <Leader>s <Plug>(HexPairSelection)
+    xmap <Leader>s <Plug>(HexPairSelection)
+    " Marks - all four under one prefix, because single letters run out
+    nmap <Leader>ml <Plug>(HexPairMarks)
+    nmap <Leader>ms <Plug>(HexPairMark)
+    nmap <Leader>md <Plug>(HexPairMarkDelete)
+    nmap <Leader>mg <Plug>(HexPairGoMark)
+    nmap <Leader>mG <Plug>(HexPairGoMarkForce)
+
+    " Searching
+    nmap <Leader>/ <Plug>(HexPairFind)
+    nmap <Leader>t <Plug>(HexPairFindText)
+    nmap <Leader>f <Plug>(HexPairFindNext)
+    nmap <Leader>F <Plug>(HexPairFindPrev)
+
+    " Walking your own edits
+    nmap <Leader>e <Plug>(HexPairModifiedNext)
+    nmap <Leader>E <Plug>(HexPairModifiedPrev)
+
+    " Comparing with another file
+    nmap <Leader>] <Plug>(HexPairDiffNext)
+    nmap <Leader>[ <Plug>(HexPairDiffPrev)
+
+    " Turning the markings off again
+    nmap <Leader>c <Plug>(HexPairFindClear)
+    nmap <Leader>C <Plug>(HexPairDiffClear)
+
     " The same, discarding unwritten changes without asking - as the !
     " commands do; handy for reading through a file rather than editing it
     nnoremap <silent> <Leader>J :HexPairPageNext!<CR>
     nnoremap <silent> <Leader>K :HexPairPagePrev!<CR>
-    nmap <Leader>G <Plug>(HexPairPageGotoForce)
+    nmap <Leader>P <Plug>(HexPairPageGotoForce)
     nmap <Leader>B <Plug>(HexPairGoOffsetForce)
 <
 |:HexPairOpen| takes a file name, so it has no <Plug> target - it is for
@@ -205,8 +365,22 @@ the command line or a shell wrapper (see |hexpair-paged| for one).
 
 |<Plug>(HexPairPageGoto)| and |<Plug>(HexPairGoOffset)| prompt with
 |input()| for the number a bare <Plug> target cannot carry: press the
-key, type a page number or a byte offset (decimal, or 0x-prefixed for
-the offset), Enter.  An empty answer cancels.
+key, type a page (a number, +N or -N to step, $ for the last) or a byte
+offset (decimal, or 0x-prefixed), Enter.  An empty answer cancels.
+
+|<Plug>(HexPairSelection)| is the one target worth mapping in TWO modes:
+in Visual mode it reports the selection you are making, in Normal mode
+the one you made last.  Map it with both `xmap` and `nmap`, as above.
+The Visual one puts the selection back when it is done - asking about a
+selection from the `:` line is what ends it, and losing it to look at it
+is not a trade worth making.
+
+|<Plug>(HexPairGoMark)|, |<Plug>(HexPairFind)| and
+|<Plug>(HexPairFindText)| prompt for what their commands take as an
+argument, the way |<Plug>(HexPairPageGoto)| does: press the key, type a
+mark name (completed as you type), a byte pattern or a string, Enter.
+An empty answer cancels.  |<Plug>(HexPairGoMarkForce)| is the mark
+prompt that discards unwritten changes, like |:HexPairGoMark|!.
 
 Or map the commands directly: >
 
@@ -270,6 +444,227 @@ g:hexpair_paste         The 'paste' option is global, so it cannot be set
                         to 0 to leave 'paste' alone: >
                             let g:hexpair_paste = 0
 <
+                                                             *g:hexpair_ruler*
+g:hexpair_ruler         A ruler line between the top banner and the dump,
+                        numbering the byte columns - two digits over each
+                        hex byte, the low nibble over each ASCII
+                        character.  Default: 0 (no ruler). >
+
+    let g:hexpair_ruler = 1
+<
+                        gives >
+
+  " hexpair: page 2/10  bytes 513-1024 of 5000  disk.img
+  "         00 01 02 03 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f  0123456789abcdef
+  00000200: 00 01 02 03 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f  ................
+<
+                        Like the banners, the line starts with a '"' and
+                        therefore contributes no bytes: it is never
+                        written, and editing it changes nothing.  It is
+                        drawn for the layout of the page's FIRST line, so
+                        on a page that straddles the 4 GiB offset-width
+                        change it lines up with the narrower half.  A
+                        page keeps the setting it was opened with; a
+                        later change takes effect on the next page.
+
+                        The text view has no ruler - there are no columns
+                        to number in a page of raw bytes.
+
+                                                      *g:hexpair_show_marks*
+g:hexpair_show_marks    Whether the byte a mark stands on is underlined
+                        on the page it falls on (|HexPairMark-highlight|).
+                        Default: 1. >
+
+    let g:hexpair_show_marks = 0
+<
+                                                    *g:hexpair_show_modified*
+g:hexpair_show_modified Whether the bytes that differ from the ones on
+                        disk - what has been edited and not yet written -
+                        are marked with |HexPairModified|.  Default: 1. >
+
+    let g:hexpair_show_modified = 0
+<
+                        What it compares is the POSITION, not the edit
+                        history: after an insertion every byte behind it
+                        is marked, because those offsets really do hold
+                        something else now.  Only the lines on screen are
+                        compared, and only when the page changes or
+                        scrolls.
+
+                        It costs one copy of the page's bytes as hex -
+                        256 KB for the default 128 KiB page - which is the
+                        same read the freshness check already needed.
+
+                                                     *g:hexpair_bind_pages*
+g:hexpair_bind_pages    Whether a page turn in this window is passed on to
+                        the windows that are scroll-bound to it.
+                        Default: 1. >
+
+    let g:hexpair_bind_pages = 0
+<
+                        'scrollbind' is Vim's own "these windows move
+                        together", and a page turn is the one kind of
+                        scrolling it cannot follow by itself: the bound
+                        window keeps the page it had, and the two then
+                        scroll in step through different parts of their
+                        files.  `vimhexdiff` (|hexpair-vimhex|) is where
+                        this shows: it binds the two windows precisely so
+                        that they show the same bytes.
+
+                        A bound window follows by BYTE, not by page
+                        number - two views need not be paged the same way
+                        - and its cursor lands on that byte, so the two
+                        dumps line up rather than merely scroll together.
+                        The scrolling is levelled again afterwards
+                        (|:syncbind|), since 'scrollbind' otherwise keeps
+                        following the offset the two windows had before
+                        the page turn.
+                        A window is left where it is, with a message
+                        saying so, when following would mean discarding
+                        unwritten changes, or when its own file does not
+                        reach that far.
+
+                        Set it to 0 to have 'scrollbind' mean scrolling
+                        alone; each window then keeps its own page, as
+                        two views otherwise do (|hexpair-two-views|).
+
+                                                  *g:hexpair_short_commands*
+g:hexpair_short_commands
+                        Whether every command is also defined under a
+                        short "HP" name - |:HPFind| for |:HexPairFind|,
+                        :HPReplaceAllInPage for
+                        |:HexPairReplaceAllInPage|, and so on for all of
+                        them.  Default: 1. >
+
+    let g:hexpair_short_commands = 0
+<
+                        Each short name is a one-line command that runs
+                        the long one, so the arguments, the bang and the
+                        completion come along and there is nothing for
+                        the two to disagree about.  Set it to 0 if
+                        commands of your own start with HP.
+
+                                                       *g:hexpair_split_views*
+g:hexpair_split_views   Whether a window that ends up showing a page a
+                        SECOND time becomes an independent view of the
+                        same file - its own buffer, its own page, its own
+                        cursor - instead of a second window onto the same
+                        buffer.  Default: 0. >
+
+    let g:hexpair_split_views = 1
+<
+                        With it off, |:split| on a hex page means what
+                        :split means everywhere else in Vim: two windows
+                        onto one buffer, both showing the same page, and
+                        turning the page in one turns it in the other.
+                        That is the default because a page is thousands of
+                        lines, and looking at two parts of ONE page in two
+                        windows is a real use of a split.
+
+                        With it on, |:split|, |:vsplit|, |:tab| |:split| -
+                        any way a page ends up in a second window - give a
+                        view of its own instead, opened on the same page
+                        and the same byte, and a split of the text view
+                        stays a text view.  Each such view is a buffer of
+                        its own and stays in the buffer list until it is
+                        wiped.
+
+                        |:HexPairSplit| does the same thing explicitly
+                        whatever this is set to, so the option is only
+                        about what the PLAIN split commands do.
+
+                        A view paged from piped input is never converted -
+                        the temporary file it pages belongs to that buffer
+                        - so a :split of one stays an ordinary split.
+
+                                                             *g:hexpair_debug*
+g:hexpair_debug         Trace every mapping between a cursor position and
+                        a byte offset to |:messages|, for diagnosing a
+                        cursor that landed on the wrong byte.  Default: 0. >
+
+    let g:hexpair_debug = 1
+<
+                        Both directions are printed in the same terms, so
+                        a page load, a jump to an offset and the byte a
+                        write found can be read off against each other.
+
+                                                          *HexPairStatus()*
+HexPairStatus()         The view, the page and the byte under the cursor,
+                        for 'statusline': >
+
+    set statusline=%f\ %h%w%m%r\ %{HexPairStatus()}%=%l,%c%V\ %P
+<
+                        gives "hex 3/349 @0x50a01 (330241)" in a hex
+                        page and "txt 3/349 @0x50a01 (330241)" in the
+                        text view, and an EMPTY string in every buffer
+                        hexpair has not touched - so one statusline
+                        serves both.  The byte comes in both bases: hex
+                        is what the dump's own offset column speaks and
+                        the form |:HexPairGoOffset| and vimhex's @BYTE
+                        take, decimal is what everything else does.
+
+                        A cursor standing in the OFFSET column is on that
+                        line's first byte - which is what the column
+                        says.  Its digits are not payload and are not
+                        counted as bytes, here or in |:HexPairInspect|.
+
+                        A statusline function is called on every cursor
+                        movement, so this one never walks the page: the
+                        byte comes from the canonical layout.  On a page
+                        with unwritten edits - marked with a "+" after
+                        the page numbers - that is where the byte WAS,
+                        since inserting or deleting hex digits above the
+                        cursor moves what follows; |:HexPairPages| counts
+                        the digits actually there and is the exact answer.
+
+     *HexPairModified* *HexPairDiff* *HexPairFind-highlight*
+                                             *HexPairMark-highlight*
+The markings that are about bytes rather than about the cursor, with
+their defaults: >
+
+    highlight link HexPairModified DiffChange " edited, not yet written
+    highlight link HexPairDiff     DiffAdd    " differs from |:HexPairDiff|'s file
+    highlight link HexPairFind     Search     " a match of |:HexPairFind|
+    highlight HexPairMark term=underline,bold cterm=underline,bold gui=underline,bold
+<
+The fourth one is deliberately not a colour: a mark says "this place"
+while the other three say "these bytes are different", underlining
+coexists with a colour scheme instead of competing with it, and where a
+mark lands on a byte that is also edited, differing or found, the
+colouring wins - the markings do not blend, so one of them has to.
+
+Linking rather than naming colours is what makes the markings look like
+the rest of the editor: whatever your colour scheme does with a diff or a
+search, hexpair does with these.  It is also why the first of them is
+DiffChange and not the closer-sounding DiffText - Vim's own DiffText is
+`guibg=Red` with no foreground at all, so on a light background it comes
+out black on red, which is what this default used to be and no longer is.
+
+What the three resolve to is worth knowing before overriding them.  With
+no colour scheme at all Vim's own DiffChange, DiffAdd and Search set a
+background and leave the foreground to |hl-Normal|, and Vim picks those
+backgrounds to suit its own Normal - readable with 'background' either
+way.  Every colour scheme shipped with Vim sets both.  So an override is
+usually taste, not repair; where it IS repair, the scheme in question
+makes |:diffthis| and |hlsearch| just as hard to read, and that is the
+thing to fix.
+
+To see what yours does: >
+
+    :highlight HexPairModified
+    :verbose highlight DiffChange
+<
+An override wants a foreground AND a background, because giving one and
+leaving the other to the scheme is how the two end up on top of each
+other: >
+
+    highlight HexPairModified ctermbg=224 ctermfg=88 guibg=#ffd7d7 guifg=#870000
+    highlight HexPairDiff     ctermbg=194 ctermfg=22 guibg=#d7ffd7 guifg=#005f00
+    highlight HexPairFind     ctermbg=229 ctermfg=94 guibg=#ffffaf guifg=#875f00
+<
+Those are light-background pastels, and the cterm numbers need a
+256-colour terminal; on a dark scheme or an 8-colour terminal they are
+the wrong answer, which is the other reason the defaults are links.
                                                 *HexPairActive* *HexPairMirror*
 HexPairActive           Highlight for the byte representation in the column
                         the cursor is currently in.  Default: underline.
@@ -391,11 +786,25 @@ or from within Vim:
                                                                *:HexPairOpen*
 :HexPairOpen {file} [page]
                         Open {file} in paged mode, showing [page] (1-based,
-                        default 1).  Does not read the rest of the file.  An
-                        out-of-range or non-numeric [page] reports an error
-                        and leaves the current buffer completely untouched -
-                        nothing is created.
+                        default 1).  Does not read the rest of the file.
+                        [page] takes the same three forms
+                        |:HexPairPageGoto| does - a number, +N or -N, or $
+                        for the last page - with a step counted from the
+                        first page, which is where opening starts, so "+2"
+                        is page 3.  An out-of-range or unparsable [page]
+                        reports an error and leaves the current buffer
+                        completely untouched - nothing is created.
 
+                                                          *HexPairDiffWith()*
+HexPairDiffWith({file})
+                        Function form of |:HexPairDiff| {file}, for the
+                        same reason |HexPairOpenFile()| exists: a name
+                        with a space or a literal "$" does not survive
+                        the Ex command line's own argument parsing.
+                        `vimhexdiff` (|hexpair-vimhex|) calls it. >
+
+                            call HexPairDiffWith($OTHER_FILE)
+<
                                                           *HexPairOpenFile()*
 HexPairOpenFile({file} [, {page}])
                         Function form of |:HexPairOpen|, for scripts,
@@ -420,26 +829,259 @@ HexPairOpenFile({file} [, {page}])
 
                           *:HexPairPageGoto* *<Plug>(HexPairPageGoto)*
                                               *<Plug>(HexPairPageGotoForce)*
-:HexPairPageGoto[!] {N} Jump directly to page {N} (1-based).  Refuses to
+:HexPairPageGoto[!] {page}
+                        Jump directly to {page}, which is one of:
+                            {N}     the page numbered N, 1-based
+                            +N, -N  N pages forward or back from this one
+                            $       the last page
+                        A step past either end is refused with the same
+                        "page N does not exist" as a number out of range,
+                        rather than being clamped, so a mistyped step does
+                        not quietly land somewhere else.  Refuses to
                         discard unsaved changes without !, same as above.
                         <Plug>(HexPairPageGoto) is the mapping equivalent:
-                        it prompts for the number with |input()| instead of
-                        needing a typed {N}.  <Plug>(HexPairPageGotoForce)
-                        is the same prompt but discards unsaved changes
-                        without asking, like the {N} variant with !.
+                        it prompts with |input()| instead of needing a
+                        typed {page}, and accepts the same three forms.
+                        <Plug>(HexPairPageGotoForce) is the same prompt but
+                        discards unsaved changes without asking, like the
+                        {page} variant with !.
 
                                                               *:HexPairPages*
 :HexPairPages           Report the current page number, the total page
                         count, the absolute byte range shown and the byte
-                        the cursor is on, e.g. "page 3 of 21, offsets
-                        2097153-3145728 of total 45678901 bytes
-                        (bigfile.bin); cursor on byte 0x2fefe1
-                        (3141601)".  The first half is what the page
+                        the cursor is on, e.g. "page 3 of 349, offsets
+                        262145-393216 of total 45678901 bytes
+                        (bigfile.bin); cursor on byte 0x50a01
+                        (330241)".  The first half is what the page
                         banner shows (below), useful once the banner has
                         scrolled out of view; the second is a position in
                         exactly the form |:HexPairGoOffset| and vimhex's
                         @BYTE take, so where you are can be written down
                         and gone back to.
+
+                        *:HexPairFind* *:HexPairFindText* *hexpair-find*
+                            *:HexPairFindNext* *:HexPairFindPrev*
+:HexPairFind[!] {bytes} Find {bytes} in the FILE, from the byte after the
+                        cursor, and go there - turning the page if the
+                        match is on another one.  |/| cannot do this: it
+                        searches the page on screen, which is a window on
+                        the file, and a sequence of bytes in a dump has
+                        spaces, line breaks and an ASCII column through
+                        the middle of it. >
+
+                            :HexPairFind de ad be ef
+                            :HexPairFind deadbeef
+                            :HexPairFind de ?? be ef
+<
+                        A pattern is bytes, two hex digits each; spaces
+                        between them are decoration, and a '?' stands for
+                        any nibble.  A match starts on a byte, never
+                        between two.  Every match on the page is marked
+                        with |HexPairFind|.
+
+                        The search obeys |'wrapscan'| like Vim's own, and
+                        says when it wrapped.  ! forgets the pattern and
+                        clears the marking - that is how a page stops
+                        being covered in matches, and it has a mapping
+                        target of its own, |<Plug>(HexPairFindClear)|; the
+                        bare command says what is being looked for.
+
+                        Only what is on SCREEN is marked, and it is
+                        marked again as the window scrolls, so a pattern
+                        that matches thousands of times on a page costs
+                        no more than one that matches twice.
+
+                        A match that straddles a page boundary is marked
+                        on both pages it touches, each showing the bytes
+                        it holds - the page's own bytes are searched with
+                        a few of the neighbouring page's on either side,
+                        since such a match fits whole inside neither.
+
+                        What is searched is the file on disk.  Unwritten
+                        edits are on the screen, where |/| and the eye can
+                        find them.
+
+:HexPairFindText {text} The same, for the bytes of {text}.
+:HexPairFindNext        Repeat the last search forwards,
+:HexPairFindPrev        or backwards.
+
+                                    *:HexPairReplace* *:HexPairReplaceAllInPage*
+:HexPairReplace {bytes} Put {bytes} in place of the match under the
+                        cursor - which has to BE a match, or the command
+                        would overwrite whatever the cursor happens to sit
+                        on.
+:HexPairReplaceAllInPage {pattern} / {bytes}
+                        Put {bytes} in place of every match of {pattern}
+                        on this page - the name says the scope, because
+                        the scope is the surprising part: everything here
+                        writes one page at a time, so a file-wide replace
+                        would be a different mechanism with a different
+                        failure to recover from, not a bigger version of
+                        this one.  Step the pages to cover a file.  The
+                        slash keeps the two arguments apart, which a
+                        pattern of hex digits, spaces and '?' can never
+                        contain. >
+
+                            :HexPairReplaceAllInPage de ad be ef / 00 00 00 00
+<
+                        Both edit the PAGE, exactly as typing over the
+                        dump would: the new bytes are marked as changed
+                        (|HexPairModified|), one |u| takes the whole
+                        replacement back, nothing reaches the file
+                        until |:w| does, and a replacement of a different
+                        length goes through the same length-changing
+                        write - with the same question about what it will
+                        cost - as any other insertion or deletion.
+
+                        Both want the hex view: the text view has no hex
+                        to replace.
+
+                          *:HexPairDiff* *:HexPairDiffNext* *:HexPairDiffPrev*
+:HexPairDiff[!] [file]  Compare this view with [file]: every byte of the
+                        page that differs from the same offset of [file]
+                        is marked with |HexPairDiff|, and the command says
+                        how many differ and where the first one is.  With
+                        no argument it says what is being compared
+                        against; with ! it stops comparing.
+
+                        Comparing follows the pages: turning to another
+                        page compares that one.  What is marked is what is
+                        on SCREEN against the other file, so an edit shows
+                        up at once - in the windowed text view as well as
+                        in the dump (|hexpair-marking-views|).  The ! that
+                        stops comparing also clears the marking, and has a
+                        mapping target of its own:
+                        |<Plug>(HexPairDiffClear)|.
+
+:HexPairDiffNext        Go to the next CHANGE, or the previous one -
+:HexPairDiffPrev        anywhere in the file, however many pages away.
+
+                        A change is a run of bytes that differ, and these
+                        move between changes rather than through the bytes
+                        of one: where the files agree on byte 1, differ
+                        over bytes 2-5, agree again over 6-8 and differ
+                        from byte 9 on, |:HexPairDiffNext| from byte 1
+                        goes to byte 2, from there to byte 9, and then
+                        says there is no change after it - three presses
+                        for two changes, whatever their length.
+
+                        Backwards it goes to a change's FIRST byte too, so
+                        from the middle of one it lands on that change's
+                        own start, as |[c| does in a diff.
+
+                        A difference past the end of THIS file (the other
+                        one is longer) has nowhere to put the cursor, so
+                        it is reported instead.
+
+                        `vimhexdiff` (|hexpair-vimhex|) opens two files
+                        side by side this way.
+
+                                                        *hexpair-progress*
+                        Both files are read a megabyte at a time, so
+                        neither has to fit in memory - but on a large one
+                        that takes long enough to look like a hang, so
+                        from 16 MB up the scan says how far it has got,
+                        and CTRL-C stops it.  |:HexPairFind| and
+                        |:HexPairFindNext| do the same; nothing has been
+                        changed by the time either of them can be
+                        interrupted, since both only read.
+
+                                 *:HexPairModifiedNext* *:HexPairModifiedPrev*
+:HexPairModifiedNext    Go to the next run of bytes edited and not yet
+:HexPairModifiedPrev    written, or the previous one - the same idea as
+                        |:HexPairDiffNext|, applied to your own changes
+                        rather than to another file's.  Bytes that touch
+                        are one edit, however they were typed, and the
+                        cursor lands on the first byte of each; the
+                        message says which of how many.
+
+                        This one does not scan the file, and does not need
+                        to: turning a page needs an unmodified buffer or a
+                        bang that discards, so bytes edited and not yet
+                        written only ever exist on the page in view.  Both
+                        views walk their own - see |hexpair-marking-views|
+                        for the one thing the text view cannot tell apart.
+
+                        *:HexPairMark* *:HexPairGoMark* *:HexPairMarks*
+                                                     *:HexPairMarkDelete*
+:HexPairMark {name}     Remember the byte under the cursor as {name}.
+:HexPairGoMark[!] {name}
+                        Go back to it, turning the page if needed and
+                        completing {name}.
+:HexPairMarks           List the marks in this file, by position, with the
+                        page each falls on.
+:HexPairMarkDelete {name}
+                        Drop one.
+
+                        All four have a mapping target, and the three that
+                        need a name ask for it - completing the names that
+                        exist, the way |<Plug>(HexPairPageGoto)| asks for a
+                        page: |<Plug>(HexPairMark)| to set one (typing a
+                        name that exists is how a mark is MOVED to the byte
+                        under the cursor), |<Plug>(HexPairMarkDelete)| to
+                        drop one, |<Plug>(HexPairGoMark)| to go there and
+                        |<Plug>(HexPairGoMarkForce)| to go there discarding
+                        unwritten changes.  |<Plug>(HexPairMarks)| lists
+                        them.  hexpair.vimrc puts all five under one
+                        prefix (|hexpair-vimrc|).
+
+                        Vim's own |mark|s are positions in a BUFFER, and a
+                        paged buffer holds a different part of the file
+                        from one page to the next, so a mark set on page 3
+                        would mean something else on page 4.  These are
+                        absolute byte offsets kept per FILE: every view of
+                        that file shares them (|hexpair-two-views|), a
+                        page turn cannot disturb them, and one left
+                        pointing past the end - the file shrank under it -
+                        is listed as such and refused on the jump.
+
+                        A mark that falls on the page in view underlines
+                        the byte it stands on, in both columns
+                        (|HexPairMark-highlight|); |g:hexpair_show_marks|
+                        turns that off.
+
+                        They last as long as the Vim session does.
+
+                          *:HexPairSplit* *:HexPairVSplit* *hexpair-two-views*
+:HexPairSplit [page]    Open a SECOND view of the same file in a new
+:HexPairVSplit [page]   window, showing [page] - by default the one this
+                        view is showing, so the split starts as a copy and
+                        is navigated from there.  [page] takes the same
+                        forms as |:HexPairPageGoto| and is counted from
+                        THIS view: `:HexPairSplit +1` puts the next page
+                        beside this one, `:HexPairSplit $` the last.
+                        :HexPairVSplit is the same thing in a vertical
+                        split.
+
+                        The two views share nothing but the file.  Each is
+                        its own buffer with its own page, its own cursor
+                        and its own unwritten changes, and a |:w| in either
+                        patches only the page that view holds - so one can
+                        be read while the other is edited, or bytes copied
+                        from one region of a file into another.
+
+                        The second buffer's name is the first's with a
+                        number on it ("disk.img [hexpair page #2]"), which
+                        is what tells them apart in |:ls|; the page banner
+                        in both names the real file.
+
+                        Writing one view does not lock the other out: what
+                        a write checks is whether ITS OWN page changed on
+                        disk, not whether the file did (see below).  Two
+                        views of the SAME page are allowed, and then the
+                        second write is refused, because that page really
+                        did change under it - reload it with
+                        |:HexPairPageGoto|! and redo the edit.
+
+                        A view paged from piped input cannot be split: the
+                        temporary file it pages belongs to that buffer and
+                        goes when it does.  Save it with `:w {file}` first
+                        and split that.
+
+                        A plain |:split| is left alone by default - it
+                        makes two windows onto one buffer, as it does
+                        everywhere else in Vim.  |g:hexpair_split_views|
+                        turns those into views of their own as well.
 
                                                         *:HexPairGoOffset*
 :HexPairGoOffset[!] {byte}
@@ -451,10 +1093,12 @@ HexPairOpenFile({file} [, {page}])
                         banner can be typed straight back in.  (The dump's
                         own offset column is `xxd`'s native 0-based
                         address and is left alone - the same split the
-                        banner already makes.)  Refuses to leave a page
-                        with unwritten changes without !, like the other
-                        navigation commands, and leaves you in whichever
-                        view you were in.
+                        banner already makes.)  A hex number needs the
+                        0x on it: a bare "ff" is not a byte position, and
+                        says so.  Refuses to leave a page with unwritten
+                        changes without !, like the other navigation
+                        commands, and leaves you in whichever view you
+                        were in.
 
 As with |hexpair-usage|, no key mappings are defined by default; e.g.: >
 
@@ -472,16 +1116,16 @@ command directly: >
 <
 Each page is bracketed by a leading and trailing banner line, e.g.: >
 
-    " hexpair: page 3/21  bytes 2097153-3145728 of 45678901  bigfile.bin
-    00200000: 41 42 43 44 45 46 47 48 ...                    ABCDEFGH...
+    " hexpair: page 3/349  bytes 262145-393216 of 45678901  bigfile.bin
+    00040000: 41 42 43 44 45 46 47 48 ...                    ABCDEFGH...
     ...
-    003fffff: ...
-    " hexpair: end of page 3/21
+    0005fff0: ...
+    " hexpair: end of page 3/349
 <
 The banner's and |:HexPairPages|' byte range is 1-based and inclusive
 (byte 1 is the file's first byte, so the LAST page's range always ends
 exactly at the total) - unlike the hex dump's own offset column (e.g.
-"00200000:" above), which is `xxd`'s native 0-based hex address and is
+"00040000:" above), which is `xxd`'s native 0-based hex address and is
 left alone.
 
 A banner line - recognized as any line whose FIRST character is a double
@@ -535,10 +1179,30 @@ confirmation first (|g:hexpair_page_confirm| turns the question off).  The
 first case, the same-length patch, does not ask: it writes only the page.
 
 Before any of them, the dump is validated exactly as in |hexpair-writing|,
-and the file's size and modification time are compared with what they
-were when the page was read.  A file that changed on disk meanwhile is
-refused rather than patched at offsets that may no longer mean anything;
-reload it with |:HexPairPageGoto|! and redo the edit.
+and the page is checked for having changed underneath the view.  What
+matters is not that the FILE changed but that THIS PAGE did, so the check
+is made in two steps:
+
+- the file's SIZE must be what it was: a different length moves every
+  page after the change, so nothing about this page's offsets can be
+  trusted any more;
+- the page's own BYTES must be what they were, by a hash taken when the
+  page was read and again now.
+
+A change to the file that leaves both alone - another process rewriting a
+different part of it, or a second view of the same file
+(|hexpair-two-views|) writing its own page - is not a reason to refuse,
+and is not refused.  A change to this page is, whatever the file's
+modification time says about it: mtime has whole-second resolution, so a
+writer that changes bytes in place within the same second is invisible to
+it.  A refused write leaves the file untouched and the edit in the
+buffer; reload with |:HexPairPageGoto|! and redo it.
+
+Reading the page back costs what reading a page costs - hundredths of a
+second, independent of the size of the file.  Where Vim has no |sha256()|
+(a build without |+cryptv|) there is no hash to compare, and the
+modification time is used instead - the weaker guard, and the one that
+cannot tell a change to this page from a change to the rest of the file.
 
 `:w {file}` means something different from a plain |:w|: not "patch this
 page into its own file" but "save what I am looking at, as a whole, over
@@ -569,10 +1233,11 @@ g:hexpair_page_size     Bytes per page.  Default: 128 KiB (128 * 1024).
                         A page is an ordinary Vim buffer, so everything
                         costs what that many lines cost: 128 KiB is 8192
                         lines, which loads in hundredths of a second and
-                        writes in about a third of one, while 4 MiB takes
-                        about ten seconds to write.  Since
-                        |:HexPairPageGoto| reaches any page directly, a
-                        larger page buys nothing but that wait.
+                        writes in about a seventh of one, while 4 MiB
+                        takes about three and a half seconds to write.
+                        Since |:HexPairPageGoto| reaches any page
+                        directly, a larger page buys nothing but that
+                        wait.
 
                                                   *g:hexpair_page_confirm*
 g:hexpair_page_confirm  Whether a write that changed the page's length
@@ -585,6 +1250,33 @@ g:hexpair_page_confirm  Whether a write that changed the page's length
                         automatically, e.g. in a script: >
                             let g:hexpair_page_confirm = 0
 <
+                                                             *hexpair-vimrc*
+The set of mappings above ships with the plugin as hexpair.vimrc, next to
+this help file, so that a vimrc can source it rather than copy it.  One
+line, after 'mapleader' is set: >
+
+    runtime pack/*/start/hexpair/hexpair.vimrc
+<
+That works on Linux, Windows and WSL alike, and names no directory of
+yours: 'runtimepath' already points at the per-user Vim directory of the
+platform - ~/.vim on Unix, ~/vimfiles on Windows - and |:runtime| searches
+it.  An absolute `source ~/.vim/pack/...` would be wrong on Windows for
+exactly that reason, even though Vim does expand `~` there.
+
+The path is spelled out because a vimrc runs BEFORE packages are added to
+'runtimepath' (|packload|), so a bare `runtime hexpair.vimrc` finds
+nothing at that point.  With a plugin manager, whose directories are on
+'runtimepath' by the time your vimrc reaches that line, the short form
+works: >
+
+    runtime hexpair.vimrc
+<
+The file never takes a key that is already mapped, so your own mappings
+win - define them before that line.  It also carries every option and
+highlight group as a commented-out example, and a note on adding
+|HexPairStatus()| to 'statusline'.  Reading it is the fastest tour of
+what there is to map.
+
                                                             *hexpair-vimhex*
 A shell wrapper for opening a file - or piped input - straight in the hex
 view ships with the plugin as hexpair.bashrc, next to this help file.
@@ -608,6 +1300,17 @@ and it defines: >
     cat bigfile.bin | vimhex -
     dd if=/dev/sda bs=1M count=64 | vimhex - @1024
 <
+The same file also defines `vimhexdiff`: >
+
+    vimhexdiff old.img new.img
+<
+which opens both files side by side, each marking the bytes that differ
+from the other (|:HexPairDiff|), with the cursors on the first difference
+and the two windows scroll-bound.  A page turn in either window takes the
+other with it (|g:hexpair_bind_pages|), so the two stay on the same bytes
+however far through the files you go; within one page they navigate
+independently, as two views of anything here do.
+
 Set $VIMHEX_VIM to use a particular Vim.
 
 Three things in it are not incidental, and are commented in the file
@@ -628,22 +1331,37 @@ itself so they survive being copied out of it:
 ==============================================================================
 9. Limitations                                           *hexpair-limitations*
 
+- A block device (/dev/sda) cannot be paged: the size the system reports
+  for one is 0, and hexpair pages what a file says it holds, so it opens
+  as an empty file with no pages.  Copy a slice of it into a file, or
+  pipe one in - `dd if=/dev/sda bs=1M count=64 | vimhex -` - and page
+  that (|hexpair-vimhex|).
+- A page of a file this user cannot write opens |'readonly'|, so |:w|
+  refuses it (E45) rather than converting the page and finding out from
+  xxd.  |:w!| overrides that, as everywhere else in Vim, and then fails
+  the way the file system makes it fail.
 - The column arithmetic assumes the dump format produced by
   `xxd -g 1 -c N` (one-byte groups).  Do not re-filter the buffer with a
   different xxd invocation while hex mode is active.
-- Undo history crosses the conversion boundary: an |u| in hex mode can undo
-  the conversion itself.  Toggle back with |:HexPairToggle| instead; if it
-  happens, use |:redo| to return to the dump.  The dump validation limits
-  the damage: content that no longer looks like valid hex is refused by
-  both |:w| and toggle-off instead of being converted.
-- The plugin operates on the whole buffer; very large files may be slow to
-  convert.
-- Cursor mapping from the dump to the normal view is byte-exact for any
-  byte the cursor can rest on in a text buffer.  A 0a byte acting as the
-  line separator is the exception: the cursor cannot rest on it, so it
-  clamps to the last byte of the line and a subsequent toggle lands there
-  instead.  If the buffer was reloaded with ++bin and the file needed
-  fileencoding transcoding, the position carried over the reload is a
-  best-effort line/column match.
+- Undo does not cross a page boundary or a change of view, and is not
+  meant to: turning a page, toggling between the hex and the text view and
+  |:HexPairRefresh| each replace the whole buffer with |clear-undo| in
+  effect, so |u| afterwards does nothing rather than putting bytes of a
+  different page - or of the other rendering - into a buffer that claims
+  to be this one, which a |:w| would then patch into the file at this
+  page's offset.  Undo of edits made within one view of one page works
+  normally.  What protects an edit you have not written yet is the refusal
+  to turn a page or open another one while the buffer is |'modified'|,
+  which is what the |:HexPairPageNext!| bang overrides.
+- Cursor mapping is byte-exact for any byte the cursor can rest on.  A 0a
+  byte acting as a line separator in the text view is the exception: the
+  cursor cannot rest on it, so it clamps to the last byte of the line and
+  a subsequent toggle lands there instead.  If the buffer was reloaded
+  with ++bin and the file needed fileencoding transcoding, the position
+  carried over the reload is a best-effort line/column match.
+- A page is an ordinary Vim buffer, so it costs what that many lines cost,
+  and a write costs a pass over them: about a seventh of a second for the
+  default 128 KiB page, in proportion for a larger one
+  (|hexpair-paged-size|).  The size of the FILE never enters into it.
 
 vim:tw=78:ts=8:ft=help:norl:

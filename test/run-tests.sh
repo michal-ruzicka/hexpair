@@ -14,7 +14,7 @@
 # ===========================================================================
 set -u
 
-cd "$(dirname "$0")"
+cd "$(dirname "$0")" || exit 1
 
 # Python is python3 everywhere except Windows, where the installers name it
 # python - and where a `python3` that merely opens the Microsoft Store is a
@@ -78,6 +78,13 @@ else
 fi
 
 FAIL=0
+# Counted and named, for the summary at the end: a CI log is read from
+# the bottom and is often truncated in the middle, so "which ones failed"
+# has to be there rather than only next to each failure. The count is
+# the other half of it - a block of tests that stops being generated
+# fails nothing and is simply absent, which only a number can show.
+CHECKS=0
+FAILED=
 
 # Same, for an expected string carrying a path: Windows spells the
 # separator the other way round - fnamemodify(':p') returns backslashes
@@ -88,12 +95,15 @@ check_path() { # name expected actual
 }
 
 check() { # name expected actual
+    CHECKS=$((CHECKS + 1))
     if [ "$2" = "$3" ]; then
         echo "ok   - $1"
     else
         echo "FAIL - $1"
         echo "       expected: $2"
         echo "       actual:   $3"
+        FAILED="$FAILED$1
+"
         FAIL=1
     fi
 }
@@ -147,6 +157,112 @@ for name in ('ref1.bin', 'ref2.bin', 'ref3.bin', 'ref4.bin', 'ref5.bin'):
 for name in ('paged21.bin', 'paged22.bin', 'paged23.bin', 'paged31.bin', 'paged32.bin', 'undo1.bin', 'layout1.bin', 'jump1.bin', 'paste1.bin', 'abandon1.bin', 'ulocal1.bin', 'src1.bin', 'off1.bin', 'multi.bin', 'multi2.bin', 'same1.bin', 'vis1.bin', 'pos1.bin', 'ip1.bin', 'ip2.bin', 'ip3.bin', 'w1.bin', 'w2.bin', 'w3.bin', 'w4.bin', 'w5.bin', 'sp1.bin', 'sp2.bin', 'sp3.bin', 'sp4.bin', 'tv1.bin', 'tv2.bin', 'tv3.bin', 'tv4.bin'):
     with open(os.path.join(w, name), 'wb') as f:
         f.write(bytes(i % 256 for i in range(5000)))
+# whole-page scan fixtures: big enough for ONE default-size page to hold
+# thousands of dump lines, which is the only scale at which a regex over
+# the whole page can behave differently from the same regex over one line
+for name in ('scan1.bin', 'scan2.bin'):
+    with open(os.path.join(w, name), 'wb') as f:
+        f.write(bytes((i * 7) % 256 for i in range(100000)))
+# replace-and-undo fixture: a two-byte sequence once, and twice in a row
+_ru = bytearray(b'A' * 512)
+_ru[8:10] = b'\xc5\xa1'
+_ru[37:41] = b'\xc5\xa1\xc5\xa1'
+open(os.path.join(w, 'repu1.bin'), 'wb').write(bytes(_ru))
+# short-name fixture
+open(os.path.join(w, 'short1.bin'), 'wb').write(bytes(i % 256 for i in range(5000)))
+# text-view fixtures: the same needle, and a copy differing on page 4
+_tv = bytearray(bytes(i % 256 for i in range(5000)))
+_tv[300:304] = b'\xde\xad\xbe\xef'
+open(os.path.join(w, 'tview1.bin'), 'wb').write(bytes(_tv))
+_tv2 = bytearray(_tv)
+_tv2[2000] = 0xee
+open(os.path.join(w, 'tview2.bin'), 'wb').write(bytes(_tv2))
+# search fixtures: a needle three times over, and some text
+_fd = bytearray(bytes(i % 256 for i in range(5000)))
+_fd[300:304] = b'\xde\xad\xbe\xef'
+_fd[2000:2004] = b'\xde\xad\xbe\xef'
+_fd[4996:5000] = b'\xde\xad\xbe\xef'
+_fd[700:705] = b'hello'
+open(os.path.join(w, 'find1.bin'), 'wb').write(bytes(_fd))
+open(os.path.join(w, 'rep1.bin'), 'wb').write(bytes(_fd))
+open(os.path.join(w, 'rep2.bin'), 'wb').write(bytes(_fd))
+# a fixture whose only occurrence of a pattern STRADDLES a page boundary:
+# with the 512-byte pages the suite uses, "64 20" sits at the last byte of
+# page 1 and the first of page 2
+_st = bytearray(bytes(i % 256 for i in range(1024)))
+_st[511] = 0x64
+_st[512] = 0x20
+open(os.path.join(w, 'straddle.bin'), 'wb').write(bytes(_st))
+# a text-view fixture with what a real file has and a test rarely does:
+# CRLF line endings (the CR is DATA, a byte like any other), multi-byte
+# UTF-8 characters, a four-byte one, and a pair of bytes that are not
+# valid UTF-8 at all
+_mb = 'P\u0159\u00edli\u0161 \u017elu\u0165ou\u010dk\u00fd\r\nk\u016f\u0148 \U0001f40e utf-8\r\n'.encode('utf-8') + b'\xff\xfe raw\r\n'
+open(os.path.join(w, 'mb1.bin'), 'wb').write(_mb)
+_mb2 = bytearray(_mb)
+_mb2[1] = ord('X')          # the first byte of a two-byte character
+open(os.path.join(w, 'mb2.bin'), 'wb').write(bytes(_mb2))
+# a small text-view fixture with known line breaks: bytes 0-9 "ABCDEFGHIJ",
+# 10 a line break, 11-20 "KLMNOPQRST", 21 a line break, 22-31 "UVWXYZ0123"
+_tm = b'ABCDEFGHIJ\nKLMNOPQRST\nUVWXYZ0123'
+open(os.path.join(w, 'tmark1.bin'), 'wb').write(_tm)
+_tm2 = bytearray(_tm)
+_tm2[2] = ord('X')
+_tm2[3] = ord('Y')
+_tm2[25] = ord('Q')
+open(os.path.join(w, 'tmark2.bin'), 'wb').write(bytes(_tm2))
+# a diff fixture with RUNS of differing bytes rather than single ones:
+# bytes 2-5, 1001-1201 and the last one (1-based), so the jumps between
+# changes have something to jump over
+_ra = bytes(i % 256 for i in range(5000))
+_rb = bytearray(_ra)
+for _i in list(range(1, 5)) + list(range(1000, 1201)) + [4999]:
+    _rb[_i] ^= 0xff
+open(os.path.join(w, 'runa.bin'), 'wb').write(bytes(_ra))
+open(os.path.join(w, 'runb.bin'), 'wb').write(bytes(_rb))
+# diff fixtures: same bytes but for three, and a longer copy
+_da = bytes(i % 256 for i in range(5000))
+_db = bytearray(_da)
+_db[100] = 0xff
+_db[1500] = 0xee
+_db[4999] = 0x00
+open(os.path.join(w, 'diffa.bin'), 'wb').write(_da)
+open(os.path.join(w, 'diffb.bin'), 'wb').write(bytes(_db))
+open(os.path.join(w, 'diffc.bin'), 'wb').write(_da + b'tail')
+# modified-byte fixture
+open(os.path.join(w, 'mod1.bin'), 'wb').write(bytes(i % 256 for i in range(5000)))
+# marks fixtures
+for name in ('mark1.bin', 'mark2.bin'):
+    open(os.path.join(w, name), 'wb').write(bytes(i % 256 for i in range(5000)))
+# stepping fixture
+open(os.path.join(w, 'step1.bin'), 'wb').write(bytes(i % 256 for i in range(5000)))
+# two-views fixtures
+for name in ('split1.bin', 'split2.bin', 'split3.bin', 'split4.bin'):
+    with open(os.path.join(w, name), 'wb') as f:
+        f.write(bytes(i % 256 for i in range(5000)))
+# data-inspector fixture: a little-endian double and float at known
+# offsets, so the conversions can be checked against python's packing
+import struct
+_insp = bytearray(bytes(i % 256 for i in range(512)))
+_insp[0:8] = struct.pack('<d', 1234.5678)
+_insp[8:12] = struct.pack('<f', -3.25)
+open(os.path.join(w, 'insp1.bin'), 'wb').write(bytes(_insp))
+# same-second tampering fixture
+open(os.path.join(w, 'digest1.bin'), 'wb').write(bytes(i % 256 for i in range(5000)))
+# page-goto fixture
+open(os.path.join(w, 'pgoto1.bin'), 'wb').write(bytes(i % 256 for i in range(5000)))
+# selection fixture
+open(os.path.join(w, 'sel1.bin'), 'wb').write(bytes(i % 256 for i in range(5000)))
+# statusline fixture
+open(os.path.join(w, 'status1.bin'), 'wb').write(bytes(i % 256 for i in range(5000)))
+# ruler fixture
+open(os.path.join(w, 'ruler1.bin'), 'wb').write(bytes(i % 256 for i in range(5000)))
+# cursor-byte fixture
+open(os.path.join(w, 'cbo1.bin'), 'wb').write(bytes(i % 256 for i in range(5000)))
+# trace fixture
+open(os.path.join(w, 'dbg1.bin'), 'wb').write(bytes(i % 256 for i in range(5000)))
+# and a 32-byte one, for the lines a scan must not be thrown by
+open(os.path.join(w, 'scan3.bin'), 'wb').write(bytes(range(32)))
 # single-page fixture, so a shrinking write can empty the file entirely
 open(os.path.join(w, 'sp5.bin'), 'wb').write(bytes(range(16)))
 # a real file past the 4 GiB mark, where xxd's offset column widens from
@@ -610,7 +726,7 @@ HexPairOpen $WORK/paged21.bin 3
 redir => msg
 silent HexPairPages
 redir END
-call writefile([trim(msg)], '$WORK/t24.out')
+call writefile([substitute(msg, '^\_s*\|\_s*\$', '', 'g')], '$WORK/t24.out')
 qa!
 EOF
 "$HEXPAIR_VIM" -es -u NONE -S "$WORK/t24.vim"
@@ -736,7 +852,7 @@ EOF
 "$HEXPAIR_VIM" -es -u NONE -S "$WORK/t30.vim"
 check "empty prompt input is cancellation, not an error" "{}" "$(sed -n 1p "$WORK/t30.out")"
 check "numeric prompt input yields the page number"      "{'page': 7}" "$(sed -n 2p "$WORK/t30.out")"
-check "non-numeric prompt input is a clear error"         "{'msg': 'hexpair: not a page number: abc'}" "$(sed -n 3p "$WORK/t30.out")"
+check "non-numeric prompt input is a clear error"         "{'msg': 'hexpair: not a page number: abc (a page, +N or -N to step, \$ for the last)'}" "$(sed -n 3p "$WORK/t30.out")"
 
 # --- Test 31: :HexPairPageGoto! discards unsaved changes -------------------
 # The mechanism <Plug>(HexPairPageGotoForce) relies on (s:GotoPage()'s
@@ -1001,20 +1117,24 @@ check "the refused write left the file alone"    "$W4_ALL" "$(hash_range "$WORK/
 # Not the page on its own: the buffer shows one page, but what the user
 # means by "save it over there" is the thing they are looking into. The
 # original is left exactly as it was.
-W5_BEFORE=$(hash_range "$WORK/w5.bin" 0 -1)
 cat > "$WORK/tw5.vim" <<EOF
 $(printf "$PAGEDW")
 HexPairOpen $WORK/w5.bin 2
 call setline(2, substitute(getline(2), '00 01', 'de ad', ''))
 write $WORK/elsewhere.bin
+" Whether the original was left alone can only be asked HERE: the plain
+" :w below is meant to change it, so by the end of the script it has.
+let untouched = [substitute(system('$HEXPAIR_XXD -s 512 -l 4 -p $WORK/w5.bin'), '[^0-9a-f]', '', 'g'), getfsize('$WORK/w5.bin')]
 let state = string([&l:modified, HexPairPagedSamePath(b:hexpair_page_file, '$WORK/w5.bin', has('fname_case'), exists('+shellslash'))])
 write
-call writefile([state, string([&l:modified])], '$WORK/tw5.out')
+call writefile([state, string([&l:modified]), string(untouched)], '$WORK/tw5.out')
 qa!
 EOF
 "$HEXPAIR_VIM" -es -u NONE -S "$WORK/tw5.vim" < /dev/null
 check "':w other' leaves the buffer and its own file alone" "[1, 1]" \
     "$(sed -n 1p "$WORK/tw5.out")"
+check "and the edit did not reach the original" "['00010203', 5000]" \
+    "$(sed -n 3p "$WORK/tw5.out")"
 check "the copy is the whole file, not just the page" "5000" \
     "$(file_size "$WORK/elsewhere.bin")"
 check "with the page's edit in it" \
@@ -1135,6 +1255,7 @@ probe_writable=0
 (echo x >> "$WORK/roprobe") 2>/dev/null && probe_writable=1
 chmod 644 "$WORK/roprobe"
 if [ "$probe_writable" = 1 ]; then
+    echo "ok   - (skipped: read-only is not enforced here) a page of a file this user cannot write is read-only"
     echo "ok   - (skipped: read-only is not enforced here) a failed splice keeps a recovery copy"
     echo "ok   - (skipped: read-only is not enforced here) a failed splice leaves the file alone"
 else
@@ -1143,20 +1264,34 @@ else
 $(printf "$PAGEDW")
 let dir = fnamemodify(tempname(), ':h')
 HexPairOpen $WORK/sp4.bin 2
+let ro = &l:readonly
+let before = len(glob(dir . '/*', 0, 1))
 call append(1, 'aa bb cc')
-let failed = ''
+let refused = ''
 try
   write
+catch
+  let refused = 'refused'
+endtry
+" What the refused write ADDED, never what the directory holds: on
+" Windows tempname() names files straight in the shared %TEMP%, which is
+" full of other people's - measured there as 16 of them.
+let temps = len(glob(dir . '/*', 0, 1)) - before
+let failed = ''
+try
+  write!
 catch
   let failed = 'failed'
 endtry
 let kept = filter(glob(dir . '/*', 0, 1), 'getfsize(v:val) == 5003')
-call writefile([string([failed, len(kept), &l:modified])], '$WORK/ts3d.out')
+call writefile([string([ro, refused, temps]), string([failed, len(kept), &l:modified])], '$WORK/ts3d.out')
 qa!
 EOF
     "$HEXPAIR_VIM" -es -u NONE -S "$WORK/ts3d.vim" < /dev/null
+    check "a page of a file this user cannot write is read-only" \
+        "[1, 'refused', 0]" "$(sed -n 1p "$WORK/ts3d.out")"
     check "a failed splice keeps a recovery copy" "['failed', 1, 1]" \
-        "$(cat "$WORK/ts3d.out")"
+        "$(sed -n 2p "$WORK/ts3d.out")"
     check "a failed splice leaves the file alone" "$SP4_ALL" \
         "$(hash_range "$WORK/sp4.bin" 0 -1)"
     chmod 644 "$WORK/sp4.bin"
@@ -1494,8 +1629,8 @@ source $PLUGIN
 let want = ['(HexPairToggle)', '(HexPairGoHex)', '(HexPairGoAscii)', '(HexPairSwap)', '(HexPairRefresh)', '(HexPairPageNext)', '(HexPairPagePrev)', '(HexPairPageGoto)', '(HexPairPageGotoForce)', '(HexPairGoOffset)', '(HexPairGoOffsetForce)', '(HexPairPages)']
 let listed = execute('nmap')
 let missing = filter(copy(want), 'stridx(listed, "<Plug>" . v:val) < 0')
-let parsed = [HexPairPagedParseOffsetInput(''), HexPairPagedParseOffsetInput('1234'), HexPairPagedParseOffsetInput('0x10'), HexPairPagedParseOffsetInput('zz')]
-call writefile([string(missing), string(parsed[0]), string(parsed[1]), string(parsed[2]), parsed[3].msg], '$WORK/tk1.out')
+let parsed = [HexPairPagedParseOffsetInput(''), HexPairPagedParseOffsetInput('1234'), HexPairPagedParseOffsetInput('0x10'), HexPairPagedParseOffsetInput('zz'), HexPairPagedParseOffsetInput('ff'), HexPairPagedParseOffsetInput('+16'), HexPairPagedParseOffsetInput('-0x10')]
+call writefile([string(missing), string(parsed[0]), string(parsed[1]), string(parsed[2]), parsed[3].msg, parsed[4].msg, string([parsed[5], parsed[6]])], '$WORK/tk1.out')
 qa!
 EOF
 "$HEXPAIR_VIM" -es -u NONE -S "$WORK/tk1.vim" < /dev/null
@@ -1504,8 +1639,18 @@ check "an empty offset prompt cancels"    "{}" "$(sed -n 2p "$WORK/tk1.out")"
 check "byte 1234 parses to offset 1233"   "{'offset': 1233}" "$(sed -n 3p "$WORK/tk1.out")"
 check "byte 0x10 parses to offset 15"     "{'offset': 15}"   "$(sed -n 4p "$WORK/tk1.out")"
 check "a non-position is reported" \
-    "hexpair: not a byte position: 'zz' (decimal, or 0x for hex; byte 1 is the first)" \
+    "hexpair: not a byte position: 'zz' (decimal, or 0x for hex; byte 1 is the first, +N and -N step from here)" \
     "$(sed -n 5p "$WORK/tk1.out")"
+# A bare "ff" reads as hex to a person and as the decimal 0 to str2nr(),
+# so it is refused as a position rather than reported as "positions start
+# at 1", which is a complaint about the wrong thing.
+check "hex without the 0x is not a position either" \
+    "hexpair: not a byte position: 'ff' (decimal, or 0x for hex; byte 1 is the first, +N and -N step from here)" \
+    "$(sed -n 6p "$WORK/tk1.out")"
+# A step is the one form where 0 means something ("stay here") and where
+# the 1-based question does not arise at all.
+check "a step parses as a step, in either base" \
+    "[{'delta': 16}, {'delta': -16}]" "$(sed -n 7p "$WORK/tk1.out")"
 
 # --- Piped input that Vim may already have transcoded is flagged -----------
 # A named file can be re-read with ++bin; piped input cannot, so if the
@@ -1808,10 +1953,1867 @@ check_path "the text view reports it too" \
     "hexpair: page 3 of 10, offsets 1025-1536 of total 5000 bytes ($WORK/pos1.bin); cursor on byte 0x410 (1040)" \
     "$(sed -n 3p "$WORK/tcb.out")"
 
+# ===========================================================================
+# The whole-page scan
+# ===========================================================================
+# Validation, stripping and the cursor's byte all come from ONE pass that
+# regexes the whole page at once instead of walking it line by line. The
+# per-line rule (HexPairPagedStripLine()) stays the reference, so the two
+# have to agree - and they can only disagree on a page of real size, where
+# a regex over the whole of it stops behaving like the same regex over one
+# line (a negated collection matches the end-of-line whatever is listed in
+# it, which turned up as a page validating at 2000 lines and failing at
+# 4000). Hence a fixture measured in thousands of lines, not in ten.
+
+# --- The two rules agree, on a full-size page ------------------------------
+cat > "$WORK/tsc1.vim" <<EOF
+source $PLUGIN
+HexPairOpen $WORK/scan1.bin
+let perline = map(getline(1, '\$'), 'HexPairPagedStripLine(v:val)')
+let whole = HexPairPagedScanLines()
+call writefile([string([line('\$'), whole ==# perline, HexPairPagedValidate()])], '$WORK/tsc1.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tsc1.vim" < /dev/null
+check "the whole-page scan says what the per-line rule says" \
+    "[6252, 1, {}]" "$(cat "$WORK/tsc1.out")"
+
+# --- A clean page of that size is not rejected, and survives a write -------
+# An unedited page written back must reproduce the file bit for bit: the
+# scan, the strip and the patch are the whole round trip.
+SCAN2_ALL=$(hash_range "$WORK/scan2.bin" 0 -1)
+cat > "$WORK/tsc2.vim" <<EOF
+source $PLUGIN
+HexPairOpen $WORK/scan2.bin
+call cursor(5000, 11)
+let at = HexPairPagedByteOffset()
+write
+call writefile([string([at, line('\$'), &l:modified])], '$WORK/tsc2.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tsc2.vim" < /dev/null
+check "the cursor's byte on a deep line of a full page" \
+    "[79968, 6252, 0]" "$(cat "$WORK/tsc2.out")"
+check "writing a full page back unedited changes nothing" \
+    "$SCAN2_ALL" "$(hash_range "$WORK/scan2.bin" 0 -1)"
+check "and does not change its length" "100000" "$(file_size "$WORK/scan2.bin")"
+
+# --- Lines the scan must not be thrown by ---------------------------------
+# An empty line, a bare hex line with no offset column, and an indented
+# one: each is a line the whole-page pass has to treat exactly as the
+# per-line rule does - including leaving the NEXT line's offset column
+# alone, which an anchor that consumes the line break does not.
+cat > "$WORK/tsc3.vim" <<EOF
+$(printf "$HEX")
+HexPairOpen $WORK/scan3.bin 1
+call append(2, ['', '41 42', '   43 44', '00000000: 45 46  EF'])
+let payload = HexPairPagedScanLines()[2:6]
+call cursor(4, 1)
+let at = [HexPairPagedByteOffset()]
+call cursor(7, 11)
+call add(at, HexPairPagedByteOffset())
+call writefile([string(payload), string(at), string(HexPairPagedValidate())], '$WORK/tsc3.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tsc3.vim" < /dev/null
+check "an empty, a bare and an indented line strip as the rule says" \
+    "['', '41 42', '43 44', ' 45 46', ' 10 11 12 13 14 15 16 17 18 19 1a 1b 1c 1d 1e 1f']" \
+    "$(sed -n 1p "$WORK/tsc3.out")"
+check "and the bytes on them count towards the cursor's offset" \
+    "[16, 22]" "$(sed -n 2p "$WORK/tsc3.out")"
+check "with nothing on them read as invalid" "{}" "$(sed -n 3p "$WORK/tsc3.out")"
+
+# --- The position-mapping trace -------------------------------------------
+# g:hexpair_debug is what a field report about a cursor landing on the
+# wrong byte is diagnosed with, so it has to still exist and still say
+# both directions of the mapping - and say nothing at all when it is off.
+cat > "$WORK/tdbg.vim" <<EOF
+$(printf "$HEX")
+let g:hexpair_debug = 1
+redir => on
+silent HexPairOpen $WORK/dbg1.bin 2
+silent HexPairGoOffset 600
+silent call HexPairPagedByteOffset()
+redir END
+let g:hexpair_debug = 0
+redir => off
+silent HexPairGoOffset 700
+silent call HexPairPagedByteOffset()
+redir END
+let lines = filter(split(on, "\n"), 'v:val =~# "^hexpair: "')
+call writefile([string([len(lines) >= 3, lines[1], lines[2]]), string(split(off, "\n"))], '$WORK/tdbg.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tdbg.vim" < /dev/null
+check "the trace says both directions of the mapping" \
+    "[1, 'hexpair: byte 599 -> hex view line 7, column 32', 'hexpair: hex view line 7, column 32 -> byte 599 (page base 512, unedited page)']" \
+    "$(sed -n 1p "$WORK/tdbg.out")"
+check "and nothing at all when it is off" "[]" "$(sed -n 2p "$WORK/tdbg.out")"
+
+# --- Both ways of counting the cursor's byte agree ------------------------
+# An unedited page is canonical, so where the cursor's byte is follows from
+# the layout and the page is not walked at all. The moment it is edited it
+# has to be counted from what is actually on the lines. Same buffer, both
+# paths - the difference is 'modified' alone, so they must answer the same.
+cat > "$WORK/tcbo.vim" <<EOF
+$(printf "$HEX")
+HexPairOpen $WORK/cbo1.bin 3
+let fast = []
+let slow = []
+for pos in [[2, 11], [2, 12], [2, 14], [5, 30], [5, 58], [5, 61], [5, 63], [33, 11]]
+  call cursor(pos[0], pos[1])
+  setlocal nomodified
+  call add(fast, HexPairPagedByteOffset())
+  setlocal modified
+  call add(slow, HexPairPagedByteOffset())
+endfor
+setlocal nomodified
+call writefile([string(fast), string(slow)], '$WORK/tcbo.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tcbo.vim" < /dev/null
+check "the canonical byte and the counted byte are the same byte" \
+    "$(sed -n 1p "$WORK/tcbo.out")" "$(sed -n 2p "$WORK/tcbo.out")"
+# The gap between the columns (5, 58) is the odd one out: the cursor is
+# past the line's last hex digit, and both paths clamp it to that last
+# byte (1087) rather than counting it as the first of the next line.
+check "and it is the byte the layout says" \
+    "[1024, 1024, 1025, 1078, 1087, 1073, 1075, 1520]" "$(sed -n 1p "$WORK/tcbo.out")"
+
+# ===========================================================================
+# The column ruler (g:hexpair_ruler)
+# ===========================================================================
+# One more line between the banner and the dump, numbering the columns.
+# It carries no bytes (it starts with a '"', like the banners), but it does
+# shift every dump line down by one - and turning a line number into a byte
+# offset is arithmetic that has to know about it.
+RULER_ALL=$(hash_range "$WORK/ruler1.bin" 0 -1)
+cat > "$WORK/trul.vim" <<EOF
+$(printf "$HEX")
+let g:hexpair_ruler = 1
+HexPairOpen $WORK/ruler1.bin 2
+let ruler = getline(2)
+let dump = getline(3)
+" every column of the ruler must sit exactly over the byte it numbers:
+" byte 7 and byte 15 in the hex column, and the ASCII column's own run
+let hexstart = HexPairPagedLineHexStart(3)
+let aligned = [stridx(ruler, '07') + 1 == hexstart + 7 * 3, stridx(ruler, '0f') + 1 == hexstart + 15 * 3, strpart(ruler, hexstart + 16 * 3, 16), stridx(dump, ' 07') + 2 == hexstart + 7 * 3]
+let opened = [line('.'), col('.'), HexPairPagedByteOffset()]
+HexPairGoOffset 600
+let jumped = [line('.'), col('.'), HexPairPagedByteOffset() + 1]
+HexPairToggle
+let intext = [line('\$'), getline(1) ==# b:hexpair_banner_top]
+HexPairToggle
+let back = [getline(2)[0:8], HexPairPagedByteOffset() + 1, line('\$')]
+write
+call writefile([string(aligned), string(opened), string(jumped), string(intext), string(back), string(HexPairPagedValidate())], '$WORK/trul.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/trul.vim" < /dev/null
+check "the ruler numbers the columns it sits over" "[1, 1, '0123456789abcdef', 1]" \
+    "$(sed -n 1p "$WORK/trul.out")"
+check "a page with a ruler opens on its first byte" "[3, 11, 512]" \
+    "$(sed -n 2p "$WORK/trul.out")"
+check "and byte 600 is still where the layout says" "[8, 32, 600]" \
+    "$(sed -n 3p "$WORK/trul.out")"
+check "the text view has no ruler, just the banners" "[5, 1]" \
+    "$(sed -n 4p "$WORK/trul.out")"
+check "and the way back rebuilds it" "['\"        ', 600, 35]" \
+    "$(sed -n 5p "$WORK/trul.out")"
+check "the ruler is not read as hex payload" "{}" "$(sed -n 6p "$WORK/trul.out")"
+check "and contributes no bytes to the write" "$RULER_ALL" \
+    "$(hash_range "$WORK/ruler1.bin" 0 -1)"
+
+# ===========================================================================
+# HexPairStatus() for 'statusline'
+# ===========================================================================
+# Empty outside hexpair buffers, so it can sit in the statusline
+# unconditionally; and it must agree with :HexPairPages about the byte
+# while the page is unedited, since one is what you see and the other is
+# what you ask.
+cat > "$WORK/tst.vim" <<EOF
+$(printf "$HEX")
+let plain = HexPairStatus()
+HexPairOpen $WORK/status1.bin 3
+call cursor(4, 20)
+let hex = HexPairStatus()
+let agrees = HexPairPagedReport() =~# 'cursor on byte 0x424 '
+normal! 1G
+let banner = HexPairStatus()
+call cursor(4, 20)
+setlocal modified
+let edited = HexPairStatus()
+setlocal nomodified
+HexPairToggle
+call cursor(3, 5)
+let text = HexPairStatus()
+call writefile([string([plain, hex, agrees, banner, edited, text])], '$WORK/tst.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tst.vim" < /dev/null
+# The offset column is not payload, and its digits are not bytes: a
+# cursor standing in it is on the line's FIRST byte. Every column of it
+# has to say so - and so does the first hex digit, which is that byte.
+cat > "$WORK/tsto.vim" <<EOF
+$(printf "$HEX")
+HexPairOpen $WORK/status1.bin 2
+let out = []
+for col in [1, 5, 9, 10, 11, 14]
+  call cursor(3, col)
+  call add(out, HexPairStatus())
+endfor
+call cursor(3, 5)
+redir => msg
+silent HexPairInspect
+redir END
+call add(out, filter(split(msg, "\n"), 'v:val =~# "8-bit"')[0])
+call writefile([string(out[0 : 5]), out[6]], '$WORK/tsto.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tsto.vim" < /dev/null
+check "a cursor in the offset column is on the line's first byte" \
+    "['hex 2/10 @0x211 (529)', 'hex 2/10 @0x211 (529)', 'hex 2/10 @0x211 (529)', 'hex 2/10 @0x211 (529)', 'hex 2/10 @0x211 (529)', 'hex 2/10 @0x212 (530)']" \
+    "$(sed -n 1p "$WORK/tsto.out")"
+check "and the inspector reads that byte, not the offset's digits" \
+    "  8-bit    16                          char  -   bin 00010000  oct 020" \
+    "$(sed -n 2p "$WORK/tsto.out")"
+
+check "the statusline says view, page and byte, and nothing elsewhere" \
+    "['', 'hex 3/10 @0x424 (1060)', 1, 'hex 3/10', 'hex 3/10+ @0x424 (1060)', 'txt 3/10 @0x410 (1040)']" \
+    "$(cat "$WORK/tst.out")"
+
+# ===========================================================================
+# What a Visual selection covers
+# ===========================================================================
+# Visual mode cannot be driven under `vim -es`, so the geometry is called
+# with the two ends and the mode passed in - the same split
+# HexPairPagedSelectionPositions() already uses for the mirror highlight.
+cat > "$WORK/tsel.vim" <<EOF
+$(printf "$HEX")
+HexPairOpen $WORK/sel1.bin 3
+let out = []
+call add(out, string(HexPairPagedSelectionBytes([0, 3, 11, 0], [0, 4, 14, 0], 'v')))
+call add(out, HexPairPagedSelectionText(HexPairPagedSelectionBytes([0, 3, 11, 0], [0, 4, 14, 0], 'v'), b:hexpair_page_total))
+call add(out, HexPairPagedSelectionText(HexPairPagedSelectionBytes([0, 3, 1, 0], [0, 3, 1, 0], 'V'), b:hexpair_page_total))
+call add(out, HexPairPagedSelectionText(HexPairPagedSelectionBytes([0, 3, 11, 0], [0, 5, 20, 0], "\<C-V>"), b:hexpair_page_total))
+call add(out, HexPairPagedSelectionText(HexPairPagedSelectionBytes([0, 1, 1, 0], [0, 1, 5, 0], 'v'), b:hexpair_page_total))
+" a selection made backwards covers the same bytes as one made forwards
+call add(out, string(HexPairPagedSelectionBytes([0, 4, 14, 0], [0, 3, 11, 0], 'v') ==# HexPairPagedSelectionBytes([0, 3, 11, 0], [0, 4, 14, 0], 'v')))
+HexPairToggle
+call add(out, HexPairPagedSelectionText(HexPairPagedSelectionBytes([0, 2, 1, 0], [0, 2, 16, 0], 'v'), b:hexpair_page_total))
+call add(out, HexPairPagedSelectionText(HexPairPagedSelectionBytes([0, 2, 1, 0], [0, 2, 1, 0], 'V'), b:hexpair_page_total))
+call writefile(out, '$WORK/tsel.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tsel.vim" < /dev/null
+check "a charwise selection is one run of bytes" \
+    "{'first': 1040, 'perline': 0, 'last': 1057, 'lines': 2, 'count': 18}" \
+    "$(sed -n 1p "$WORK/tsel.out")"
+check "and says so 1-based, in hex and decimal" \
+    "hexpair: 18 bytes selected, 1041-1058 (0x411-0x422) of 5000" \
+    "$(sed -n 2p "$WORK/tsel.out")"
+check "a linewise selection is the line's bytes" \
+    "hexpair: 16 bytes selected, 1041-1056 (0x411-0x420) of 5000" \
+    "$(sed -n 3p "$WORK/tsel.out")"
+# Blockwise bytes are not one run, so the count is what it leads with.
+check "a blockwise selection counts its columns on every line" \
+    "hexpair: 12 bytes selected in 3 lines (4 per line), 1041-1076 (0x411-0x434) of 5000" \
+    "$(sed -n 4p "$WORK/tsel.out")"
+check "banner lines cover no bytes" "hexpair: the selection covers no bytes" \
+    "$(sed -n 5p "$WORK/tsel.out")"
+check "and which end it was made from makes no difference" "1" \
+    "$(sed -n 6p "$WORK/tsel.out")"
+check "in the text view a column is a byte" \
+    "hexpair: 16 bytes selected, 1025-1040 (0x401-0x410) of 5000" \
+    "$(sed -n 7p "$WORK/tsel.out")"
+# A line break is a byte of the file like any other, so a linewise
+# selection of a 10-byte line covers 11.
+check "and a linewise selection there takes the line break with it" \
+    "hexpair: 11 bytes selected, 1025-1035 (0x401-0x40b) of 5000" \
+    "$(sed -n 8p "$WORK/tsel.out")"
+
+# --- A page can be named as a step, or as the last one ---------------------
+# The same parser serves :HexPairPageGoto and the <Plug> prompt, so "$"
+# and "+2" work wherever a page number does - including through the vimhex
+# wrapper, which hands its PAGE argument straight to the command.
+cat > "$WORK/tpg.vim" <<EOF
+$(printf "$HEX")
+HexPairOpen $WORK/pgoto1.bin 3
+let parsed = [HexPairPagedParsePageInput('\$'), HexPairPagedParsePageInput('+2'), HexPairPagedParsePageInput('-2'), HexPairPagedParsePageInput('7')]
+let resolved = map(copy(parsed), 'HexPairPagedResolvePage(v:val, 3, 10)')
+HexPairPageGoto +2
+let stepped = b:hexpair_page_index + 1
+HexPairPageGoto -1
+let back = b:hexpair_page_index + 1
+HexPairPageGoto \$
+let last = b:hexpair_page_index + 1
+redir => msg
+silent! HexPairPageGoto +9
+redir END
+call writefile([string(parsed), string(resolved), string([stepped, back, last, b:hexpair_page_index + 1]), substitute(msg, '^[\r\n]*', '', '')], '$WORK/tpg.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tpg.vim" < /dev/null
+check "a step and a \$ parse as themselves" \
+    "[{'last': 1}, {'delta': 2}, {'delta': -2}, {'page': 7}]" \
+    "$(sed -n 1p "$WORK/tpg.out")"
+check "and resolve against the page in view" "[10, 5, 1, 7]" \
+    "$(sed -n 2p "$WORK/tpg.out")"
+check "+2, -1 and \$ turn the pages they name" "[5, 4, 10, 10]" \
+    "$(sed -n 3p "$WORK/tpg.out")"
+
+# --- :HexPairOpen takes the same three forms ------------------------------
+# A step counts from the first page, which is where opening starts.
+cat > "$WORK/tpg2.vim" <<EOF
+$(printf "$HEX")
+HexPairOpen $WORK/pgoto1.bin \$
+let last = b:hexpair_page_index + 1
+bwipeout!
+HexPairOpen $WORK/pgoto1.bin +2
+let stepped = b:hexpair_page_index + 1
+bwipeout!
+HexPairOpen $WORK/pgoto1.bin
+let default = b:hexpair_page_index + 1
+call writefile([string([last, stepped, default])], '$WORK/tpg2.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tpg2.vim" < /dev/null
+check "opening at \$, at a step, and by default" "[10, 3, 1]" \
+    "$(cat "$WORK/tpg2.out")"
+check "a step past the end is refused like any other missing page" \
+    "hexpair: page 19 does not exist (file has 10 pages)" \
+    "$(sed -n 4p "$WORK/tpg.out")"
+
+# ===========================================================================
+# A page that changed on disk within the same second
+# ===========================================================================
+# Size and mtime are all a portable Vim can see, and mtime is whole
+# seconds: a writer that changes bytes in place, in the same second the
+# page was read, is invisible to both. The page's own bytes are therefore
+# hashed when it is read and again before it is patched. The helper below
+# is that writer - it edits the file and puts the timestamps back, so
+# nothing but the content differs.
+cat > "$WORK/tamper.py" <<'PYEOF'
+import os, sys
+name = sys.argv[1]
+st = os.stat(name)
+with open(name, 'r+b') as f:
+    f.seek(int(sys.argv[2]))
+    f.write(b'\xff\xff\xff\xff')
+os.utime(name, (st.st_atime, st.st_mtime))
+PYEOF
+cat > "$WORK/tdig.vim" <<EOF
+$(printf "$HEX")
+HexPairOpen $WORK/digest1.bin 2
+let same = [getfsize('$WORK/digest1.bin'), getftime('$WORK/digest1.bin')]
+call system('$PY $WORK/tamper.py $WORK/digest1.bin 600')
+let unchanged = [getfsize('$WORK/digest1.bin') == same[0], getftime('$WORK/digest1.bin') == same[1]]
+call setline(3, substitute(getline(3), '^\(.\{10\}\)..', '\1ee', ''))
+let refused = ''
+try
+  write
+catch /^hexpair:/
+  let refused = 'refused'
+endtry
+call writefile([string(unchanged), refused, string(&l:modified)], '$WORK/tdig.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tdig.vim" < /dev/null
+check "the tampering left the size and the timestamp alone" "[1, 1]" \
+    "$(sed -n 1p "$WORK/tdig.out")"
+check "but the page's own bytes give it away" "refused" \
+    "$(sed -n 2p "$WORK/tdig.out")"
+check "and the edit is still there to be saved elsewhere" "1" \
+    "$(sed -n 3p "$WORK/tdig.out")"
+check "the other writer's bytes are still on disk" "ffffffff" \
+    "$("$HEXPAIR_XXD" -s 600 -l 4 -p "$WORK/digest1.bin")"
+
+# ===========================================================================
+# The data inspector
+# ===========================================================================
+# Every conversion in it is a pure function of the bytes, so they are
+# checked against values whose bit patterns are known exactly - a double
+# packed by python, a float, the specials - and then the command itself is
+# driven over a real page, from both views.
+cat > "$WORK/tins.vim" <<EOF
+$(printf "$HEX")
+" The character next to a code point is shown only where 'encoding' is
+" utf-8, so the assertions below pin it rather than inheriting whatever
+" the platform starts with - a Vim on Windows starts with its codepage.
+set encoding=utf-8
+let out = []
+call add(out, HexPairPagedBinaryText(173) . ' ' . HexPairPagedBinaryText(0) . ' ' . HexPairPagedBinaryText(255))
+call add(out, HexPairPagedU64Text(-1) . ' ' . HexPairPagedU64Text(0) . ' ' . HexPairPagedU64Text(-1068498944))
+call add(out, HexPairPagedDecSub('1000', '1') . ' ' . HexPairPagedDecSub('100', '100'))
+call add(out, HexPairPagedIeeeText([0x40,0x93,0x4a,0x45,0x6d,0x5c,0xfa,0xad]) . ' ' . HexPairPagedIeeeText([0xc0,0x50,0x00,0x00]))
+call add(out, HexPairPagedIeeeText([0x7f,0x80,0,0]) . ' ' . HexPairPagedIeeeText([0xff,0x80,0,0]) . ' ' . HexPairPagedIeeeText([0x7f,0xc0,0,0]) . ' ' . HexPairPagedIeeeText([0,0,0,0]) . ' ' . HexPairPagedIeeeText([0,0,0,1]))
+call add(out, string([HexPairPagedUtf8Text([0x41, 0x42]), HexPairPagedUtf8Text([0xc3, 0xa9, 0x41]), HexPairPagedUtf8Text([0xe2, 0x82, 0xac]), HexPairPagedUtf8Text([0xf0, 0x9f, 0x98, 0x80])]))
+call add(out, string([HexPairPagedUtf8Text([0x80]), HexPairPagedUtf8Text([0xc3]), HexPairPagedUtf8Text([0xe0, 0x80, 0xaf]), HexPairPagedUtf8Text([0xed, 0xa0, 0x80])]))
+call add(out, string([HexPairPagedUtf16Text([0x41, 0x42], 1), HexPairPagedUtf16Text([0x41, 0x42], 0), HexPairPagedUtf16Text([0x3d, 0xd8, 0x00, 0xde], 1), HexPairPagedUtf16Text([0x3d, 0xd8, 0x41, 0x00], 1)]))
+call add(out, string([HexPairPagedUtf32Text([0x00, 0x01, 0xf6, 0x00], 0), HexPairPagedUtf32Text([0x41, 0x42, 0x43, 0x44], 0), HexPairPagedUtf32Text([0x00, 0x00, 0xd8, 0x00], 0)]))
+HexPairOpen $WORK/insp1.bin 1
+HexPairGoOffset 66
+redir => m1
+silent HexPairInspect
+redir END
+let hexview = filter(split(m1, "\n"), 'v:val !~# "^\$"')
+call extend(out, hexview)
+HexPairGoOffset 512
+redir => m2
+silent HexPairInspect
+redir END
+call add(out, filter(split(m2, "\n"), 'v:val =~# "16-bit"')[0])
+HexPairGoOffset 1
+HexPairToggle
+redir => m3
+silent HexPairInspect
+redir END
+let textview = filter(split(m3, "\n"), 'v:val !~# "^\$"')
+HexPairToggle
+HexPairGoOffset 1
+redir => m4
+silent HexPairInspect
+redir END
+call add(out, string(textview ==# filter(split(m4, "\n"), 'v:val !~# "^\$"')))
+normal! 1G
+redir => m5
+silent HexPairInspect
+redir END
+call add(out, filter(split(m5, "\n"), 'v:val !~# "^\$"')[0])
+call writefile(out, '$WORK/tins.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tins.vim" < /dev/null
+check "a byte in binary" "10101101 00000000 11111111" "$(sed -n 1p "$WORK/tins.out")"
+# Vim's Number is signed, so the unsigned form of a 64-bit pattern whose
+# top bit is set has to be done in decimal.
+check "an unsigned 64-bit pattern" "18446744073709551615 0 18446744072641052672" \
+    "$(sed -n 2p "$WORK/tins.out")"
+check "decimal subtraction, including down to zero" "999 0" "$(sed -n 3p "$WORK/tins.out")"
+check "IEEE 754 from the bytes python packed" "1234.5678 -3.25" "$(sed -n 4p "$WORK/tins.out")"
+check "and the ends of the range" "inf -inf nan 0.0 1.401298e-45" \
+    "$(sed -n 5p "$WORK/tins.out")"
+check "utf-8, of one, two, three and four bytes" \
+    "['U+0041 ''A'' (1 byte)', 'U+00E9 ''é'' (2 bytes)', 'U+20AC ''€'' (3 bytes)', 'U+1F600 ''😀'' (4 bytes)']" \
+    "$(sed -n 6p "$WORK/tins.out")"
+# Every way UTF-8 can be wrong is its own answer: reporting a code point
+# for an overlong sequence or a surrogate would be inventing one.
+check "and every way it can fail to be utf-8" \
+    "['not utf-8 (byte 80 cannot start one)', 'needs 2 bytes, 1 left', 'not utf-8 (overlong: U+002F in 3 bytes)', 'not utf-8 (U+D800 is a surrogate)']" \
+    "$(sed -n 7p "$WORK/tins.out")"
+check "utf-16 both ways round, and a surrogate pair" \
+    "['U+4241 ''䉁'' (2 bytes)', 'U+4142 ''䅂'' (2 bytes)', 'U+1F600 ''😀'' (4 bytes)', 'U+D83D - a high surrogate, U+0041 is not low']" \
+    "$(sed -n 8p "$WORK/tins.out")"
+# And with an 'encoding' that is not utf-8 there is no character to show:
+# the code point still reads out, the glyph does not. Asserted as yes/no
+# and on an ASCII-only string, so the comparison itself cannot depend on
+# an encoding either.
+cat > "$WORK/tins2.vim" <<EOF
+$(printf "$HEX")
+set encoding=latin1
+call writefile([string([HexPairPagedUtf8Text([0x41, 0x42]) ==# 'U+0041 (1 byte)', HexPairPagedUtf8Text([0xc3, 0xa9, 0x41]) ==# 'U+00E9 (2 bytes)', HexPairPagedUtf32Text([0x00, 0x01, 0xf6, 0x00], 0) ==# 'U+1F600'])], '$WORK/tins2.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tins2.vim" < /dev/null
+check "and no character at all where the encoding has none to give" \
+    "[1, 1, 1]" "$(cat "$WORK/tins2.out")"
+
+check "utf-32, where most four bytes are not a character" \
+    "['U+1F600 ''😀''', 'U+41424344 - past U+10FFFF', 'U+D800 - a surrogate']" \
+    "$(sed -n 9p "$WORK/tins.out")"
+check "the inspector reads the bytes at the cursor" \
+    "hexpair: byte 66 (0x42) of 512: 41 42 43 44 45 46 47 48" \
+    "$(sed -n 10p "$WORK/tins.out")"
+check "one byte, as a character and as bits" \
+    "  8-bit    65                          char 'A'  bin 01000001  oct 0101" \
+    "$(sed -n 11p "$WORK/tins.out")"
+check "the widths, both ways round" \
+    "  16-bit   16961                       16706" "$(sed -n 13p "$WORK/tins.out")"
+check "including the 64-bit one" \
+    "  64-bit   5208208757389214273         4702394921427289928" \
+    "$(sed -n 15p "$WORK/tins.out")"
+check "and the floats" \
+    "  float32  781.035217                  12.141422" "$(sed -n 16p "$WORK/tins.out")"
+check "and what the bytes are as text" \
+    "  utf-8    U+0041 'A' (1 byte)" "$(sed -n 18p "$WORK/tins.out")"
+check "a width that does not fit in what is left of the page says so" \
+    "  16-bit   (only 1 byte left on this page)" "$(sed -n 21p "$WORK/tins.out")"
+check "both views read the same bytes" "1" "$(sed -n 22p "$WORK/tins.out")"
+check "and a banner line has nothing to read" "hexpair: no byte here to read" \
+    "$(sed -n 23p "$WORK/tins.out")"
+
+# ===========================================================================
+# Two views of one file
+# ===========================================================================
+# :HexPairSplit opens a second window on the same file at another page.
+# Two things used to stand in the way: the buffer name, which was the
+# file's alone and collided (E95), and the freshness check, which refused
+# a write whenever the file's timestamp had moved - which is exactly what
+# the other view writing does. This bumps the timestamp deliberately, so
+# the test does not depend on how fast the two writes happen to be.
+cat > "$WORK/bump.py" <<'PYEOF'
+import os, sys
+st = os.stat(sys.argv[1])
+os.utime(sys.argv[1], (st.st_atime, st.st_mtime + 5))
+PYEOF
+cat > "$WORK/tsv.vim" <<EOF
+$(printf "$HEX")
+HexPairOpen $WORK/split1.bin 3
+let first = bufname('%')
+HexPairSplit +2
+let second = [bufname('%') !=# first, b:hexpair_page_index + 1, winnr('\$')]
+HexPairVSplit \$
+let third = [b:hexpair_page_index + 1, winnr('\$'), winwidth(0) < &columns]
+let before = winnr('\$')
+silent! HexPairSplit +99
+let nowindow = winnr('\$') == before
+only
+call writefile([string([second, third, nowindow])], '$WORK/tsv.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tsv.vim" < /dev/null
+check "a split is a second view, on the page it names" \
+    "[[1, 5, 2], [10, 3, 1], 1]" "$(cat "$WORK/tsv.out")"
+
+# --- Both views can write, because they hold different pages --------------
+# Neither view holds the first 1024 bytes, so nothing either of them
+# writes may reach them.
+SV2_HEAD=$(hash_range "$WORK/split2.bin" 0 1024)
+cat > "$WORK/tsv2.vim" <<EOF
+$(printf "$HEX")
+HexPairOpen $WORK/split2.bin 3
+let a = bufnr('%')
+HexPairSplit 7
+call cursor(3, 11)
+normal! rf
+write
+let b = 'wrote page 7'
+call system('$PY $WORK/bump.py $WORK/split2.bin')
+execute bufwinnr(a) . 'wincmd w'
+call cursor(3, 11)
+normal! re
+let outcome = ''
+try
+  write
+  let outcome = 'wrote page 3'
+catch /^hexpair:/
+  let outcome = 'refused'
+endtry
+call writefile([string([b, outcome, &l:modified])], '$WORK/tsv2.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tsv2.vim" < /dev/null
+check "one view writing does not lock the other out" \
+    "['wrote page 7', 'wrote page 3', 0]" "$(cat "$WORK/tsv2.out")"
+check "and both edits are in the file" "e0 f0" \
+    "$("$HEXPAIR_XXD" -s 1040 -l 1 -p "$WORK/split2.bin") $("$HEXPAIR_XXD" -s 3088 -l 1 -p "$WORK/split2.bin")"
+check "and what neither of them holds is untouched" "$SV2_HEAD" \
+    "$(hash_range "$WORK/split2.bin" 0 1024)"
+
+# --- ... but a view whose own page was overwritten is still refused -------
+cat > "$WORK/tsv3.vim" <<EOF
+$(printf "$HEX")
+HexPairOpen $WORK/split3.bin 3
+let a = bufnr('%')
+HexPairSplit 3
+call cursor(4, 11)
+normal! rf
+write
+call system('$PY $WORK/bump.py $WORK/split3.bin')
+execute bufwinnr(a) . 'wincmd w'
+call cursor(3, 11)
+normal! re
+let outcome = ''
+try
+  write
+  let outcome = 'wrote'
+catch /^hexpair:/
+  let outcome = 'refused'
+endtry
+call writefile([outcome, string(&l:modified)], '$WORK/tsv3.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tsv3.vim" < /dev/null
+check "two views of the SAME page do not overwrite each other" "refused" \
+    "$(sed -n 1p "$WORK/tsv3.out")"
+check "the refused edit is still in the buffer" "1" "$(sed -n 2p "$WORK/tsv3.out")"
+# The split view edited the byte at 1056 and wrote it; the refused view
+# wanted 1040, which must still hold what it always did.
+check "the other view's byte is the one on disk" "f0" \
+    "$("$HEXPAIR_XXD" -s 1056 -l 1 -p "$WORK/split3.bin")"
+check "and the refused edit reached nothing" "10" \
+    "$("$HEXPAIR_XXD" -s 1040 -l 1 -p "$WORK/split3.bin")"
+
+# --- ... and a plain :split can be one too, if asked ----------------------
+# g:hexpair_split_views makes a window that ends up showing a page a second
+# time into a view of its own. Off by default, because a page is thousands
+# of lines and looking at two parts of ONE page in two windows is what
+# :split is for everywhere else.
+cat > "$WORK/tsv5.vim" <<EOF
+$(printf "$HEX")
+HexPairOpen $WORK/split4.bin 3
+split
+let plain = [winbufnr(1) == winbufnr(2), winnr('\$')]
+only
+let g:hexpair_split_views = 1
+split
+let asked = [winbufnr(1) != winbufnr(2), b:hexpair_page_index + 1, HexPairPagedByteOffset()]
+HexPairPageNext
+let here = b:hexpair_page_index + 1
+wincmd w
+let there = b:hexpair_page_index + 1
+" switching between windows must not keep making views
+let buffers = len(filter(range(1, bufnr('\$')), 'bufexists(v:val)'))
+wincmd w
+wincmd w
+let stable = len(filter(range(1, bufnr('\$')), 'bufexists(v:val)')) == buffers
+" a split of the text view stays a text view
+HexPairToggle
+split
+let astext = [b:hexpair_view, winbufnr(1) != winbufnr(2)]
+call writefile([string(plain), string(asked), string([here, there, stable]), string(astext)], '$WORK/tsv5.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tsv5.vim" < /dev/null
+check "by default :split is two windows on one page, as everywhere else" \
+    "[1, 2]" "$(sed -n 1p "$WORK/tsv5.out")"
+check "asked to, it makes a view of its own on the same byte" \
+    "[1, 3, 1024]" "$(sed -n 2p "$WORK/tsv5.out")"
+check "which then turns its pages alone" "[4, 3, 1]" \
+    "$(sed -n 3p "$WORK/tsv5.out")"
+check "and a split of the text view is a text view" "['text', 1]" \
+    "$(sed -n 4p "$WORK/tsv5.out")"
+
+# --- Piped input has nothing to make a second view from -------------------
+cat > "$WORK/tsv6.vim" <<EOF
+$(printf "$HEX")
+let g:hexpair_split_views = 1
+call setline(1, ['abc', 'def'])
+HexPairToggle
+split
+call writefile([string([winbufnr(1) == winbufnr(2), winnr('\$'), b:hexpair_page_active])], '$WORK/tsv6.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tsv6.vim" < /dev/null
+check "so its :split stays a plain one, without complaint" "[1, 2, 1]" \
+    "$(cat "$WORK/tsv6.out")"
+
+# --- A view paged from piped input has nothing to split -------------------
+# Its temp file belongs to that buffer and goes when the buffer does.
+cat > "$WORK/tsv4.vim" <<EOF
+$(printf "$HEX")
+call setline(1, ['abc', 'def'])
+HexPairToggle
+redir => msg
+silent! HexPairSplit
+redir END
+call writefile([substitute(substitute(msg, '^[\r\n]*', '', ''), '\n', ' ', 'g'), string(winnr('\$'))], '$WORK/tsv4.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tsv4.vim" < /dev/null
+check "splitting piped input says why not" \
+    "hexpair: this view is paged from a private copy of piped input, which belongs to it alone; save it with :w {file} first, and split that" \
+    "$(sed -n 1p "$WORK/tsv4.out")"
+check "and opens no window" "1" "$(sed -n 2p "$WORK/tsv4.out")"
+
+# --- Stepping by bytes, and :HexPairOpen! ---------------------------------
+# A step moves from the byte the cursor is on, so it crosses page
+# boundaries the same way a position does. The bang is Vim's own "abandon
+# what is in this window", which :HexPairOpen had never had.
+cat > "$WORK/tstep.vim" <<EOF
+$(printf "$HEX")
+HexPairOpen $WORK/step1.bin 3
+call cursor(4, 11)
+let start = HexPairPagedByteOffset()
+HexPairGoOffset +16
+let forward = HexPairPagedByteOffset()
+HexPairGoOffset -0x20
+let back = HexPairPagedByteOffset()
+HexPairGoOffset +600
+let crossed = [HexPairPagedByteOffset(), b:hexpair_page_index + 1]
+redir => msg
+silent! HexPairGoOffset -99999
+redir END
+let outside = substitute(msg, '^[\r\n]*', '', '')
+enew
+call setline(1, 'precious unsaved work')
+let refused = ''
+try
+  HexPairOpen $WORK/step1.bin 1
+catch
+  let refused = v:exception =~# 'E37' ? 'refused' : v:exception
+endtry
+HexPairOpen! $WORK/step1.bin 1
+call writefile([string([start, forward, back, crossed]), outside, string([refused, b:hexpair_page_index + 1, get(b:, 'hexpair_page_active', 0)])], '$WORK/tstep.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tstep.vim" < /dev/null
+check "a step moves from where the cursor is, and turns the page" \
+    "[1056, 1072, 1040, [1640, 4]]" "$(sed -n 1p "$WORK/tstep.out")"
+check "and a step out of the file is refused like a position" \
+    "hexpair: byte -98358 is outside the file (5000 bytes)" \
+    "$(sed -n 2p "$WORK/tstep.out")"
+# The bang is about the buffer being LEFT, not about the page: a paged
+# buffer is 'bufhidden' hide and is never abandoned, but an ordinary
+# modified buffer in the window is, and Vim refuses that without a !.
+check "the bang opens over a modified buffer, the bare command does not" \
+    "['refused', 1, 1]" "$(sed -n 3p "$WORK/tstep.out")"
+
+# ===========================================================================
+# Marks
+# ===========================================================================
+# Positions in the FILE, not in a buffer: a paged buffer holds a different
+# part of the file from one page to the next, so Vim's own marks cannot
+# mean what they say here. These are kept per file, so two views of one
+# file share them.
+cat > "$WORK/tmk.vim" <<EOF
+$(printf "$HEX")
+let out = []
+call add(out, string([HexPairPagedMarkNameError('header'), HexPairPagedMarkNameError(''), HexPairPagedMarkNameError('a b')]))
+call add(out, string(HexPairPagedMarkLines({}, 512, 5000)))
+call add(out, string(HexPairPagedMarkLines({'b': 1056, 'a': 3123, 'gone': 9999}, 512, 5000)))
+HexPairOpen $WORK/mark1.bin 3
+call cursor(4, 11)
+HexPairMark header
+HexPairPageGoto 7
+call cursor(5, 20)
+HexPairMark payload
+HexPairPageGoto 1
+HexPairGoMark header
+call add(out, HexPairStatus())
+call add(out, string(HexPairPagedMarkComplete('h', '', 0)))
+" a second view of the same file sees the same marks
+HexPairSplit 1
+HexPairGoMark payload
+call add(out, HexPairStatus())
+HexPairMarkDelete payload
+redir => msg
+silent! HexPairGoMark payload
+redir END
+call add(out, substitute(substitute(msg, '^[\r\n]*', '', ''), '\n', ' ', 'g'))
+call writefile(out, '$WORK/tmk.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tmk.vim" < /dev/null
+check "a mark name is a word" \
+    "['', 'hexpair: a mark needs a name', 'hexpair: ''a b'' is not a mark name (letters, digits and underscores)']" \
+    "$(sed -n 1p "$WORK/tmk.out")"
+check "no marks says so" "['hexpair: no marks in this file']" \
+    "$(sed -n 2p "$WORK/tmk.out")"
+# Listed by offset, not by name, and a mark left behind by a file that
+# shrank says where it now points.
+check "the listing is by position, and names the page" \
+    "['hexpair: marks in this file:', '  b                byte 1057 (0x421) of 5000, page 3', '  a                byte 3124 (0xc34) of 5000, page 7', '  gone             byte 10000 (0x2710) - past the end of 5000, page 20']" \
+    "$(sed -n 3p "$WORK/tmk.out")"
+check "a mark is a byte to jump back to" "hex 3/10 @0x421 (1057)" \
+    "$(sed -n 4p "$WORK/tmk.out")"
+check "and completes by name" "['header']" "$(sed -n 5p "$WORK/tmk.out")"
+check "a second view of the file has the same marks" "hex 7/10 @0xc34 (3124)" \
+    "$(sed -n 6p "$WORK/tmk.out")"
+check "a dropped mark is dropped for both, and says what is left" \
+    "hexpair: no mark named 'payload' here (have: header)" \
+    "$(sed -n 7p "$WORK/tmk.out")"
+
+# --- A mark shows where it is ---------------------------------------------
+# One byte wide, in both columns, and only for the marks that fall on the
+# page in view. Underline and bold rather than a colour: a mark says
+# "this place", the three colourings around it say "these bytes".
+cat > "$WORK/tmkh.vim" <<EOF
+$(printf "$HEX")
+HexPairOpen $WORK/mark2.bin 2
+let out = []
+call add(out, string(HexPairPagedMarkPositions(2, 33)))
+call cursor(4, 14)
+HexPairMark hdr
+call add(out, string(HexPairPagedMarkPositions(2, 33)))
+call cursor(6, 60)
+HexPairMark data
+call add(out, string(HexPairPagedMarkPositions(4, 4)))
+HexPairPageGoto 5
+call add(out, string(HexPairPagedMarkPositions(2, 33)))
+HexPairPageGoto 2
+HexPairMarkDelete hdr
+call add(out, string(HexPairPagedMarkPositions(2, 33)))
+call writefile(out, '$WORK/tmkh.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tmkh.vim" < /dev/null
+check "an unmarked page has nothing to show" "[]" "$(sed -n 1p "$WORK/tmkh.out")"
+check "a mark is one byte, in both columns" "[[4, 14, 2], [4, 61, 1]]" \
+    "$(sed -n 2p "$WORK/tmkh.out")"
+check "and only the lines asked about are answered for" \
+    "[[4, 14, 2], [4, 61, 1]]" "$(sed -n 3p "$WORK/tmkh.out")"
+# The marks belong to the file, but only those inside the page can be
+# pointed at on it.
+check "a mark on another page shows on that one, not this" "[]" \
+    "$(sed -n 4p "$WORK/tmkh.out")"
+check "and dropping one takes its marking with it" "[[6, 11, 2], [6, 60, 1]]" \
+    "$(sed -n 5p "$WORK/tmkh.out")"
+
+# ===========================================================================
+# The bytes that differ from the file
+# ===========================================================================
+# What has been edited and not yet written, marked in both columns. The
+# positions are computed apart from the drawing, because `vim -es` has no
+# window to read a visible range from - line('w$') comes out before
+# line('w0') here - which is the same reason the Visual mirror is split.
+cat > "$WORK/tmod.vim" <<EOF
+$(printf "$HEX")
+HexPairOpen $WORK/mod1.bin 2
+let out = []
+call add(out, string(HexPairPagedModifiedPositions(2, 5)))
+call cursor(3, 11)
+normal! rf
+call add(out, string(HexPairPagedModifiedPositions(2, 5)))
+call setline(4, substitute(getline(4), '^\(.\{10\}\)........', '\1aa bb cc', ''))
+call add(out, string(HexPairPagedModifiedPositions(4, 4)))
+call setline(5, toupper(getline(5)))
+call add(out, string(HexPairPagedModifiedPositions(5, 5)))
+call add(out, string(HexPairPagedModifiedPositions(1, 1)))
+" Written while every edit so far has kept the page's length, so this
+" needs nothing of the splice - which the oldest supported Vim refuses.
+write
+call add(out, string([&l:modified, HexPairPagedModifiedPositions(2, 6)]))
+call append(5, '41 42')
+call add(out, string(HexPairPagedModifiedPositions(6, 6)))
+call writefile(out, '$WORK/tmod.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tmod.vim" < /dev/null
+check "an untouched page has nothing to mark" "[]" "$(sed -n 1p "$WORK/tmod.out")"
+check "an edited byte is marked in both columns" "[[3, 11, 2], [3, 60, 1]]" \
+    "$(sed -n 2p "$WORK/tmod.out")"
+# Adjacent bytes make ONE run per column, not one match each.
+check "a run of them is one match per column" "[[4, 11, 8], [4, 60, 3]]" \
+    "$(sed -n 3p "$WORK/tmod.out")"
+check "case is not a change of bytes" "[]" "$(sed -n 4p "$WORK/tmod.out")"
+check "a banner line has nothing to compare" "[]" "$(sed -n 5p "$WORK/tmod.out")"
+check "a write clears the marks with the modified flag" "[0, []]" \
+    "$(sed -n 6p "$WORK/tmod.out")"
+# A bare line the user typed has no ASCII column to mark, and every byte
+# on it is new.
+check "and an inserted line is all new bytes" "[[6, 1, 5]]" \
+    "$(sed -n 7p "$WORK/tmod.out")"
+
+# ===========================================================================
+# Comparing this file with another
+# ===========================================================================
+# Two files, differing in three known bytes: an early one, one on another
+# page, and the very last. Finding a difference is a block read of both
+# sides and then a halving of the block - never a walk over the bytes - so
+# the halving is what is checked first, on strings small enough to read.
+cat > "$WORK/tdf.vim" <<EOF
+$(printf "$HEX")
+let out = []
+call add(out, string([HexPairPagedFirstDifference('abcdef', 'abcdef'), HexPairPagedFirstDifference('abcdef', 'abXdef'), HexPairPagedFirstDifference('abc', 'abcdef'), HexPairPagedFirstDifference('', '')]))
+call add(out, string([HexPairPagedLastDifference('abcdef', 'abcdef'), HexPairPagedLastDifference('abcdef', 'abXdeY'), HexPairPagedLastDifference('abc', 'abcdef')]))
+call add(out, HexPairPagedDiffText('other.bin', 512, 512, 0, -1))
+HexPairOpen $WORK/diffa.bin 1
+redir => msg
+silent HexPairDiff $WORK/diffb.bin
+redir END
+call add(out, substitute(msg, '^[\r\n]*', '', ''))
+call add(out, string(HexPairPagedComparePositions(8, 8, b:hexpair_diff_hex)))
+HexPairGoOffset 1
+HexPairDiffNext
+call add(out, HexPairStatus())
+HexPairDiffNext
+call add(out, HexPairStatus())
+HexPairDiffNext
+call add(out, HexPairStatus())
+redir => msg2
+silent HexPairDiffNext
+redir END
+call add(out, substitute(msg2, '^[\r\n]*', '', ''))
+HexPairDiffPrev
+call add(out, HexPairStatus())
+redir => msg3
+silent! HexPairDiff $WORK/diffa.bin
+redir END
+call add(out, substitute(substitute(msg3, '^[\r\n]*', '', ''), '\n', ' ', 'g'))
+HexPairDiff!
+call add(out, string([get(b:, 'hexpair_diff_file', ''), get(b:, 'hexpair_diff_hex', ''), len(get(w:, 'hexpair_diff_ids', []))]))
+call add(out, string([HexPairPagedCountDifferences('00112233', '00112233'), HexPairPagedCountDifferences('00112233', '0011ff33'), HexPairPagedCountDifferences('00112233', 'ffffffff'), HexPairPagedCountDifferences('00112233', '0011'), HexPairPagedCountDifferences('', '')]))
+let g:mine = repeat('a1b2c3d4', 32768)
+let g:theirs = substitute(g:mine, '^\(.\{100000}\)..', '\1ff', '')
+call add(out, string(HexPairPagedCountDifferences(g:mine, g:theirs)))
+call writefile(out, '$WORK/tdf.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tdf.vim" < /dev/null
+check "the first difference, by halving" "[-1, 2, 3, -1]" \
+    "$(sed -n 1p "$WORK/tdf.out")"
+# One string being a prefix of the other IS a difference, at the point
+# where the shorter one ends.
+check "and the last one" "[-1, 5, 5]" "$(sed -n 2p "$WORK/tdf.out")"
+check "two files that agree over the page say so" \
+    "hexpair: bytes 513-1024 are the same in other.bin" "$(sed -n 3p "$WORK/tdf.out")"
+check_path "and one that does not says how much and where" \
+    "hexpair: 1 of the 512 bytes on this page differ from $WORK/diffb.bin, first at byte 101 (0x65)" \
+    "$(sed -n 4p "$WORK/tdf.out")"
+check "the differing byte is marked in both columns" "[[8, 23, 2], [8, 64, 1]]" \
+    "$(sed -n 5p "$WORK/tdf.out")"
+check "and the jumps walk them, across pages" "hex 1/10 @0x65 (101)" \
+    "$(sed -n 6p "$WORK/tdf.out")"
+check "the second is on another page" "hex 3/10 @0x5dd (1501)" \
+    "$(sed -n 7p "$WORK/tdf.out")"
+check "the third is the file's last byte" "hex 10/10 @0x1388 (5000)" \
+    "$(sed -n 8p "$WORK/tdf.out")"
+check "past the last one it says there is none" \
+    "hexpair: no change after byte 5000" "$(sed -n 9p "$WORK/tdf.out")"
+check "and back again finds the one before" "hex 3/10 @0x5dd (1501)" \
+    "$(sed -n 10p "$WORK/tdf.out")"
+check "comparing a view with its own file is refused" \
+    "hexpair: that is this view's own file" "$(sed -n 11p "$WORK/tdf.out")"
+check "and the bang stops comparing" "['', '', 0]" "$(sed -n 12p "$WORK/tdf.out")"
+# Counting the differing bytes skips whole blocks that match and only
+# takes apart the ones that do not, so what has to be pinned is that it
+# still answers what a walk over every byte would: none, one in the
+# middle, all of them, and a second file that ends early - which counts
+# as differing, because that is what a file ending early is.
+check "counting the differing bytes" \
+    "[[0, -1], [1, 2], [4, 0], [2, 2], [0, -1]]" "$(sed -n 13p "$WORK/tdf.out")"
+# On a full 128 KiB page, where the block skipping is what keeps this
+# under ten milliseconds instead of the five seconds a walk cost.
+check "on a page-sized run, one byte in" "[1, 50000]" "$(sed -n 14p "$WORK/tdf.out")"
+
+# --- The jumps move between changes, not through the bytes of one ---------
+# A change is a run of differing bytes, and these jumps are for moving
+# between changes: from inside one, forward goes to the NEXT one, and
+# backward to the start of the one the cursor is in - which is what |[c|
+# does in a diff. The fixture differs in three runs: bytes 2-5, 1001-1201
+# (another page) and the last byte.
+cat > "$WORK/trun.vim" <<EOF
+$(printf "$HEX")
+function! Msg(m) abort
+  let lines = filter(split(a:m, "\n"), 'v:val =~# "hexpair:"')
+  return empty(lines) ? '' : matchstr(lines[-1], 'hexpair:[^ ]* [^ ]* change')
+endfunction
+let out = []
+call add(out, string([HexPairPagedFirstAgreement('001122', '001122'), HexPairPagedFirstAgreement('ff1122', '001122'), HexPairPagedFirstAgreement('ffee22', '0011dd'), HexPairPagedFirstAgreement('001122', '0011')]))
+call add(out, string([HexPairPagedLastAgreement('001122', '001122'), HexPairPagedLastAgreement('0011ff', '001100'), HexPairPagedLastAgreement('ffee22', '0011dd'), HexPairPagedLastAgreement('001122', '0011')]))
+HexPairOpen $WORK/runa.bin 1
+silent HexPairDiff $WORK/runb.bin
+HexPairGoOffset 1
+redir => m1
+silent HexPairDiffNext
+redir END
+call add(out, HexPairStatus() . ' | ' . Msg(m1))
+silent HexPairDiffNext
+call add(out, HexPairStatus())
+silent HexPairDiffNext
+call add(out, HexPairStatus())
+redir => m2
+silent HexPairDiffNext
+redir END
+call add(out, matchstr(m2, 'no change after byte \\d\\+'))
+HexPairGoOffset 1100
+redir => m3
+silent HexPairDiffPrev
+redir END
+call add(out, HexPairStatus() . ' | ' . Msg(m3))
+silent HexPairDiffPrev
+call add(out, HexPairStatus())
+HexPairGoOffset 1100
+silent HexPairDiffNext
+call add(out, HexPairStatus())
+call writefile(out, '$WORK/trun.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/trun.vim" < /dev/null
+# The pure halves first: where two runs of hex agree, from either end. A
+# byte the shorter run does not reach is a difference, not an agreement.
+check "where two runs first agree" "[0, 1, -1, 0]" "$(sed -n 1p "$WORK/trun.out")"
+check "and where they last agree" "[2, 1, -1, 1]" "$(sed -n 2p "$WORK/trun.out")"
+check "the first change is entered at its first byte" \
+    "hex 1/10 @0x2 (2) | hexpair: next change" "$(sed -n 3p "$WORK/trun.out")"
+# From inside the first change (its bytes 2-5), the next jump clears the
+# whole of it rather than stepping to byte 3.
+check "and the next jump clears the whole of it" "hex 2/10 @0x3e9 (1001)" \
+    "$(sed -n 4p "$WORK/trun.out")"
+check "then the last byte, which is a change of its own" \
+    "hex 10/10 @0x1388 (5000)" "$(sed -n 5p "$WORK/trun.out")"
+check "and then there are no more" "no change after byte 5000" \
+    "$(sed -n 6p "$WORK/trun.out")"
+# Backwards from the middle of the second change: its own start, as |[c|
+# does in a diff.
+check "backwards from inside a change goes to its start" \
+    "hex 2/10 @0x3e9 (1001) | hexpair: previous change" \
+    "$(sed -n 7p "$WORK/trun.out")"
+check "and again to the one before that" "hex 1/10 @0x2 (2)" \
+    "$(sed -n 8p "$WORK/trun.out")"
+check "forwards from inside it skips to the next" "hex 10/10 @0x1388 (5000)" \
+    "$(sed -n 9p "$WORK/trun.out")"
+
+# --- A file that is longer differs from where it grows --------------------
+cat > "$WORK/tdf2.vim" <<EOF
+$(printf "$HEX")
+HexPairOpen $WORK/diffa.bin 10
+redir => msg
+silent HexPairDiff $WORK/diffc.bin
+redir END
+let onpage = substitute(msg, '^[\r\n]*', '', '')
+HexPairGoOffset 4999
+redir => msg2
+silent HexPairDiffNext
+redir END
+call writefile([onpage, substitute(msg2, '^[\r\n]*', '', ''), HexPairStatus()], '$WORK/tdf2.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tdf2.vim" < /dev/null
+check_path "a longer file agrees over the bytes it shares" \
+    "hexpair: bytes 4609-5000 are the same in $WORK/diffc.bin" \
+    "$(sed -n 1p "$WORK/tdf2.out")"
+# The bytes past this file's end are a difference too, and the jump lands
+# on the first of them.
+check_path "but differs from where it grows, with nowhere to put the cursor" \
+    "hexpair: $WORK/diffc.bin is longer: its bytes from 5001 (0x1389) on have nothing here to differ from" \
+    "$(sed -n 2p "$WORK/tdf2.out")"
+
+# ===========================================================================
+# Finding bytes, and replacing them
+# ===========================================================================
+# The fixture has "de ad be ef" three times - early, on another page, and
+# at the very end - and the text "hello" once.
+cat > "$WORK/tfind.vim" <<EOF
+$(printf "$HEX")
+function! Msg(m) abort
+  let lines = filter(split(a:m, "\n"), 'v:val =~# "hexpair:"')
+  return empty(lines) ? '' : matchstr(lines[-1], 'hexpair:.*')
+endfunction
+let out = []
+call add(out, string([HexPairPagedParseFindPattern('de ad be ef'), HexPairPagedParseFindPattern('de ?? be')]))
+call add(out, string([HexPairPagedParseFindPattern('xyz').msg, HexPairPagedParseFindPattern('abc').msg, HexPairPagedParseFindPattern('  ').msg]))
+call add(out, HexPairPagedTextToHex('hello'))
+" A hex index is a nibble, and half of them are the wrong half of a byte.
+call add(out, string([HexPairPagedFindInHex('00deadbeef', 'deadbeef', 0, 1), HexPairPagedFindInHex('0deadbeef0', 'deadbeef', 0, 1), HexPairPagedFindInHex('deadbeefdeadbeef', 'deadbeef', 16, 0), HexPairPagedFindInHex('deadbeefdeadbeef', 'deadbeef', 8, 0)]))
+call add(out, string(HexPairPagedSplitReplaceArgs('de ad / 11 22')))
+HexPairOpen $WORK/find1.bin 1
+redir => m1
+silent HexPairFind de ad be ef
+redir END
+call add(out, Msg(m1) . ' | ' . HexPairStatus())
+call add(out, string(HexPairPagedFindPositions(2, 33)))
+HexPairFindNext
+call add(out, HexPairStatus())
+HexPairFindNext
+call add(out, HexPairStatus())
+redir => m2
+silent HexPairFindNext
+redir END
+call add(out, Msg(m2) . ' | ' . HexPairStatus())
+redir => m3
+silent HexPairFindText hello
+redir END
+call add(out, Msg(m3) . ' | ' . HexPairStatus())
+redir => m4
+silent! HexPairFind ff ff ff ff ff
+redir END
+call add(out, Msg(m4))
+silent HexPairPageGoto 1
+silent HexPairFind 0e 0f 10
+call add(out, string(HexPairPagedFindPositions(2, 3)))
+call add(out, string(HexPairPagedFindPositions(3, 3)))
+silent HexPairFind!
+call add(out, string([HexPairPagedFindPositions(2, 33), execute('nmap') =~# 'HexPairFindClear', execute('nmap') =~# 'HexPairDiffClear']))
+call writefile(out, '$WORK/tfind.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tfind.vim" < /dev/null
+check "a pattern is bytes, and ? is any nibble" \
+    "[{'bytes': 4, 'hex': 'deadbeef'}, {'bytes': 3, 'hex': 'de..be'}]" \
+    "$(sed -n 1p "$WORK/tfind.out")"
+check "and anything else is refused, with the reason" \
+    "['hexpair: ''xyz'' is not a byte pattern (hex digits, ? for any nibble)', 'hexpair: ''abc'' is 3 hex digits - a byte is two, so a pattern is an even number of them', 'hexpair: nothing to find']" \
+    "$(sed -n 2p "$WORK/tfind.out")"
+check "text is searched for as its bytes" "68656c6c6f" "$(sed -n 3p "$WORK/tfind.out")"
+check "a match must start on a byte, not between two" "[2, -1, 8, 0]" \
+    "$(sed -n 4p "$WORK/tfind.out")"
+check "and the two halves of a replace-all are told apart by the slash" \
+    "{'pattern': 'de ad ', 'replacement': ' 11 22'}" "$(sed -n 5p "$WORK/tfind.out")"
+check_path "the first match is found and jumped to" \
+    "hexpair: bytes de ad be ef at byte 301 (0x12d) | hex 1/10 @0x12d (301)" \
+    "$(sed -n 6p "$WORK/tfind.out")"
+check "and marked wherever it is on the page" "[[20, 47, 11], [20, 72, 4]]" \
+    "$(sed -n 7p "$WORK/tfind.out")"
+check "the next one is on another page" "hex 4/10 @0x7d1 (2001)" \
+    "$(sed -n 8p "$WORK/tfind.out")"
+check "and the last one is at the end of the file" "hex 10/10 @0x1385 (4997)" \
+    "$(sed -n 9p "$WORK/tfind.out")"
+# 'wrapscan' is Vim's own option, and this obeys it like Vim's searches do.
+check "past the last, it wraps and says so" \
+    "hexpair: bytes de ad be ef at byte 301 (0x12d) (wrapped) | hex 1/10 @0x12d (301)" \
+    "$(sed -n 10p "$WORK/tfind.out")"
+check "text is found the same way" \
+    "hexpair: text 'hello' at byte 701 (0x2bd) | hex 2/10 @0x2bd (701)" \
+    "$(sed -n 11p "$WORK/tfind.out")"
+check "and what is not there says so" \
+    "hexpair: bytes ff ff ff ff ff not found in this file" \
+    "$(sed -n 12p "$WORK/tfind.out")"
+# Only the bytes the given lines hold are searched, which is what keeps a
+# pattern matching thousands of times on a page from costing a second per
+# redraw. Two things have to survive that: a match spanning the end of a
+# line is still marked on both, and one that STARTS above the range and
+# reaches into it is marked on the line it reaches - the reason the slice
+# begins the pattern's length early.
+check "a match over a line end is marked on both lines" \
+    "[[2, 53, 5], [2, 74, 2], [3, 11, 2], [3, 60, 1]]" \
+    "$(sed -n 13p "$WORK/tfind.out")"
+check "and on the second line alone when that is all that is asked for" \
+    "[[3, 11, 2], [3, 60, 1]]" "$(sed -n 14p "$WORK/tfind.out")"
+# The bang is how the marking goes away, and it has a <Plug> target of its
+# own for that - as :HexPairDiff! does - because "how do I turn this off"
+# is a question with a key on it.
+check "the bang clears the marking, and both clears have a target" \
+    "[[], 1, 1]" "$(sed -n 15p "$WORK/tfind.out")"
+
+# --- Replacing what was found ---------------------------------------------
+# Both commands edit the PAGE, exactly as typing over the dump would: the
+# bytes are marked as changed and nothing reaches the file until :w does.
+cat > "$WORK/trep.vim" <<EOF
+$(printf "$HEX")
+function! Msg(m) abort
+  let lines = filter(split(a:m, "\n"), 'v:val =~# "hexpair:"')
+  return empty(lines) ? '' : matchstr(lines[-1], 'hexpair:.*')
+endfunction
+HexPairOpen $WORK/rep1.bin 1
+let out = []
+silent HexPairFind de ad be ef
+redir => m1
+silent HexPairReplace 11 22 33 44
+redir END
+call add(out, Msg(m1) . ' | modified=' . &l:modified)
+call add(out, string(HexPairPagedModifiedPositions(20, 20)))
+write
+bwipeout!
+HexPairOpen $WORK/rep2.bin 1
+redir => m2
+silent HexPairReplaceAllInPage de ad be ef / aa bb cc dd
+redir END
+call add(out, Msg(m2))
+write
+" A shorter replacement shortens the PAGE; making the FILE shorter is the
+" write path's business, and this stops before it.
+silent HexPairFind aa bb cc dd
+silent HexPairReplace 99
+call add(out, string([strlen(substitute(join(HexPairPagedScanLines(), ''), '[^0-9a-fA-F]', '', 'g')) / 2, &l:modified]))
+redir => m3
+silent! HexPairReplace 11
+redir END
+call add(out, Msg(m3))
+redir => m4
+silent! HexPairReplaceAllInPage de ad / 11 ??
+redir END
+call add(out, Msg(m4))
+call writefile(out, '$WORK/trep.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/trep.vim" < /dev/null
+check "the match under the cursor is what gets replaced" \
+    "hexpair: 4 bytes replaced at 301 (0x12d) | modified=1" \
+    "$(sed -n 1p "$WORK/trep.out")"
+check "and the new bytes are marked as changed" "[[20, 47, 11], [20, 72, 4]]" \
+    "$(sed -n 2p "$WORK/trep.out")"
+check "a written replacement is in the file" "11223344" \
+    "$("$HEXPAIR_XXD" -s 300 -l 4 -p "$WORK/rep1.bin")"
+check "replace-all counts what it did" \
+    "hexpair: 1 occurrence replaced on this page" "$(sed -n 3p "$WORK/trep.out")"
+check "and that reached its file too" "aabbccdd" \
+    "$("$HEXPAIR_XXD" -s 300 -l 4 -p "$WORK/rep2.bin")"
+# Four bytes became one, so the page holds 509 of its 512.
+check "a shorter replacement shortens the page" "[509, 1]" \
+    "$(sed -n 4p "$WORK/trep.out")"
+check "the cursor has to be on a match to replace it" \
+    "hexpair: the cursor is not on a match - :HexPairFindNext first" \
+    "$(sed -n 5p "$WORK/trep.out")"
+check "and a replacement cannot have wildcards in it" \
+    "hexpair: a replacement cannot have wildcards in it" \
+    "$(sed -n 6p "$WORK/trep.out")"
+
+# --- The markings in the windowed text view --------------------------------
+# A dump has three columns per byte and one for its character; a page of
+# text has one column per byte and lines as long as the bytes between two
+# 0x0a make them. All four markings are built from byte runs and put on
+# the lines here, so what is checked is that a run lands on the right line
+# at the right column - including one that spans a line break, whose own
+# byte has no column to mark.
+cat > "$WORK/ttmark.vim" <<EOF
+$(printf "$HEX")
+let out = []
+call add(out, string([HexPairPagedTextRuns('abcdef', 'abXdef', 100), HexPairPagedTextRuns('abcdef', 'abcdef', 0), HexPairPagedTextRuns('abcdef', 'abc', 0), HexPairPagedTextRuns('abc', 'abcdef', 0)]))
+call add(out, string(HexPairPagedTextPositions([[2, 0, 10], [3, 11, 10]], [[5, 3]])))
+call add(out, string(HexPairPagedTextPositions([[2, 0, 10], [3, 11, 10]], [[8, 6]])))
+HexPairOpen $WORK/tmark1.bin 1
+HexPairToggle
+call add(out, string([getline(2), getline(3), getline(4)]))
+silent HexPairDiff $WORK/tmark2.bin
+call add(out, string(HexPairPagedMarkingPositions('diff', 2, 4)))
+HexPairGoOffset 6
+HexPairMark m1
+call add(out, string(HexPairPagedMarkingPositions('mark', 2, 4)))
+silent HexPairFind 4b 4c
+call add(out, string(HexPairPagedMarkingPositions('find', 2, 4)))
+call setline(4, 'UVWXYZ9999')
+call add(out, string([&modified, HexPairPagedMarkingPositions('modified', 2, 4)]))
+call writefile(out, '$WORK/ttmark.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/ttmark.vim" < /dev/null
+# The two pure halves first: where two strings of bytes part company, and
+# where a run of bytes lands on the lines that hold it.
+check "runs are where two lines of bytes differ" \
+    "[[[102, 1]], [], [[3, 3]], []]" "$(sed -n 1p "$WORK/ttmark.out")"
+check "a run inside one line is one position" "[[2, 6, 3]]" \
+    "$(sed -n 2p "$WORK/ttmark.out")"
+# Bytes 8-13 with a line break at 10: two pieces, and the break itself is
+# not marked because it has no column.
+check "and one across a line break is two" "[[2, 9, 2], [3, 1, 3]]" \
+    "$(sed -n 3p "$WORK/ttmark.out")"
+check "the text view holds the bytes between the breaks" \
+    "['ABCDEFGHIJ', 'KLMNOPQRST', 'UVWXYZ0123']" "$(sed -n 4p "$WORK/ttmark.out")"
+check "what differs from the other file is marked where it is" \
+    "[[2, 3, 2], [4, 4, 1]]" "$(sed -n 5p "$WORK/ttmark.out")"
+check "so is the byte a mark stands on" "[[2, 6, 1]]" \
+    "$(sed -n 6p "$WORK/ttmark.out")"
+check "and the bytes a search found" "[[3, 1, 2]]" \
+    "$(sed -n 7p "$WORK/ttmark.out")"
+# The edited bytes are the one layer that is about the BUFFER, and in this
+# view that means comparing what the lines hold against the page as it was
+# read - string against string, in the text view's own spelling.
+check "and the bytes edited and not yet written" "[1, [[4, 7, 4]]]" \
+    "$(sed -n 8p "$WORK/ttmark.out")"
+
+# --- The same, on the bytes a real file is made of -------------------------
+# CRLF line endings and multi-byte characters are where a byte offset and
+# a column part company, and both views are byte-exact by construction:
+# everything measures in bytes (strlen(), strpart(), and matchaddpos()'s
+# own columns), and a paged buffer is forced to 'fileformat' unix so that
+# line2byte() counts one byte per line break wherever Vim is running - on
+# Windows a new buffer would default to dos and every offset past the
+# first line would be out by the number of lines above it.
+cat > "$WORK/tmb.vim" <<EOF
+$(printf "$HEX")
+set encoding=utf-8
+set fileformats=dos,unix
+let out = []
+HexPairOpen $WORK/mb1.bin 1
+call add(out, 'ff ' . &fileformat)
+HexPairToggle
+call add(out, 'ff ' . &fileformat . ', lines ' . string(map(range(2, line('\$') - 1), 'strlen(getline(v:val))')) . ', at ' . string(map(range(2, line('\$') - 1), 'line2byte(v:val) - line2byte(2)')))
+silent HexPairDiff $WORK/mb2.bin
+call add(out, string(HexPairPagedMarkingPositions('diff', 2, line('\$') - 1)))
+HexPairGoOffset 2
+HexPairMark m
+call add(out, string(HexPairPagedMarkingPositions('mark', 2, line('\$') - 1)))
+silent HexPairFind c5 99
+call add(out, string(HexPairPagedMarkingPositions('find', 2, line('\$') - 1)))
+HexPairToggle
+HexPairGoOffset 20
+call add(out, 'hex ' . HexPairStatus())
+HexPairToggle
+HexPairGoOffset 20
+call add(out, 'text ' . HexPairStatus())
+call setline(2, substitute(getline(2), '\\%d269', 'XY', ''))
+call add(out, string(HexPairPagedMarkingPositions('modified', 2, 3)))
+call writefile(out, '$WORK/tmb.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tmb.vim" < /dev/null
+check "a paged buffer is 'fileformat' unix whatever the platform prefers" \
+    "ff unix" "$(sed -n 1p "$WORK/tmb.out")"
+# Line lengths in BYTES, and the CR that ends each line counted among
+# them: 24 bytes of text plus the CR, then the line break Vim itself adds.
+check "and its text view measures lines in bytes, CR included" \
+    "ff unix, lines [24, 17, 7, 0], at [0, 25, 43, 51]" \
+    "$(sed -n 2p "$WORK/tmb.out")"
+# The changed byte is the FIRST of a two-byte character: one byte marked,
+# at the column that byte is at.
+check "a byte inside a character is marked as one byte" "[[2, 2, 1]]" \
+    "$(sed -n 3p "$WORK/tmb.out")"
+check "so is the byte a mark stands on" "[[2, 2, 1]]" \
+    "$(sed -n 4p "$WORK/tmb.out")"
+check "and both bytes of a character a search matched" "[[2, 2, 2]]" \
+    "$(sed -n 5p "$WORK/tmb.out")"
+# The hex view reaches every byte; the text view can only put the cursor
+# on a character, so a byte inside one lands on its first - byte 20 here
+# is the second of a two-byte character.
+check "the hex view reaches a byte inside a character" "hex hex 1/1 @0x14 (20)" \
+    "$(sed -n 6p "$WORK/tmb.out")"
+check "and the text view lands on the character it belongs to" \
+    "text txt 1/1 @0x13 (19)" "$(sed -n 7p "$WORK/tmb.out")"
+# Two bytes of a character replaced by two ASCII ones: the same two bytes.
+check "an edit is marked byte for byte, not character for character" \
+    "[[2, 19, 2]]" "$(sed -n 8p "$WORK/tmb.out")"
+
+# ===========================================================================
+# Property: any shape of dump writes the bytes it spells
+# ===========================================================================
+# The rules say the offset and ASCII columns are decoration, that lines
+# may be any length, and that only the hex digits count. The tests above
+# check that one case at a time; this checks it on dumps nobody wrote by
+# hand: six rounds of a seeded generator that renders the same bytes in a
+# different shape every time - offsets or not, ASCII column or not, upper
+# or lower case, lines of random length, empty lines through the middle -
+# with a growing number of random single-byte edits in them.
+#
+# The seed is fixed, so a failure is reproducible and its round says which
+# shape did it.
+"$PY" - "$WORK" <<'EOF'
+import os, random, sys
+
+w = sys.argv[1]
+rnd = random.Random(20260822)
+PAGE, BASE = 512, 512          # page 2 at 512 bytes a page
+data = bytes(rnd.randrange(256) for _ in range(3000))
+
+def render(page_bytes, base):
+    """The same bytes as a dump of some arbitrary but legal shape."""
+    hexs = ''.join('%02x' % b for b in page_bytes)
+    if rnd.random() < 0.5:
+        hexs = hexs.upper()
+    lines, i, off = [], 0, base
+    while i < len(hexs):
+        take = rnd.choice([2, 4, 8, 16, 32, 48, 64]) 
+        chunk = hexs[i:i + take]
+        i += take
+        # bytes separated by a single space, or by nothing at all
+        spaced = ' '.join(chunk[k:k + 2] for k in range(0, len(chunk), 2)) \
+                 if rnd.random() < 0.7 else chunk
+        line, offsetted = spaced, False
+        if rnd.random() < 0.5:                 # an offset column to ignore
+            line, offsetted = '%08x: %s' % (off, spaced), True
+        # An ASCII column only where an offset column already is: the rule
+        # is that a line's offset column ends at its first ':', so a BARE
+        # line whose ASCII part contains one (byte 0x3a) would have that
+        # read as the offset column - which is the rule working as
+        # written, and not a shape to generate.
+        if offsetted and rnd.random() < 0.4:
+            line = line + '  ' + ''.join(
+                chr(b) if 0x20 <= b < 0x7f else '.'
+                for b in [int(chunk[k:k + 2], 16)
+                          for k in range(0, len(chunk), 2)])
+        lines.append(line)
+        if rnd.random() < 0.15:                # a line holding nothing
+            lines.append('')
+        off += take // 2
+    return lines
+
+for r in range(1, 7):
+    page = bytearray(data[BASE:BASE + PAGE])
+    for _ in range(r - 1):                     # round 1 changes nothing
+        page[rnd.randrange(PAGE)] = rnd.randrange(256)
+    expect = data[:BASE] + bytes(page) + data[BASE + PAGE:]
+    open(os.path.join(w, 'prop%d.bin' % r), 'wb').write(data)
+    open(os.path.join(w, 'prop%d.expect' % r), 'wb').write(expect)
+    with open(os.path.join(w, 'prop%d.dump' % r), 'w') as f:
+        f.write('\n'.join(render(page, BASE)) + '\n')
+EOF
+for round in 1 2 3 4 5 6; do
+    cat > "$WORK/tprop.vim" <<EOF
+$(printf "$HEX")
+HexPairOpen $WORK/prop$round.bin 2
+let lines = readfile('$WORK/prop$round.dump')
+silent %delete _
+call setline(1, lines)
+write
+call writefile([string([&l:modified, HexPairPagedValidate()])], '$WORK/tprop.out')
+qa!
+EOF
+    "$HEXPAIR_VIM" -es -u NONE -S "$WORK/tprop.vim" < /dev/null
+    check "round $round: the dump wrote the bytes it spells" \
+        "$(hash_range "$WORK/prop$round.expect" 0 -1)" \
+        "$(hash_range "$WORK/prop$round.bin" 0 -1)"
+    check "round $round: and the page came out clean" "[0, {}]" \
+        "$(cat "$WORK/tprop.out")"
+done
+
+# ===========================================================================
+# The same commands, driven from the windowed text view
+# ===========================================================================
+# Marks, search and comparison all ask "which byte is the cursor on" and
+# "put the cursor on this byte", and the text view answers both
+# differently from the hex one - so each of them has to be driven from
+# there too, not only from the dump.
+cat > "$WORK/ttv5.vim" <<EOF
+$(printf "$HEX")
+HexPairOpen $WORK/tview1.bin 3
+HexPairToggle
+let out = [b:hexpair_view]
+call cursor(3, 5)
+HexPairMark inside
+call add(out, HexPairStatus())
+HexPairPageGoto 7
+HexPairGoMark inside
+call add(out, b:hexpair_view . ' ' . HexPairStatus())
+HexPairGoOffset 1
+silent HexPairFind de ad be ef
+call add(out, b:hexpair_view . ' ' . HexPairStatus())
+silent HexPairDiff $WORK/tview2.bin
+silent HexPairDiffNext
+call add(out, b:hexpair_view . ' ' . HexPairStatus())
+redir => msg
+silent! HexPairReplace 11 22
+redir END
+call add(out, matchstr(msg, 'hexpair:.*'))
+call writefile(out, '$WORK/ttv5.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/ttv5.vim" < /dev/null
+check "a mark set in the text view is a byte of the file" \
+    "txt 3/10 @0x410 (1040)" "$(sed -n 2p "$WORK/ttv5.out")"
+# The jump crosses pages and stays in the view it was made from.
+check "and going back to it keeps the view" "text txt 3/10 @0x410 (1040)" \
+    "$(sed -n 3p "$WORK/ttv5.out")"
+check "searching works from there too" "text txt 1/10 @0x12d (301)" \
+    "$(sed -n 4p "$WORK/ttv5.out")"
+check "and so does walking the differences" "text txt 4/10 @0x7d1 (2001)" \
+    "$(sed -n 5p "$WORK/ttv5.out")"
+# Replacing is the one that does not: there is no hex to put bytes over.
+check "replacing says which view it wants" \
+    "hexpair: replacing works in the hex view; :HexPairToggle first" \
+    "$(sed -n 6p "$WORK/ttv5.out")"
+
+# ===========================================================================
+# Replacing is an edit, and the short names are the same commands
+# ===========================================================================
+# What a replacement does to the page is an edit like any typed one, so a
+# single u has to take it back - the page-loading path clears the undo
+# history on purpose, and a replacement must not go through that.
+cat > "$WORK/trepu.vim" <<EOF
+$(printf "$HEX")
+HexPairOpen $WORK/repu1.bin 1
+let out = []
+redir => msg
+silent HexPairReplaceAllInPage c5 a1 / 69
+redir END
+call add(out, matchstr(msg, 'hexpair:.*'))
+let flat = substitute(join(HexPairPagedScanLines(), ''), '[^0-9a-fA-F]', '', 'g')
+call add(out, string([strlen(flat) / 2, strpart(flat, 16, 16), strpart(flat, 72, 16), &l:modified]))
+undo
+let back = substitute(join(HexPairPagedScanLines(), ''), '[^0-9a-fA-F]', '', 'g')
+call add(out, string([strlen(back) / 2, strpart(back, 16, 16), &l:modified]))
+call writefile(out, '$WORK/trepu.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/trepu.vim" < /dev/null
+check "every occurrence is replaced, and each one on its own" \
+    "hexpair: 3 occurrences replaced on this page" "$(sed -n 1p "$WORK/trepu.out")"
+# Two bytes became one, three times - so 512 bytes became 509. Where two
+# occurrences sat next to each other, two single bytes come out of it:
+# that is two replacements, not one gone wrong.
+check "two bytes become one, and two next to each other become two" \
+    "[509, '6941414141414141', '6969414141414141', 1]" \
+    "$(sed -n 2p "$WORK/trepu.out")"
+check "and one undo takes the whole replacement back" \
+    "[512, 'c5a1414141414141', 0]" "$(sed -n 3p "$WORK/trepu.out")"
+
+# --- The HP names are the HexPair ones ------------------------------------
+# One implementation, two names: the short one is a command whose body is
+# the long one, so bang, arguments and completion come along.
+cat > "$WORK/tshort.vim" <<EOF
+$(printf "$HEX")
+HPOpen $WORK/short1.bin 3
+let out = [HexPairStatus()]
+HPPageGoto \$
+call add(out, HexPairStatus())
+HPGoOffset +16
+call add(out, HexPairStatus())
+HPMark here
+redir => msg
+silent HPMarks
+redir END
+call add(out, matchstr(msg, 'here[^\n]*'))
+silent HPFind 00 01 02
+call add(out, HexPairStatus())
+call add(out, [exists(':HPFind'), exists(':HPReplaceAllInPage'), exists(':HexPairFind')])
+call writefile([string(out)], '$WORK/tshort.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tshort.vim" < /dev/null
+check "the short names take the same pages, steps, marks and patterns" \
+    "['hex 3/10 @0x401 (1025)', 'hex 10/10 @0x1201 (4609)', 'hex 10/10 @0x1211 (4625)', 'here             byte 4625 (0x1211) of 5000, page 10', 'hex 10/10 @0x1301 (4865)', [2, 2, 2]]" \
+    "$(cat "$WORK/tshort.out")"
+
+# ... and the namespace can be left alone, for anyone whose own commands
+# start with HP.
+cat > "$WORK/tshort2.vim" <<EOF
+let g:hexpair_short_commands = 0
+source $PLUGIN
+call writefile([string([exists(':HPFind'), exists(':HexPairFind')])], '$WORK/tshort2.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tshort2.vim" < /dev/null
+check "and can be turned off without touching the long ones" "[0, 2]" \
+    "$(cat "$WORK/tshort2.out")"
+
+# --- Another window's markings are refreshed from this one ----------------
+# A window that is scrolled without being entered - 'scrollbind' - raises
+# no event of its own. Refreshing the others must leave the current window
+# current, whatever it finds in them.
+cat > "$WORK/twin.vim" <<EOF
+$(printf "$HEX")
+HexPairOpen $WORK/short1.bin 3
+HexPairSplit 5
+let here = winnr()
+call cursor(4, 11)
+call writefile([string([here, winnr(), winnr('\$'), b:hexpair_page_index + 1])], '$WORK/twin.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/twin.vim" < /dev/null
+check "refreshing the other windows leaves this one current" "[1, 1, 2, 5]" \
+    "$(cat "$WORK/twin.out")"
+
+# --- What a scan says while it runs ---------------------------------------
+# A scan of a big file reads it a megabyte at a time and can take minutes,
+# which is indistinguishable from a hang, so it says where it has got to.
+# The message is the part that can be wrong in a way anyone would notice,
+# so it is a pure function and is checked as one.
+cat > "$WORK/tprog.vim" <<EOF
+$(printf "$HEX")
+let out = []
+call add(out, string([HexPairPagedSizeText(512), HexPairPagedSizeText(1536), HexPairPagedSizeText(1024 * 1024 * 3 / 2), HexPairPagedSizeText(1024 * 1024 * 1024 * 2)]))
+call add(out, HexPairPagedProgressText('comparing', 0, 1024 * 1024 * 1024))
+call add(out, HexPairPagedProgressText('searching', 3 * 1024 * 1024, 4 * 1024 * 1024))
+call add(out, HexPairPagedProgressText('searching back', 0, 0))
+call writefile(out, '$WORK/tprog.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tprog.vim" < /dev/null
+check "a size reads the way a person says it" \
+    "['512 bytes', '1.5 KiB', '1.5 MiB', '2.0 GiB']" "$(sed -n 1p "$WORK/tprog.out")"
+check "a scan says how far it has got" \
+    "hexpair: comparing 0% of 1.0 GiB (CTRL-C stops)" "$(sed -n 2p "$WORK/tprog.out")"
+check "and in which direction" \
+    "hexpair: searching 75% of 4.0 MiB (CTRL-C stops)" "$(sed -n 3p "$WORK/tprog.out")"
+# A file with no bytes is not a division by zero, and is done by definition.
+check "an empty file is 100%" \
+    "hexpair: searching back 100% of 0 bytes (CTRL-C stops)" \
+    "$(sed -n 4p "$WORK/tprog.out")"
+
+# --- A match that straddles a page boundary ---------------------------------
+# It belongs to both pages it touches, and fits whole inside neither - so
+# without a margin of the neighbouring page's bytes it is found in neither,
+# and the byte :HexPairFindNext just jumped to sits there unmarked. Both
+# views mark the part that is on the page in view.
+cat > "$WORK/tstraddle.vim" <<EOF
+$(printf "$HEX")
+let out = []
+HexPairOpen $WORK/straddle.bin 1
+silent HexPairFind 64 20
+call add(out, HexPairStatus())
+call add(out, string(HexPairPagedMarkingPositions('find', 2, 33)))
+HexPairPageNext
+call add(out, HexPairStatus() . ' ' . string(HexPairPagedMarkingPositions('find', 2, 33)))
+HexPairPagePrev
+HexPairToggle
+call add(out, string(HexPairPagedMarkingPositions('find', 2, line('\$') - 1)))
+call writefile(out, '$WORK/tstraddle.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tstraddle.vim" < /dev/null
+check "the search lands on the first byte of the match" "hex 1/2 @0x200 (512)" \
+    "$(sed -n 1p "$WORK/tstraddle.out")"
+# Page 1 holds one byte of it: the last one, in both columns.
+check "and the page it starts on marks the byte it has" \
+    "[[33, 56, 2], [33, 75, 1]]" "$(sed -n 2p "$WORK/tstraddle.out")"
+# Page 2 holds the other, at its very first byte.
+check "the page it ends on marks its share too" \
+    "hex 2/2 @0x201 (513) [[2, 11, 2], [2, 60, 1]]" \
+    "$(sed -n 3p "$WORK/tstraddle.out")"
+check "and the text view marks its one column" "[[4, 245, 1]]" \
+    "$(sed -n 4p "$WORK/tstraddle.out")"
+
+# --- Walking the edits that have not been written yet -----------------------
+# The same idea as walking the changes against another file, applied to
+# what is edited and not yet saved - and page-scoped by nature, since
+# turning a page needs an unmodified buffer or a bang that discards, so
+# edited bytes only ever exist on the page in view.
+cat > "$WORK/tmodjump.vim" <<EOF
+$(printf "$HEX")
+let out = []
+call add(out, string([HexPairPagedDifferingByteRuns('00112233', '00112233'), HexPairPagedDifferingByteRuns('00ff2233', '00112233'), HexPairPagedDifferingByteRuns('00ffee33', '00112233'), HexPairPagedDifferingByteRuns('00112233', '0011'), HexPairPagedDifferingByteRuns('0011', '00112233')]))
+call add(out, string(HexPairPagedJoinRuns([[7, 3], [5, 2], [20, 1], [1, 1]])))
+HexPairOpen $WORK/short1.bin 1
+redir => m0
+silent HexPairModifiedNext
+redir END
+call add(out, matchstr(m0, 'hexpair:[^ ]*.*'))
+call setline(3, substitute(getline(3), '^\\(00000010: \\)\\S\\S \\S\\S', '\\1ff ee', ''))
+call setline(8, substitute(getline(8), '^\\(00000060: \\)\\S\\S', '\\1aa', ''))
+HexPairGoOffset 1
+redir => m1
+silent HexPairModifiedNext
+redir END
+call add(out, matchstr(m1, 'hexpair:[^\n]*') . ' | ' . HexPairStatus())
+redir => m2
+silent HexPairModifiedNext
+redir END
+call add(out, matchstr(m2, 'hexpair:[^\n]*') . ' | ' . HexPairStatus())
+redir => m3
+silent HexPairModifiedNext
+redir END
+call add(out, matchstr(m3, 'hexpair:[^\n]*'))
+redir => m4
+silent HexPairModifiedPrev
+redir END
+call add(out, matchstr(m4, 'hexpair:[^\n]*') . ' | ' . HexPairStatus())
+call writefile(out, '$WORK/tmodjump.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tmodjump.vim" < /dev/null
+# A run of differing bytes, from either side of a length change: bytes the
+# shorter run does not reach are a difference that carries on to its end.
+check "the differing bytes come out as runs" \
+    "[[], [[1, 1]], [[1, 2]], [[2, 2]], []]" "$(sed -n 1p "$WORK/tmodjump.out")"
+check "and runs that touch are one run" "[[1, 1], [5, 5], [20, 1]]" \
+    "$(sed -n 2p "$WORK/tmodjump.out")"
+check "an unedited page says there is nothing to walk" \
+    "hexpair: nothing edited on this page" "$(sed -n 3p "$WORK/tmodjump.out")"
+check "the first edit is where the first edited byte is" \
+    "hexpair: edit 1 of 2 on this page, at byte 17 (0x11) | hex 1/10+ @0x11 (17)" \
+    "$(sed -n 4p "$WORK/tmodjump.out")"
+check "then the next one, wherever it is on the page" \
+    "hexpair: edit 2 of 2 on this page, at byte 97 (0x61) | hex 1/10+ @0x61 (97)" \
+    "$(sed -n 5p "$WORK/tmodjump.out")"
+check "and past the last it says so, without moving" \
+    "hexpair: no edit after byte 97 on this page" "$(sed -n 6p "$WORK/tmodjump.out")"
+check "backwards walks them the other way" \
+    "hexpair: edit 1 of 2 on this page, at byte 17 (0x11) | hex 1/10+ @0x11 (17)" \
+    "$(sed -n 7p "$WORK/tmodjump.out")"
+
+# The same from the windowed text view, where the comparison is string
+# against string rather than hex against hex.
+cat > "$WORK/tmodjump2.vim" <<EOF
+$(printf "$HEX")
+let out = []
+HexPairOpen $WORK/tmark1.bin 1
+HexPairToggle
+call setline(2, 'ABxyEFGHIJ')
+call setline(4, 'UVWXYZ99za')
+HexPairGoOffset 1
+for i in range(3)
+  redir => m
+  silent HexPairModifiedNext
+  redir END
+  call add(out, matchstr(m, 'hexpair:[^\n]*') . ' | ' . HexPairStatus())
+endfor
+call writefile(out, '$WORK/tmodjump2.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tmodjump2.vim" < /dev/null
+check "the text view walks its own edits" \
+    "hexpair: edit 1 of 2 on this page, at byte 3 (0x3) | txt 1/1+ @0x3 (3)" \
+    "$(sed -n 1p "$WORK/tmodjump2.out")"
+check "including one that ends a line" \
+    "hexpair: edit 2 of 2 on this page, at byte 29 (0x1d) | txt 1/1+ @0x1d (29)" \
+    "$(sed -n 2p "$WORK/tmodjump2.out")"
+check "and stops at the last of them" \
+    "hexpair: no edit after byte 29 on this page | txt 1/1+ @0x1d (29)" \
+    "$(sed -n 3p "$WORK/tmodjump2.out")"
+
+# --- Everything a user is given is in the release tarball -------------------
+# pack-release.py carries the file list by hand, and a new file that users
+# are told to source can be added to the repo, documented, and then simply
+# not ship - which is exactly what happened to hexpair.vimrc between one
+# commit and the next. The rule is mechanical: every .md, .vim, .txt and
+# hexpair.* outside the test directory is something a user gets.
+shipped=$(cd "$ROOT" && find . -maxdepth 2 -type f \
+    \( -name '*.md' -o -name '*.vim' -o -name '*.txt' -o -name 'hexpair.*' \) \
+    ! -path './test/*' ! -path './.git/*' ! -path './dist/*' \
+    | sed 's|^\./||' | sort | tr '\n' ' ')
+packed=$(sed -n '/^FILES/,/^]/p' "$ROOT/pack-release.py" \
+    | grep -o '"hexpair/[^"]*"' | tr -d '"' | sed 's|^hexpair/||' | sort \
+    | tr '\n' ' ')
+check "the packaging list is what the repository gives a user" \
+    "$shipped" "$packed"
+
+# --- The mappings file the plugin ships ------------------------------------
+# hexpair.vimrc is the maintainer's own set of mappings, kept in the repo so
+# that a vimrc can source it instead of copying it. Three things have to
+# hold: it defines what it says it does, it does NOT take a key the user has
+# already used, and it covers every <Plug> target the plugin defines - a
+# target with no key in here is one nobody would find.
+cat > "$WORK/tvimrc.vim" <<EOF
+let mapleader = ','
+nnoremap ,h :echo 'the user got there first'<CR>
+let g:cpo_before = &cpoptions
+source $ROOT/hexpair.vimrc
+let out = []
+call add(out, string([exists('g:loaded_hexpair_vimrc'), maparg(',h', 'n'), maparg(',ml', 'n'), maparg(',ms', 'n'), maparg(',md', 'n'), maparg(',mg', 'n')]))
+call add(out, string([maparg(',s', 'x'), maparg(',J', 'n'), &cpoptions ==# g:cpo_before]))
+let mapped = execute('map')
+let missing = []
+for line in split(execute('map <Plug>'), '\n')
+  let target = matchstr(line, '<Plug>(HexPair[^)]*)')
+  if target !=# '' && stridx(mapped, target) < 0
+    call add(missing, target)
+  endif
+endfor
+call add(out, 'unmapped targets: ' . string(missing))
+call writefile(out, '$WORK/tvimrc.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tvimrc.vim" < /dev/null
+# Completion with nothing typed yet has to offer everything: pressing <Tab>
+# straight away is how anyone asks which marks there are.
+cat > "$WORK/tcompl.vim" <<EOF
+$(printf "$HEX")
+HexPairOpen $WORK/short1.bin 1
+HexPairMark header
+HexPairMark tail
+call writefile([string([HexPairPagedMarkComplete('', '', 0), HexPairPagedMarkComplete('h', '', 0), HexPairPagedMarkComplete('x', '', 0)])], '$WORK/tcompl.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tcompl.vim" < /dev/null
+check "mark completion offers all the names, and the matching ones" \
+    "[['header', 'tail'], ['header'], []]" "$(cat "$WORK/tcompl.out")"
+
+check "the mappings file defines the marks under one prefix" \
+    "[1, ':echo ''the user got there first''<CR>', '<Plug>(HexPairMarks)', '<Plug>(HexPairMark)', '<Plug>(HexPairMarkDelete)', '<Plug>(HexPairGoMark)']" \
+    "$(sed -n 1p "$WORK/tvimrc.out")"
+check "in Visual mode too, and puts 'cpoptions' back" \
+    "['<Plug>(HexPairSelection)', ':HexPairPageNext!<CR>', 1]" \
+    "$(sed -n 2p "$WORK/tvimrc.out")"
+check "and leaves no <Plug> target without a key" "unmapped targets: []" \
+    "$(sed -n 3p "$WORK/tvimrc.out")"
+
+# --- Leaving the window is not free, and not always allowed ---------------
+# Refreshing another window means going to it and back, which is also what
+# ENDS a Visual selection and would take Insert mode with it: in
+# vimhexdiff, where two windows are what make the refresh run at all, `v`
+# dropped the moment the cursor moved. Which modes allow it is a function
+# because mode() cannot be driven into a Visual one here.
+#
+# And every marking comes off the window when the view changes: they are
+# window matches, the columns of a dump are not the columns of a page of
+# text, and the marks otherwise sat on the text view where the hex view
+# had put them. (The text view draws its own - see "The markings in the
+# windowed text view" above; what is checked here is that the hex view's
+# do not survive into it, which in a window one line tall means none.)
+cat > "$WORK/tview3.vim" <<EOF
+$(printf "$HEX")
+let out = []
+call add(out, string([HexPairPagedMayLeaveWindow('n'), HexPairPagedMayLeaveWindow('c'), HexPairPagedMayLeaveWindow('v'), HexPairPagedMayLeaveWindow('V'), HexPairPagedMayLeaveWindow("\<C-V>"), HexPairPagedMayLeaveWindow('s'), HexPairPagedMayLeaveWindow('i'), HexPairPagedMayLeaveWindow('R')]))
+function! Overshoot() abort
+  let over = 0
+  for m in getmatches()
+    for key in filter(keys(m), 'v:val =~# "^pos"')
+      let p = m[key]
+      if type(p) == type([]) && len(p) >= 3
+        let past = p[1] + p[2] - 1 - (strlen(getline(p[0])) + 1)
+        let over = past > over ? past : over
+      endif
+    endfor
+  endfor
+  return over
+endfunction
+HexPairOpen $WORK/tmark1.bin 1
+silent HexPairDiff $WORK/tmark2.bin
+call add(out, 'hex columns: ' . string(map(copy(HexPairPagedMarkingPositions('diff', 2, 4)), 'v:val[1]')))
+HexPairToggle
+doautocmd CursorMoved
+call add(out, 'text columns: ' . string(map(copy(HexPairPagedMarkingPositions('diff', 2, 4)), 'v:val[1]')))
+call add(out, 'past the line ends: ' . Overshoot())
+call writefile(out, '$WORK/tview3.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tview3.vim" < /dev/null
+check "a Visual or Insert mode keeps this window" "[1, 1, 0, 0, 0, 0, 0, 0]" \
+    "$(sed -n 1p "$WORK/tview3.out")"
+# The same two differing bytes, in the columns each view puts them in: the
+# dump's hex column starts at 11 and gives a byte three columns, the text
+# view gives it one, at the offset within its line.
+check "a dump marks them in its own columns" "hex columns: [17, 62, 38, 69]" \
+    "$(sed -n 2p "$WORK/tview3.out")"
+check "the text view marks them at one column per byte" \
+    "text columns: [3, 4]" "$(sed -n 3p "$WORK/tview3.out")"
+# And nothing left over from the view before: a hex-view column on a
+# text-view line would reach past the end of it, which is exactly what the
+# stale markings did.
+check "and nothing reaches past the end of a line" "past the line ends: 0" \
+    "$(sed -n 4p "$WORK/tview3.out")"
+
+# --- A page turn takes the scroll-bound windows with it -------------------
+# 'scrollbind' says these windows move together, and a page turn is the
+# one kind of scrolling Vim cannot follow on its own - which is what left
+# vimhexdiff scrolling two windows in step through different parts of two
+# files. What is checked here is both halves: that a bound window follows
+# by BYTE (so its cursor lands on the same offset), and that it is left
+# alone when following would mean discarding its unwritten changes, when
+# its own file does not reach that far, and when it is not bound at all.
+cat > "$WORK/tbind.vim" <<EOF
+$(printf "$HEX")
+function! Pages() abort
+  let seen = [] | let here = winnr() | let w = 1
+  while w <= winnr('\$')
+    noautocmd execute w . 'wincmd w'
+    call add(seen, b:hexpair_page_index + 1)
+    let w += 1
+  endwhile
+  noautocmd execute here . 'wincmd w'
+  return seen
+endfunction
+let out = []
+HexPairOpen $WORK/diffa.bin 1
+setlocal scrollbind
+rightbelow vsplit
+HexPairOpen $WORK/diffb.bin 1
+setlocal scrollbind
+wincmd t
+HexPairPageGoto 4
+call add(out, string(Pages()))
+call add(out, HexPairStatus())
+wincmd b
+call add(out, HexPairStatus())
+wincmd t
+HexPairPagePrev
+call add(out, string(Pages()))
+let g:hexpair_bind_pages = 0
+HexPairPageGoto 6
+call add(out, string(Pages()))
+let g:hexpair_bind_pages = 1
+wincmd b
+call setline(3, '00000010: 41 41')
+wincmd t
+redir => msg
+silent HexPairPageGoto 8
+redir END
+call add(out, string(Pages()))
+call add(out, substitute(matchstr(msg, 'hexpair:.*'), '$WORK/', '', 'g'))
+wincmd b
+HexPairPageGoto! 8
+setlocal noscrollbind
+wincmd t
+HexPairPageGoto 2
+call add(out, string(Pages()))
+call writefile(out, '$WORK/tbind.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tbind.vim" < /dev/null
+check "a bound window turns to the same page" "[4, 4]" \
+    "$(sed -n 1p "$WORK/tbind.out")"
+# The cursor lands on the byte, not merely on the page: both views report
+# the same offset, which is what makes the two dumps line up.
+check "and on the same byte" "hex 4/10 @0x601 (1537)" \
+    "$(sed -n 2p "$WORK/tbind.out")"
+check "in the bound window too" "hex 4/10 @0x601 (1537)" \
+    "$(sed -n 3p "$WORK/tbind.out")"
+check "and it follows backwards" "[3, 3]" "$(sed -n 4p "$WORK/tbind.out")"
+check "g:hexpair_bind_pages = 0 leaves it alone" "[6, 3]" \
+    "$(sed -n 5p "$WORK/tbind.out")"
+check "a bound window with unwritten changes stays" "[8, 3]" \
+    "$(sed -n 6p "$WORK/tbind.out")"
+check "and says why" \
+    "hexpair: diffb.bin has unsaved changes, so that view stayed on page 3" \
+    "$(sed -n 7p "$WORK/tbind.out")"
+check "a window that is not bound is not dragged" "[2, 8]" \
+    "$(sed -n 8p "$WORK/tbind.out")"
+
 # ---------------------------------------------------------------------------
 if [ "$FAIL" -eq 0 ]; then
-    echo "All tests passed."
+    echo "All tests passed ($CHECKS checks)."
 else
-    echo "Some tests FAILED." >&2
+    echo "Some tests FAILED ($CHECKS checks):" >&2
+    printf '%s' "$FAILED" | sed 's/^/  FAILED: /' >&2
 fi
 exit $FAIL

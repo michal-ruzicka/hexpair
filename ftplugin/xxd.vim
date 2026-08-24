@@ -18,6 +18,9 @@
 " it is managed by the main plugin (g:hexpair_paste), which can
 " restore it when the cursor leaves the hex buffer.
 
+" The maintainer's name above is not ASCII; see plugin/hexpair.vim.
+scriptencoding utf-8
+
 if exists('b:did_ftplugin')
   finish
 endif
