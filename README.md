@@ -226,7 +226,7 @@ nmap <Leader>C <Plug>(HexPairDiffClear)     " stop comparing, clear the marking
 " asking (like the ! commands) - handy for skimming through a file.
 nnoremap <silent> <Leader>J :HexPairPageNext!<CR>
 nnoremap <silent> <Leader>K :HexPairPagePrev!<CR>
-nmap <Leader>P <Plug>(HexPairPageGotoForce)
+nmap <Leader>G <Plug>(HexPairPageGotoForce)
 nmap <Leader>B <Plug>(HexPairGoOffsetForce)
 ```
 

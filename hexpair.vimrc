@@ -83,7 +83,7 @@ call s:Map('n', '<Leader>K', ':HexPairPagePrev!<CR>')
 " Ask which page to go to ($ for the last, +N / -N to step), and the same
 " discarding unwritten changes.
 call s:Map('n', '<Leader>g', '<Plug>(HexPairPageGoto)')
-call s:Map('n', '<Leader>P', '<Plug>(HexPairPageGotoForce)')
+call s:Map('n', '<Leader>G', '<Plug>(HexPairPageGotoForce)')
 
 " Ask which byte to go to (decimal, or 0x-prefixed; 1-based, the way
 " <Leader>? reports it, and +N / -N steps from where the cursor is), and
