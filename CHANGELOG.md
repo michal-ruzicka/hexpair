@@ -55,6 +55,11 @@ and this project adheres to
   its own - this is the mapping file and the documentation.
 
 ### Fixed
+- **The question a length-changing write asks says which way the length
+  changed.** A page that *grows* by more than the tail behind it is cheaper
+  to write the file afresh than to shift in place, and takes the same road
+  as a shortening - where it announced itself as "Shortening a file means
+  writing it afresh" about a file that was getting longer.
 - **A jump to a byte on another page keeps the scroll-bound windows
   together.** In `vimhexdiff`, walking the differences with
   `:HexPairDiffNext` / `:HexPairDiffPrev` came apart the moment a jump

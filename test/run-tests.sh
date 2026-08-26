@@ -1320,15 +1320,21 @@ check "the emptied file really is empty"  "0" "$(file_size "$WORK/sp5.bin")"
 # tested on its own, like the version-gate and page-size messages.
 cat > "$WORK/ts3f.vim" <<EOF
 source $PLUGIN
-call writefile(split(HexPairPagedResizeMessage(-16, 5000, 5000), "\n") + split(HexPairPagedResizeMessage(3, 5000, 900), "\n"), '$WORK/ts3f.out')
+call writefile(split(HexPairPagedResizeMessage(-16, 5000, 5000), "\n") + split(HexPairPagedResizeMessage(3, 5000, 900), "\n") + split(HexPairPagedResizeMessage(2, 5000, 5000), "\n"), '$WORK/ts3f.out')
 qa!
 EOF
 "$HEXPAIR_VIM" -es -u NONE -S "$WORK/ts3f.vim" < /dev/null
 check "the resize prompt names the delta" \
     "hexpair: this page changed length by -16 bytes." "$(sed -n 1p "$WORK/ts3f.out")"
 check "shortening says the file is rewritten" \
-    "Shortening a file means writing it afresh, so all 5000 of its bytes are rewritten (5000 -> 4984 bytes)." \
+    "Shortening it means writing the file afresh, so all 5000 of its bytes are rewritten (5000 -> 4984 bytes)." \
     "$(sed -n 2p "$WORK/ts3f.out")"
+# A page that GROWS by more than the tail behind it takes the same branch -
+# writing the file afresh is then cheaper than shifting the tail - and used to
+# announce itself as a shortening of a file that was getting longer.
+check "and so does a grow that is cheaper written afresh" \
+    "Growing it by this much means writing the file afresh, so all 5000 of its bytes are rewritten (5000 -> 5002 bytes)." \
+    "$(sed -n 8p "$WORK/ts3f.out")"
 check "growing says only what moves is written" \
     "Everything after this page has to move, so 900 of the file's 5000 bytes are rewritten in place - the rest is not touched, and no second copy of it is made (5000 -> 5003 bytes)." \
     "$(sed -n 5p "$WORK/ts3f.out")"

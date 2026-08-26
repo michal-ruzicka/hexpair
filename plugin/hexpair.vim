@@ -2076,9 +2076,15 @@ endfunction
 " in place, all of them when it has to be rewritten.
 function! HexPairPagedResizeMessage(delta, total, moved) abort
   let head = printf("hexpair: this page changed length by %+d bytes.\n", a:delta)
+  " a:moved >= a:total is "the whole file gets written again", and a shortening
+  " is only one of the two ways to get there: a page that GROWS by more than
+  " the tail behind it is cheaper to write afresh than to shift in place, and
+  " came through here saying "Shortening a file" about a file that was getting
+  " longer. The direction is a:delta's to report, not this branch's.
   if a:moved >= a:total
-    return head . printf('Shortening a file means writing it afresh, so all '
-          \ . "%d of its bytes are rewritten (%d -> %d bytes).\nContinue?",
+    return head . printf('%s means writing the file afresh, so all %d of its '
+          \ . "bytes are rewritten (%d -> %d bytes).\nContinue?",
+          \ a:delta < 0 ? 'Shortening it' : 'Growing it by this much',
           \ a:total, a:total, a:total + a:delta)
   endif
   return head . printf('Everything after this page has to move, so %d of '
