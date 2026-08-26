@@ -166,8 +166,8 @@ last byte, and on a short last line on its last existing byte.
                         |hexpair-refresh|, where the command is described
                         in full.
 
-                                                            *:HexPairInspect*
-:HexPairInspect         Read the bytes at the cursor as the numbers they
+                                        *:HexPairInspect* *HexPairInspect*
+:HexPairInspect[!]      Read the bytes at the cursor as the numbers they
                         could be - 8, 16, 32 and 64 bits wide, unsigned
                         and signed, little- and big-endian, plus the two
                         IEEE 754 floats: >
@@ -220,6 +220,74 @@ last byte, and on a short last line on its last existing byte.
                         64 bits (|+num64|) and the floats need |+float|;
                         without them those rows are left out rather than
                         shown wrong.
+
+                        The bytes it read are marked on the page as well
+                        (highlight group HexPairInspect, |Visual| by
+                        default), in both columns, for as long as the
+                        cursor stays on the byte they were read from.  The
+                        report's first line already says which bytes it is
+                        about; the marking saves counting eight pairs of
+                        digits back off a line of forty-eight.  Where the
+                        report could only read three, three are marked -
+                        a marking of eight would be saying something the
+                        report does not.  The bang takes it off at once,
+                        and g:hexpair_show_inspect = 0 never draws it.
+
+                                            *:HexPairInsertChar* *hexpair-insert-char*
+:HexPairInsertChar [++enc={encoding}] {text}
+                        Put the bytes of {text} in at the cursor.  The
+                        data inspector above says what the bytes at the
+                        cursor would be as utf-8, utf-16 and utf-32; this
+                        is the same reading backwards - it writes a
+                        character in exactly those. >
+
+    :HexPairInsertChar Š                  " c5 a0
+    :HexPairInsertChar ++enc=utf-16le Š   " 60 01
+    :HexPairInsertChar ++enc=utf-32be Š   " 00 00 01 60
+    :HexPairInsertChar ++enc=cp1250 Š     " 8a, if this Vim's iconv knows it
+<
+                        The bytes go in BEFORE the byte under the cursor
+                        and push the rest of the page along - the same
+                        edit as typing them into the dump, so they are
+                        marked as changed (|HexPairModified|), one |u|
+                        takes the whole insert back, nothing reaches the
+                        file until |:w| does, and the write that carries
+                        it is the length-changing one, which says what it
+                        will cost and asks.  The hex view only: the text
+                        view has no columns to put bytes into.
+
+                        Which encoding is meant is
+                        g:hexpair_insert_encoding ('utf-8' unless you say
+                        otherwise) - a file is in one encoding, so the
+                        question is worth answering once.  ++enc=
+                        overrules it for a single insert without changing
+                        it back afterwards, the same way |++enc| does for
+                        |:edit|.
+
+                        utf-8, utf-16le, utf-16be, utf-32le, utf-32be,
+                        latin1 and ascii are COMPUTED from the character's
+                        code point.  That is not a preference: |iconv()|
+                        answers with a |String|, a String cannot hold a
+                        NUL, and 'A' in utf-16le is 41 00 - a converted
+                        answer would end at the first of those.  Computing
+                        them also means they do not depend on what the
+                        machine's iconv was built with.
+
+                        Any other name IS handed to iconv(), and then
+                        converted back and compared: a conversion that
+                        lost a byte does not survive the round trip.  A
+                        name this Vim does not know is refused rather than
+                        quietly written as utf-8 - iconv() answers a
+                        conversion it cannot do by handing the text back
+                        unchanged, which for ASCII in an ASCII-compatible
+                        encoding is what success looks like too, so the
+                        name is probed with a character no encoding spells
+                        the way utf-8 does.
+
+                        <Plug>(HexPairInsertChar) asks for the text, since
+                        a bare mapping cannot carry one; what you type may
+                        begin with ++enc= just as the command's argument
+                        may.
 
                                                           *:HexPairSelection*
 :HexPairSelection       Say how many bytes the |Visual| selection covers,
@@ -470,6 +538,26 @@ g:hexpair_ruler         A ruler line between the top banner and the dump,
                         The text view has no ruler - there are no columns
                         to number in a page of raw bytes.
 
+                                                    *g:hexpair_show_inspect*
+g:hexpair_show_inspect  Whether the bytes |:HexPairInspect| has just read
+                        are marked on the page, for as long as the cursor
+                        stays on the byte they were read from
+                        (|HexPairInspect-highlight|).  Default: 1. >
+
+    let g:hexpair_show_inspect = 0
+<
+                                                 *g:hexpair_insert_encoding*
+g:hexpair_insert_encoding
+                        Which encoding |:HexPairInsertChar| writes a
+                        character in.  Default: 'utf-8'.  utf-8,
+                        utf-16le, utf-16be, utf-32le, utf-32be, latin1
+                        and ascii are computed exactly; any other name is
+                        left to this Vim's |iconv()| and refused if it
+                        does not know it.  ++enc= on the command itself
+                        overrules this for one insert. >
+
+    let g:hexpair_insert_encoding = 'utf-16le'
+<
                                                       *g:hexpair_show_marks*
 g:hexpair_show_marks    Whether the byte a mark stands on is underlined
                         on the page it falls on (|HexPairMark-highlight|).
@@ -618,7 +706,7 @@ HexPairStatus()         The view, the page and the byte under the cursor,
                         the digits actually there and is the exact answer.
 
      *HexPairModified* *HexPairDiff* *HexPairFind-highlight*
-                                             *HexPairMark-highlight*
+                    *HexPairMark-highlight* *HexPairInspect-highlight*
 The markings that are about bytes rather than about the cursor, with
 their defaults: >
 
@@ -626,7 +714,15 @@ their defaults: >
     highlight link HexPairDiff     DiffAdd    " differs from |:HexPairDiff|'s file
     highlight link HexPairFind     Search     " a match of |:HexPairFind|
     highlight HexPairMark term=underline,bold cterm=underline,bold gui=underline,bold
+    highlight link HexPairInspect  Visual     " what |:HexPairInspect| just read
 <
+The last one is |Visual| because that is what it means - a run of bytes
+taken together, the way a selection is - and because it is the one stock
+group the four above have not already taken.  It is transient: the run is
+marked only while the cursor stays on the byte it was read from, so it
+never has to share a byte with a marking that is about the bytes
+themselves.
+
 The fourth one is deliberately not a colour: a mark says "this place"
 while the other three say "these bytes are different", underlining
 coexists with a colour scheme instead of competing with it, and where a

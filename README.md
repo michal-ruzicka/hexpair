@@ -111,7 +111,15 @@ code, releases and issue tracker.
 - **A data inspector.** `:HexPairInspect` reads the bytes at the cursor
   as the numbers they could be — 8, 16, 32 and 64 bits wide, unsigned
   and signed, little- and big-endian, plus `float32` and `float64` —
-  which is the one question a hex dump cannot answer on its own.
+  which is the one question a hex dump cannot answer on its own. The
+  bytes it read are marked on the page while you stay on them
+  (`HexPairInspect`), so the report's first line does not have to be
+  counted back off a line of forty-eight digits.
+- **The bytes of a character, written in.** `:HexPairInsertChar Š` puts
+  `c5 a0` in — or `60 01`, or `01 60 00 00`, depending on
+  `g:hexpair_insert_encoding`. It is the inspector read backwards: that
+  one says what the bytes at the cursor would be as utf-8, utf-16 and
+  utf-32, and this one writes a character in exactly those.
 - **A selection knows its size.** `:HexPairSelection` says how many
   bytes a Visual selection covers and which ones, in the same 1-based
   numbering `:HexPairGoOffset` takes.
@@ -200,6 +208,7 @@ nmap <Leader>? <Plug>(HexPairPages)         " where am I: page, range, cursor by
 
 " Reading the bytes
 nmap <Leader>i <Plug>(HexPairInspect)       " the bytes at the cursor as numbers
+nmap <Leader>I <Plug>(HexPairInsertChar)    " prompt for a character, write its bytes
 nmap <Leader>s <Plug>(HexPairSelection)     " how many bytes the last selection was
 xmap <Leader>s <Plug>(HexPairSelection)     " ... and the one being made now (kept)
 
@@ -325,7 +334,8 @@ page. Close and reopen the file for the ordinary view.
 | `:HexPairPageNext[!]` / `:HexPairPagePrev[!]` / `:HexPairPageGoto[!] {page}` | Turn pages (`!` discards unwritten changes); `{page}` is a number, `+N`/`-N` to step, or `$` for the last one |
 | `:HexPairGoOffset[!] {byte}` | Jump to a byte, decimal or `0x`-prefixed, turning the page if needed; 1-based, like the banner. `+N` / `-N` step from where the cursor is |
 | `:HexPairPages` | Report page X of Y, the offsets covered, the file size and the byte under the cursor |
-| `:HexPairInspect` | Read the bytes at the cursor as numbers: 8/16/32/64-bit, unsigned and signed, both endiannesses, and both IEEE 754 floats |
+| `:HexPairInspect[!]` | Read the bytes at the cursor as numbers: 8/16/32/64-bit, unsigned and signed, both endiannesses, and both IEEE 754 floats — and mark them on the page; `!` unmarks them |
+| `:HexPairInsertChar [++enc={encoding}] {text}` | Put the bytes of `{text}` in at the cursor, in `g:hexpair_insert_encoding` or in `{encoding}` |
 | `:HexPairSelection` | Say how many bytes the Visual selection covers, and which |
 | `:HexPairFind[!] {bytes}` | Find those bytes in the file (`?` = any nibble); `!` forgets the pattern |
 | `:HexPairFindText {string}` | The same, for the bytes of a string |
@@ -360,6 +370,47 @@ hexpair: byte 66 (0x42) of 512: 41 42 43 44 45 46 47 48
   utf-16   U+4241 '䉁' (2 bytes)       U+4142 '䅂' (2 bytes)
   utf-32   U+44434241 - past U+10FFFF  U+41424344 - past U+10FFFF
 ```
+
+The bytes it read are marked on the page as well (`HexPairInspect`, which
+follows `Visual` by default), in both columns, for as long as the cursor
+stays on the byte they were read from. Near the end of a page or of the
+file there are fewer than eight of them, and the marking is short with the
+report rather than claiming eight. `:HexPairInspect!` takes the marking
+off at once.
+
+### Writing a character in
+
+`:HexPairInsertChar` (mapped to `<Leader>I` above, which asks for the
+text) is the inspector read backwards. The inspector says what the bytes
+at the cursor would be as utf-8, utf-16 and utf-32; this writes a
+character in exactly those:
+
+```vim
+:HexPairInsertChar Š                  " c5 a0     - g:hexpair_insert_encoding
+:HexPairInsertChar ++enc=utf-16le Š   " 60 01     - just this once
+:HexPairInsertChar ++enc=utf-32be Š   " 00 00 01 60
+:HexPairInsertChar ++enc=cp1250 Š     " 8a        - if this Vim's iconv knows it
+```
+
+The bytes go in *before* the byte under the cursor and push the rest of
+the page along — the same edit as typing them into the dump, so one `u`
+takes the whole insert back, nothing reaches the file until `:w` does, and
+the write that carries it is the length-changing one that says what it
+will cost and asks.
+
+Which encoding is meant is `g:hexpair_insert_encoding` (`'utf-8'` unless
+you say otherwise): a file is in one encoding, so the question is worth
+answering once. `++enc=` overrules it for a single insert without changing
+it back afterwards.
+
+**utf-8, utf-16le/be, utf-32le/be, latin1 and ascii are computed** from
+the character's code point, so they do not depend on what the machine's
+`iconv` was built with — and, more to the point, they can contain a NUL.
+`A` in utf-16le is `41 00`, and a converted answer would end at the first
+of those, because a Vim string cannot hold a NUL. Any other encoding name
+*is* handed to `iconv()`, and then converted back and compared: a
+conversion that lost a byte does not survive the round trip, and a name
+this Vim does not know is refused rather than quietly written as utf-8.
 
 The signed reading follows the unsigned one where the two differ
 (`43981 / -21555`). The three text rows say what the bytes would be as
@@ -622,6 +673,15 @@ values shown are the defaults, so uncomment a line only to change one.
 " Whether the byte a mark stands on is underlined on the page.
 " let g:hexpair_show_marks = 1
 
+" Whether the bytes :HexPairInspect has just read are marked on the page,
+" for as long as the cursor stays on the byte they were read from.
+" let g:hexpair_show_inspect = 1
+
+" Which encoding :HexPairInsertChar writes a character in. utf-8,
+" utf-16le/be, utf-32le/be, latin1 and ascii are computed exactly;
+" anything else is left to this Vim's iconv, and refused if it has none.
+" let g:hexpair_insert_encoding = 'utf-8'
+
 " Whether every command is also defined under a short "HP" name -
 " :HPFind for :HexPairFind, and so on.
 " let g:hexpair_short_commands = 1
@@ -646,6 +706,7 @@ values shown are the defaults, so uncomment a line only to change one.
 " highlight link HexPairDiff DiffAdd
 " highlight link HexPairFind Search
 " highlight HexPairMark term=underline,bold cterm=underline,bold gui=underline,bold
+" highlight link HexPairInspect Visual
 
 " The page and the byte under the cursor, in the statusline. Empty in
 " every buffer hexpair has not touched, so one statusline serves both.

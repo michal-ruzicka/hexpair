@@ -229,6 +229,8 @@ _db[4999] = 0x00
 open(os.path.join(w, 'diffa.bin'), 'wb').write(_da)
 open(os.path.join(w, 'diffb.bin'), 'wb').write(bytes(_db))
 open(os.path.join(w, 'diffc.bin'), 'wb').write(_da + b'tail')
+# insert-a-character fixture, its own so that no other test's edits reach it
+open(os.path.join(w, 'char1.bin'), 'wb').write(b'ABCDEFGH')
 # modified-byte fixture
 open(os.path.join(w, 'mod1.bin'), 'wb').write(bytes(i % 256 for i in range(5000)))
 # marks fixtures
@@ -3670,7 +3672,19 @@ source $ROOT/hexpair.vimrc
 let out = []
 call add(out, string([exists('g:loaded_hexpair_vimrc'), maparg(',h', 'n'), maparg(',ml', 'n'), maparg(',ms', 'n'), maparg(',md', 'n'), maparg(',mg', 'n')]))
 call add(out, string([maparg(',s', 'x'), maparg(',J', 'n'), &cpoptions ==# g:cpo_before]))
-let mapped = execute('map')
+" Two things this listing needs, and did without for a while, which made it
+" answer "nothing is missing" whatever the plugin defined. 'compatible'
+" (which -u NONE starts in) puts '<' in 'cpoptions', and \`map <Plug>\` is then
+" a search for the six literal characters "<Plug>" - it lists nothing. And
+" the targets are the PLUGIN's, so the plugin has to be loaded to have any.
+" It is sourced here rather than at the top so that everything above still
+" measures hexpair.vimrc on its own.
+set cpoptions-=<
+source $PLUGIN
+" What a key is mapped to is looked for in the mappings FILE, not in
+" \`map\`: every <Plug> target is its own left-hand side there, so a listing
+" would match all of them against themselves.
+let mapped = join(readfile('$ROOT/hexpair.vimrc'), "\n")
 let missing = []
 for line in split(execute('map <Plug>'), '\n')
   let target = matchstr(line, '<Plug>(HexPair[^)]*)')
@@ -3678,6 +3692,7 @@ for line in split(execute('map <Plug>'), '\n')
     call add(missing, target)
   endif
 endfor
+call sort(missing)
 call add(out, 'unmapped targets: ' . string(missing))
 call writefile(out, '$WORK/tvimrc.out')
 qa!
@@ -3878,6 +3893,143 @@ check "a jump back turns them both again" "hex 1/10 @0x102 (258)" \
     "$(sed -n 3p "$WORK/tbindjump.out")"
 check "the bound window on the byte again" "hex 1/10 @0x102 (258)" \
     "$(sed -n 4p "$WORK/tbindjump.out")"
+
+# --- What the inspector is reading, marked ---------------------------------
+# The report's first line says which bytes it is about; reading eight pairs
+# of digits back off a line of forty-eight is the work the marking saves.
+# It covers exactly the bytes the report managed to read, which near the
+# end of a page or of the file is fewer than eight - a marking of eight
+# would be saying something the report does not.
+cat > "$WORK/tinsp.vim" <<EOF
+$(printf "$HEX")
+let out = []
+HexPairOpen $WORK/diffa.bin 1
+HexPairGoOffset 0x21
+HexPairInspect
+call add(out, string(b:hexpair_inspect))
+call add(out, string(HexPairPagedMarkingPositions('inspect', 1, 40)))
+HexPairGoOffset 0x1fe
+HexPairInspect
+call add(out, string(b:hexpair_inspect))
+call add(out, string(HexPairPagedMarkingPositions('inspect', 1, 40)))
+HexPairToggle
+call add(out, string(HexPairPagedMarkingPositions('inspect', 1, 40)))
+HexPairToggle
+HexPairGoOffset 0x21
+call add(out, 'moved: ' . string(get(b:, 'hexpair_inspect', [])))
+HexPairInspect
+HexPairInspect!
+call add(out, 'cleared: ' . string(get(b:, 'hexpair_inspect', [])))
+call add(out, string(HexPairPagedRunPositions([[0, 20]], 2, 3)))
+call writefile(out, '$WORK/tinsp.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tinsp.vim" < /dev/null
+check "the inspector marks the bytes it read" "[32, 8]" \
+    "$(sed -n 1p "$WORK/tinsp.out")"
+check "in both columns of the dump line they are on" \
+    "[[4, 11, 23], [4, 60, 8]]" "$(sed -n 2p "$WORK/tinsp.out")"
+# Three bytes left on the page, so three bytes marked, and the last dump
+# line is short - its ASCII column ends where the bytes do.
+check "and only as many as the page had left" "[509, 3]" \
+    "$(sed -n 3p "$WORK/tinsp.out")"
+check "marked as far as the page goes" "[[33, 50, 8], [33, 73, 3]]" \
+    "$(sed -n 4p "$WORK/tinsp.out")"
+check "the text view marks one column per byte" "[[4, 243, 3]]" \
+    "$(sed -n 5p "$WORK/tinsp.out")"
+# The run answers a question, so it lives as long as the question does:
+# moving off the byte it was read from is the answer being over.
+check "moving off the byte forgets it" "moved: []" \
+    "$(sed -n 6p "$WORK/tinsp.out")"
+check "and the bang forgets it at once" "cleared: []" \
+    "$(sed -n 7p "$WORK/tinsp.out")"
+# A run that crosses a line break is two positions per column, not one
+# reaching past the end of a line.
+check "a run over a line end is marked on both lines" \
+    "[[2, 11, 47], [2, 60, 16], [3, 11, 11], [3, 60, 4]]" \
+    "$(sed -n 8p "$WORK/tinsp.out")"
+
+# --- The bytes of a character ----------------------------------------------
+# The other direction of the data inspector: it reads the bytes at the
+# cursor as utf-8, utf-16 and utf-32, and this writes a character in
+# exactly those. The Unicode ones are computed rather than converted,
+# because iconv() answers with a Vim String and a Vim String cannot hold a
+# NUL - 'A' in utf-16le is 41 00, and a converted answer would end at the
+# first of those. That case is checked below, and it is the whole reason.
+cat > "$WORK/tchar.vim" <<EOF
+$(printf "$HEX")
+set encoding=utf-8
+let out = []
+let s = nr2char(0x160)
+let e = nr2char(0x1f600)
+call add(out, string([HexPairPagedCharBytes(s, 'utf-8'), HexPairPagedCharBytes(s, 'utf-16le'), HexPairPagedCharBytes(s, 'utf-16be')]))
+call add(out, string([HexPairPagedCharBytes(s, 'utf-32le'), HexPairPagedCharBytes(s, 'utf-32be')]))
+call add(out, string([HexPairPagedCharBytes('A', 'utf-16le'), HexPairPagedCharBytes('ahoj', 'utf-8')]))
+call add(out, string([HexPairPagedCharBytes(e, 'utf-8'), HexPairPagedCharBytes(e, 'utf-16le'), HexPairPagedCharBytes(e, 'utf-32be')]))
+call add(out, string([HexPairPagedCharBytes(s, 'latin1'), HexPairPagedCharBytes('A', 'latin1')]))
+call add(out, string(HexPairPagedCharBytes(s, 'no-such-encoding')))
+call add(out, string([HexPairPagedParseInsertArgs('++enc=utf-16le ' . s), HexPairPagedParseInsertArgs(s), HexPairPagedParseInsertArgs('++enc=utf-16le')]))
+call add(out, string([HexPairPagedEncodeCodePoint(0xd800, 'utf-8'), HexPairPagedEncodeCodePoint(0x110000, 'utf-8'), HexPairPagedSpacedHex('c5a0')]))
+HexPairOpen $WORK/char1.bin 1
+HexPairGoOffset 3
+execute 'HexPairInsertChar ' . s
+call add(out, HexPairPagedStripLine(getline(2)) . ' ' . HexPairStatus())
+undo
+call add(out, HexPairPagedStripLine(getline(2)) . ' modified=' . &l:modified)
+HexPairGoOffset 3
+execute 'HexPairInsertChar ++enc=utf-16be ' . s
+call add(out, HexPairPagedStripLine(getline(2)))
+HexPairToggle
+redir => msg
+silent execute 'HexPairInsertChar ' . s
+redir END
+call add(out, matchstr(msg, 'hexpair:[^\n]*'))
+call writefile(out, '$WORK/tchar.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tchar.vim" < /dev/null
+check "utf-8 and utf-16 of a character above ASCII" \
+    "[{'bytes': 2, 'hex': 'c5a0'}, {'bytes': 2, 'hex': '6001'}, {'bytes': 2, 'hex': '0160'}]" \
+    "$(sed -n 1p "$WORK/tchar.out")"
+check "and utf-32, both ways round" \
+    "[{'bytes': 4, 'hex': '60010000'}, {'bytes': 4, 'hex': '00000160'}]" \
+    "$(sed -n 2p "$WORK/tchar.out")"
+# The NUL that iconv() could not have handed back, and more than one
+# character at a time - a character is what you ask for, not what it takes.
+check "a NUL in the middle of the bytes is no obstacle" \
+    "[{'bytes': 2, 'hex': '4100'}, {'bytes': 4, 'hex': '61686f6a'}]" \
+    "$(sed -n 3p "$WORK/tchar.out")"
+check "above the BMP it is four bytes, or a surrogate pair" \
+    "[{'bytes': 4, 'hex': 'f09f9880'}, {'bytes': 4, 'hex': '3dd800de'}, {'bytes': 4, 'hex': '0001f600'}]" \
+    "$(sed -n 4p "$WORK/tchar.out")"
+check "an encoding that cannot hold it says so" \
+    "[{'msg': 'hexpair: latin1 cannot hold U+0160'}, {'bytes': 1, 'hex': '41'}]" \
+    "$(sed -n 5p "$WORK/tchar.out")"
+# iconv() answers a conversion it cannot do by handing the text back, which
+# for ASCII in an ASCII-compatible encoding is what success looks like too -
+# so the name is probed with a character no encoding spells as utf-8 does.
+check "and an encoding this Vim never heard of, too" \
+    "{'msg': 'hexpair: this Vim does not know the encoding no-such-encoding; it can always write utf-8, utf-16le/be, utf-32le/be, latin1 and ascii'}" \
+    "$(sed -n 6p "$WORK/tchar.out")"
+check "++enc= is taken off the front of the text" \
+    "[{'enc': 'utf-16le', 'text': 'Š'}, {'enc': '', 'text': 'Š'}, {'msg': 'hexpair: ++enc={encoding} wants the text after it'}]" \
+    "$(sed -n 7p "$WORK/tchar.out")"
+# A surrogate is half of a utf-16 pair and not a character of its own; a
+# code point past U+10FFFF is not one either.
+check "half a surrogate pair is not a character" "['', '', 'c5 a0']" \
+    "$(sed -n 8p "$WORK/tchar.out")"
+# ABCDEFGH with the two bytes put in before the fourth: the page is longer
+# by two and everything after the cursor moved along.
+check "the bytes go in before the byte under the cursor" \
+    " 41 42 c5 a0 43 44 45 46 47 48 hex 1/1+ @0x3 (3)" \
+    "$(sed -n 9p "$WORK/tchar.out")"
+check "and one undo takes the whole insert back" \
+    " 41 42 43 44 45 46 47 48 modified=0" "$(sed -n 10p "$WORK/tchar.out")"
+check "++enc= writes that encoding instead" \
+    " 41 42 01 60 43 44 45 46 47 48" "$(sed -n 11p "$WORK/tchar.out")"
+check "the text view has no columns to insert into" \
+    "hexpair: inserting bytes works in the hex view; :HexPairToggle first" \
+    "$(sed -n 12p "$WORK/tchar.out")"
 
 # ---------------------------------------------------------------------------
 if [ "$FAIL" -eq 0 ]; then

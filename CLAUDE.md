@@ -164,6 +164,23 @@ Key function map:
   then may `b:undo_ftplugin` revert them), and when the restored
   filetype is empty no `FileType` event fires, so the plugin executes
   `b:undo_ftplugin` and clears `b:did_ftplugin` itself.
+- The data inspector's two directions. `s:Inspect()` reads up to eight
+  bytes and `b:hexpair_inspect` is `[absolute offset, count]` of what it
+  actually got — which near a page or file end is fewer, and the marking
+  (layer `'inspect'`, `HexPairPagedRunPositions()` in the dump,
+  `HexPairPagedTextPositions()` in the text view) says exactly that many.
+  It expires in `s:PagedHighlight()` when the cursor is no longer on the
+  byte it was read from — not on any cursor movement, since a redraw, a
+  window hop and a `:syncbind` all run through the highlighting without
+  the cursor having gone anywhere.
+  `HexPairPagedCharBytes()` is the other direction. **The Unicode
+  encodings are computed from the code point, not converted**: `iconv()`
+  answers with a String, a String cannot hold a NUL, and `A` in utf-16le
+  is `41 00`. Anything else goes to `iconv()` and is checked by
+  converting it back — and the *name* is probed separately with a
+  U+0160 canary, because iconv() answers a conversion it cannot do by
+  handing the text back unchanged, which for ASCII in an ASCII-compatible
+  encoding is what success looks like too.
 - `g:hexpair_debug` — `s:Debug()`, an echomsg trace of every position
   mapping step (`:messages`); keep it working, it has already caught two
   field bugs. The Stage 2 rewrite dropped every call site while the docs
@@ -285,6 +302,7 @@ come back**; each names the test that would catch it.
 | The progress line of a scan was echoed and then wiped by the `redraw!` on the next line, dozens of times a second: it was never readable, and a 70 GiB search looked like a hang with a flicker | not testable headlessly (`vim -es` has no message line) — the tmux recipe above, and `echo` + plain `redraw` is the fix |
 | `CTRL-C` could not stop a scan: every block read caught it (a bare `:catch` catches `Vim:Interrupt` too) and read the next block, so it only worked if pressed between two reads | "a scan says how far it has got" pins the message; the catch is `/^hexpair:/` now, and E608 forbids re-throwing what a catch-all would have swallowed |
 | A jump to a byte on another page levelled the scroll-bound windows *before* the cursor arrived, and `:syncbind` swallows the next scroll Vim would have followed — so `vimhexdiff` came apart at every page boundary | "and takes the bound window to that byte, not to the page" |
+| The `<Plug>`-coverage test was vacuous: `map <Plug>` under `-u NONE` reads `<Plug>` as six literal characters ('compatible' puts `<` in `'cpoptions'`), and the plugin was never sourced in that script, so there were no targets to miss | "and leaves no `<Plug>` target without a key" — `set cpoptions-=<`, the plugin sourced, and the keys looked for in the mappings *file* rather than in `map` (where every target is its own left-hand side) |
 | A search match straddling a page boundary was marked on neither page: it fits whole inside neither, and each page was searched alone | "and the page it starts on marks the byte it has" — `s:PageHexForSearch()` reads the page with span-1 bytes of each neighbour |
 | Mark completion with nothing typed yet offered nothing: `v:val[0 : strlen('') - 1]` is `[0 : -1]`, the whole name, which matches no empty lead | "mark completion offers all the names, and the matching ones" |
 | A selection report echoed from a Visual-mode mapping was painted over by `-- VISUAL --` before it could be read | not testable headlessly — the tmux recipe above, and the hit-enter prompt is the fix |

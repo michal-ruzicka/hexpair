@@ -100,6 +100,12 @@ call s:Map('n', '<Leader>?', '<Plug>(HexPairPages)')
 " signed and unsigned, both endiannesses, both IEEE 754 floats - and as
 " text: UTF-8, UTF-16, UTF-32.
 call s:Map('n', '<Leader>i', '<Plug>(HexPairInspect)')
+" ... and the same reading the other way round: ask for a character and put
+" its bytes in, in g:hexpair_insert_encoding (utf-8 unless you say
+" otherwise; what you type may begin with ++enc=NAME for one insert).
+" The capital of the key that reads them, because it writes what that
+" reads.
+call s:Map('n', '<Leader>I', '<Plug>(HexPairInsertChar)')
 
 " How many bytes the selection covers, and which. Worth having in Visual
 " mode as well as Normal: there it reports the selection being made and

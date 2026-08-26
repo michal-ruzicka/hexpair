@@ -9,6 +9,41 @@ and this project adheres to
 
 ## [v2.2.0-devel] – 2026-08-24
 
+### Added
+- **`:HexPairInspect` marks the bytes it just read** (`HexPairInspect`,
+  `Visual` by default), in both columns, for as long as the cursor stays
+  on the byte they were read from. The report's first line already says
+  which bytes it is about; the marking is what saves counting eight pairs
+  of digits back off a line of forty-eight. Near the end of a page or of
+  the file the report can only read three or four, and then three or four
+  are marked - a marking of eight would be saying something the report
+  does not. `:HexPairInspect!` takes it off at once,
+  `g:hexpair_show_inspect = 0` never draws it.
+- **`:HexPairInsertChar [++enc={encoding}] {text}`** puts the bytes of a
+  character in at the cursor - the data inspector read backwards. It says
+  what the bytes at the cursor would be as utf-8, utf-16 and utf-32; this
+  writes a character in exactly those. `Š` is `c5 a0`, or `60 01`, or
+  `00 00 01 60`, and which of them is meant is
+  `g:hexpair_insert_encoding` (`'utf-8'` unless you say otherwise) - a
+  file is in one encoding, so the question is worth answering once, and
+  `++enc=` overrules it for a single insert. The bytes go in before the
+  byte under the cursor and push the page along, exactly as typing them
+  into the dump would, so one `u` takes the insert back and nothing
+  reaches the file until `:w` does. utf-8, utf-16le/be, utf-32le/be,
+  latin1 and ascii are computed from the code point rather than converted,
+  because a Vim string cannot hold a NUL and `A` in utf-16le is `41 00`;
+  any other name is handed to `iconv()`, checked by converting it back,
+  and refused if this Vim does not know it. `<Plug>(HexPairInsertChar)`
+  asks for the text (`<Leader>I` in `hexpair.vimrc`).
+- **`docs/`: the animation at the top of `README.md`, and what records
+  it.** Half a minute of the plugin at work - a binary opened as plain
+  text, one command turning it into a hex editor, the byte and its
+  character lit up together, the data inspector, an edit and a write, the
+  same page as text, what differs from another file, and a search that
+  reads a file too large to load. It is recorded rather than drawn
+  (`docs/hexpair-demo.sh`), from this repository's own working tree, so
+  it can be made again whenever what it shows stops being true.
+
 ### Changed
 - **`<Leader>G` is the suggested key for `:HexPairPageGoto!`** - ask which
   page to go to, discarding unwritten changes - where `hexpair.vimrc` and
