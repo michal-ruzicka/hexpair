@@ -2837,6 +2837,7 @@ call add(out, string([HexPairPagedCountDifferences('00112233', '00112233'), HexP
 let g:mine = repeat('a1b2c3d4', 32768)
 let g:theirs = substitute(g:mine, '^\(.\{100000}\)..', '\1ff', '')
 call add(out, string(HexPairPagedCountDifferences(g:mine, g:theirs)))
+call add(out, fnamemodify('$WORK/diffb.bin', ':~:.'))
 call writefile(out, '$WORK/tdf.out')
 qa!
 EOF
@@ -2848,8 +2849,15 @@ check "the first difference, by halving" "[-1, 2, 3, -1]" \
 check "and the last one" "[-1, 5, 5]" "$(sed -n 2p "$WORK/tdf.out")"
 check "two files that agree over the page say so" \
     "hexpair: bytes 513-1024 are the same in other.bin" "$(sed -n 3p "$WORK/tdf.out")"
+# The file is named the short way (:~:.), the same way the jump messages
+# name it: spelled out in full the line runs past the command line and
+# costs a hit-enter prompt, which holds the screen as it was and makes the
+# next command look like it did nothing. Expected against what Vim itself
+# shortens the path to, not against a literal - on Windows the fixtures
+# live under the user's profile, where :~ has something to do.
+tdf_short=$(tail -n 1 "$WORK/tdf.out")
 check_path "and one that does not says how much and where" \
-    "hexpair: 1 of the 512 bytes on this page differ from $WORK/diffb.bin, first at byte 101 (0x65)" \
+    "hexpair: 1 of the 512 bytes on this page differ from $tdf_short, first at byte 101 (0x65)" \
     "$(sed -n 4p "$WORK/tdf.out")"
 check "the differing byte is marked in both columns" "[[8, 23, 2], [8, 64, 1]]" \
     "$(sed -n 5p "$WORK/tdf.out")"

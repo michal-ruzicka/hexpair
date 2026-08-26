@@ -52,6 +52,14 @@ and this project adheres to
 
       hexpair: searching 2.3 GiB of 70.0 GiB (3%, CTRL-C stops)
 
+- **`:HexPairDiff` names the file it is comparing against the short way**
+  (`~` for your home directory, relative where it is below the working
+  directory), as the jump messages already did. Spelled out in full its
+  summary ran past the command line, wrapped, and cost a hit-enter
+  prompt - which is not only a keystroke: the prompt holds the screen as
+  it was, so the jump the next command made was not drawn until the
+  prompt was dismissed, and the view looked like it had ignored it.
+
 ## [v2.1.0] – 2026-08-24
 
 ### Added

@@ -4182,7 +4182,13 @@ function! s:Diff(file, clear) abort
   call s:ClearDiffHighlight()
   call s:DiffHighlight()
   let [differing, first] = s:DiffCount(s:DiffHex())
-  echo HexPairPagedDiffText(file, b:hexpair_page_base,
+  " Named short (:~:.), the way s:DiffJump() names it and for the same
+  " reason: this line already carries two counts and an offset, and with
+  " the file spelled out in full it runs past the command line, wraps,
+  " and costs a hit-enter prompt. Which is not only a keystroke - the
+  " prompt holds the screen as it was, so the next command's jump is not
+  " drawn until it is dismissed, and the view looks like it ignored it.
+  echo HexPairPagedDiffText(fnamemodify(file, ':~:.'), b:hexpair_page_base,
         \ b:hexpair_page_len, differing, first)
 endfunction
 
