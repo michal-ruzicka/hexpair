@@ -37,6 +37,20 @@ and this project adheres to
   `:HexPairDiffNext` / `:HexPairDiffPrev`, `:HexPairFind` and its
   repeats, `:HexPairGoOffset`, `:HexPairGoMark` and
   `:HexPairModifiedNext` / `:HexPairModifiedPrev`.
+- **The progress line of a file-wide scan is readable, and `CTRL-C` stops
+  the scan.** Neither was true: the line was echoed and then wiped by the
+  redraw meant to show it, dozens of times a second, so a search of a
+  large file looked like a hang with a flicker in the message line; and
+  every block read caught the interrupt along with everything else and
+  went on to read the next block, so `CTRL-C` only worked if it landed in
+  the sliver of time between two reads. It stops the scan now, wherever
+  it is pressed, and answers `hexpair: stopped` - a scan only reads, so
+  there is nothing to undo. The line also says how far it has got as a
+  size, not only as a percentage, because one per cent of a 70 GiB file
+  is 700 MB and minutes of reading, and a figure that does not move is a
+  figure that says "hung":
+
+      hexpair: searching 2.3 GiB of 70.0 GiB (3%, CTRL-C stops)
 
 ## [v2.1.0] – 2026-08-24
 

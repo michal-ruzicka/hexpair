@@ -1114,25 +1114,64 @@ endfunction
 " What a scan says while it runs. Pure, and therefore testable: the
 " message is the only part of a progress report that can be wrong in a
 " way anyone would notice.
+"
+" It says how far it has got as a size and not only as a percentage,
+" because a percentage of a very large file hardly moves: one per cent of
+" 70 GiB is 700 MB, minutes of reading between one figure and the next,
+" and a line that does not change is a line that says "hung".
 function! HexPairPagedProgressText(what, done, total) abort
-  return printf('hexpair: %s %d%% of %s (CTRL-C stops)', a:what,
-        \ a:total > 0 ? a:done * 100 / a:total : 100,
-        \ HexPairPagedSizeText(a:total))
+  return printf('hexpair: %s %s of %s (%d%%, CTRL-C stops)', a:what,
+        \ HexPairPagedSizeText(a:done), HexPairPagedSizeText(a:total),
+        \ a:total > 0 ? a:done * 100 / a:total : 100)
 endfunction
 
-" Scans of a big file report where they have got to. The redraw AFTER the
-" echo is what puts the line on the screen while a function is still
-" running, and it has to be the forcing one: measured in a terminal over
-" five updates, a plain :redraw before the echo showed one of them, after
-" it two, and :redraw! all five - Vim skips a redraw it believes changes
-" nothing, and a message written from inside a running function is
-" exactly that.
+" The progress line currently on the screen, so that the same one is not
+" written over itself thousands of times. Reset wherever a scan starts:
+" by then the screen has been used for something else and the line has to
+" be put back even if it reads the same.
+let s:progressline = ''
+
+function! s:ProgressReset() abort
+  let s:progressline = ''
+endfunction
+
+" Scans of a big file report where they have got to. The redraw goes AFTER
+" the echo, and must NOT be the forcing one.
+"
+" `redraw!` repaints the screen from scratch, and what it paints does not
+" include a message a still-running function echoed - so `echo` followed
+" by `redraw!` wrote the line and wiped it again, dozens of times a
+" second, and the progress report was never readable at all. (The measure
+" that put the `!` there counted how often something appeared, which a
+" flash of one frame satisfies.) A plain `redraw` flushes what is pending
+" and leaves the message standing.
+"
+" And only when the line would say something new. A 70 GiB file is 70000
+" blocks; repainting for each of them costs more than reading them does,
+" and every repaint is a chance for the line to be caught half written.
 function! s:Progress(what, done, total) abort
   if a:total < s:progressfrom
     return
   endif
-  echo HexPairPagedProgressText(a:what, a:done, a:total)
-  redraw!
+  let line = HexPairPagedProgressText(a:what, a:done, a:total)
+  if line ==# s:progressline
+    return
+  endif
+  let s:progressline = line
+  echo line
+  redraw
+endfunction
+
+" What CTRL-C during a scan says. A scan only reads, so there is nothing
+" to put back and nothing to warn about: it stopped, and that is all.
+"
+" The redraw comes FIRST here, the other way round from s:Progress(): the
+" screen is left half painted by the scan that was interrupted, and a
+" repaint after this message would take the message with it. This one is
+" the last word, so the screen is put right and then written on.
+function! s:Stopped() abort
+  redraw
+  echo 'hexpair: stopped'
 endfunction
 
 " A page turn is scrolling by a whole page, and 'scrollbind' cannot follow
@@ -1816,7 +1855,17 @@ function! s:FileHex(file, off, len) abort
     " 1 MiB block comes to, 16 ms against 51 ms, and a scan of a large
     " file is thousands of those.
     return substitute(substitute(out, '\n', '', 'g'), '\r', '', 'g')
-  catch
+  catch /^hexpair:/
+    " A read that failed - a file that went away, an xxd that could not
+    " open it - is an empty block, and the caller finds nothing in it.
+    "
+    " Only that, where this used to be a catch-all. CTRL-C inside a :try
+    " becomes the exception "Vim:Interrupt", and a catch-all catches that
+    " one too: every block read of a scan swallowed the interrupt and went
+    " on to read the next block, so stopping a scan of a large file meant
+    " pressing the key in the sliver of time between two reads. It cannot
+    " be caught here and re-thrown either (E608 refuses an exception with
+    " a 'Vim' prefix); the answer is not to catch what is not ours.
     return ''
   endtry
 endfunction
@@ -3613,19 +3662,25 @@ function! s:FindFrom(from, forward) abort
     echohl None
     return
   endif
-  let at = s:FindScan(a:from, a:forward)
-  if at >= 0
-    call s:FindLand(at, 0)
-    return
-  endif
-  " |'wrapscan'|, the same option Vim's own searches obey.
-  if &wrapscan
-    let at = s:FindScan(a:forward ? 0 : b:hexpair_page_total, a:forward)
+  call s:ProgressReset()
+  try
+    let at = s:FindScan(a:from, a:forward)
     if at >= 0
-      call s:FindLand(at, 1)
+      call s:FindLand(at, 0)
       return
     endif
-  endif
+    " |'wrapscan'|, the same option Vim's own searches obey.
+    if &wrapscan
+      let at = s:FindScan(a:forward ? 0 : b:hexpair_page_total, a:forward)
+      if at >= 0
+        call s:FindLand(at, 1)
+        return
+      endif
+    endif
+  catch /^Vim:Interrupt$/
+    call s:Stopped()
+    return
+  endtry
   echohl ErrorMsg
   echomsg printf('hexpair: %s not found%s', s:find.what,
         \ &wrapscan ? ' in this file' : ' after here (''nowrapscan'')')
@@ -4417,6 +4472,7 @@ function! s:DiffJump(forward) abort
   endif
   try
     let here = s:IsHexView() ? s:PagedByteOffset() : s:TextByteOffset()
+    call s:ProgressReset()
     let at = s:DiffSearch(here, a:forward)
     if at < 0
       echo printf('hexpair: no change %s byte %d',
@@ -4440,6 +4496,8 @@ function! s:DiffJump(forward) abort
     echo printf('hexpair: %s change at byte %d (0x%x) against %s',
           \ a:forward ? 'next' : 'previous', at + 1, at + 1,
           \ fnamemodify(b:hexpair_diff_file, ':~:.'))
+  catch /^Vim:Interrupt$/
+    call s:Stopped()
   catch /^hexpair:/
     echohl ErrorMsg
     echomsg v:exception

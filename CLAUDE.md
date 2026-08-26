@@ -282,6 +282,9 @@ come back**; each names the test that would catch it.
 | Every match on the PAGE was found and then tested against every visible line: `:HexPairFind 2?` cost a second per page | "a match over a line end is marked on both lines" (the positions are window-scoped now) |
 | A new file users are told to source (`hexpair.vimrc`) was in the repo and the docs but not in `pack-release.py`'s hand-written `FILES`, so it did not ship | "the packaging list is what the repository gives a user" — every `.md`, `.vim`, `.txt` and `hexpair.*` outside `test/` must be in the list |
 | A page turn left the bound windows scrolling around a stale offset: `'scrollbind'` syncs RELATIVE movement from the position each window was bound at, and loading a page moves a window without telling Vim that this is the new zero | not testable headlessly (a `vim -es` window has no geometry: `line('w0')` came back above `line('w$')`) — checked in tmux, and `:syncbind` after a bound turn is the fix |
+| The progress line of a scan was echoed and then wiped by the `redraw!` on the next line, dozens of times a second: it was never readable, and a 70 GiB search looked like a hang with a flicker | not testable headlessly (`vim -es` has no message line) — the tmux recipe above, and `echo` + plain `redraw` is the fix |
+| `CTRL-C` could not stop a scan: every block read caught it (a bare `:catch` catches `Vim:Interrupt` too) and read the next block, so it only worked if pressed between two reads | "a scan says how far it has got" pins the message; the catch is `/^hexpair:/` now, and E608 forbids re-throwing what a catch-all would have swallowed |
+| A jump to a byte on another page levelled the scroll-bound windows *before* the cursor arrived, and `:syncbind` swallows the next scroll Vim would have followed — so `vimhexdiff` came apart at every page boundary | "and takes the bound window to that byte, not to the page" |
 | A search match straddling a page boundary was marked on neither page: it fits whole inside neither, and each page was searched alone | "and the page it starts on marks the byte it has" — `s:PageHexForSearch()` reads the page with span-1 bytes of each neighbour |
 | Mark completion with nothing typed yet offered nothing: `v:val[0 : strlen('') - 1]` is `[0 : -1]`, the whole name, which matches no empty lead | "mark completion offers all the names, and the matching ones" |
 | A selection report echoed from a Visual-mode mapping was painted over by `-- VISUAL --` before it could be read | not testable headlessly — the tmux recipe above, and the hit-enter prompt is the fix |
@@ -740,11 +743,24 @@ was designed and built in Stage 2 - see "What Stage 2 decided".
 - `s:Progress()` / `HexPairPagedProgressText()` — a file-wide scan reads a
   megabyte at a time and can run for minutes, which is indistinguishable
   from a hang, so from 16 MB up it says how far it has got. **The redraw
-  goes after the echo, and it has to be `redraw!`**: measured in a
-  terminal over five updates, a plain `redraw` before the echo showed one
-  of them, after it two, and `redraw!` all five — Vim skips a redraw it
-  believes changes nothing. It costs about 5 ms per update, ~5% of a
-  scan. `CTRL-C` interrupts, which is safe because a scan only reads.
+  goes after the echo and must not be `redraw!`**: a forcing redraw
+  repaints from scratch, and what it paints does not include a message a
+  running function echoed, so `echo` + `redraw!` wrote the line and wiped
+  it again dozens of times a second and the report was never readable —
+  which the measurement that put the `!` there missed by counting how
+  often something appeared rather than how long it stood. `s:Stopped()`
+  is the one that redraws *first*: it is the last word after an
+  interrupted scan, and a repaint after it would take it with it.
+  The line is echoed only when it would differ from the one already
+  there, and it carries the size as well as the percentage — one per cent
+  of 70 GiB is 700 MB, minutes between two figures.
+  **`CTRL-C` reaches a scan only if nothing swallows it**: inside a
+  `:try` it is the exception `Vim:Interrupt`, a bare `:catch` catches it
+  like anything else, and it cannot be caught and re-thrown (E608). Every
+  `:catch` on a scan's path therefore names what it is for
+  (`s:FileHex()`: `catch /^hexpair:/`), and the two scan entry points
+  (`s:FindFrom()`, `s:DiffJump()`) catch `/^Vim:Interrupt$/` and say
+  `hexpair: stopped`. Interrupting is safe because a scan only reads.
 - `s:BindPageTurn()` / `s:FollowPageTurn()` — `'scrollbind'` is Vim's own
   "these windows move together", and a page turn is the one kind of
   scrolling it cannot follow: the bound window keeps its page and the two

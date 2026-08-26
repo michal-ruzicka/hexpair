@@ -3482,13 +3482,34 @@ EOF
 check "a size reads the way a person says it" \
     "['512 bytes', '1.5 KiB', '1.5 MiB', '2.0 GiB']" "$(sed -n 1p "$WORK/tprog.out")"
 check "a scan says how far it has got" \
-    "hexpair: comparing 0% of 1.0 GiB (CTRL-C stops)" "$(sed -n 2p "$WORK/tprog.out")"
+    "hexpair: comparing 0 bytes of 1.0 GiB (0%, CTRL-C stops)" \
+    "$(sed -n 2p "$WORK/tprog.out")"
 check "and in which direction" \
-    "hexpair: searching 75% of 4.0 MiB (CTRL-C stops)" "$(sed -n 3p "$WORK/tprog.out")"
+    "hexpair: searching 3.0 MiB of 4.0 MiB (75%, CTRL-C stops)" \
+    "$(sed -n 3p "$WORK/tprog.out")"
 # A file with no bytes is not a division by zero, and is done by definition.
 check "an empty file is 100%" \
-    "hexpair: searching back 100% of 0 bytes (CTRL-C stops)" \
+    "hexpair: searching back 0 bytes of 0 bytes (100%, CTRL-C stops)" \
     "$(sed -n 4p "$WORK/tprog.out")"
+# The size moves where the percentage does not: one per cent of 70 GiB is
+# 700 MB, and a line that stands still for minutes reads as a hang. Two
+# neighbouring blocks of a 70 GiB scan say different things.
+cat > "$WORK/tprog2.vim" <<EOF
+$(printf "$HEX")
+let g = 1024 * 1024 * 1024
+let out = []
+call add(out, HexPairPagedProgressText('searching', 30 * g, 70 * g))
+call add(out, HexPairPagedProgressText('searching', 30 * g + 100 * 1024 * 1024, 70 * g))
+call writefile(out, '$WORK/tprog2.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tprog2.vim" < /dev/null
+check "the size moves where the percentage stands still" \
+    "hexpair: searching 30.0 GiB of 70.0 GiB (42%, CTRL-C stops)" \
+    "$(sed -n 1p "$WORK/tprog2.out")"
+check "and the next block says something new" \
+    "hexpair: searching 30.1 GiB of 70.0 GiB (42%, CTRL-C stops)" \
+    "$(sed -n 2p "$WORK/tprog2.out")"
 
 # --- A match that straddles a page boundary ---------------------------------
 # It belongs to both pages it touches, and fits whole inside neither - so
