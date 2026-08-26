@@ -778,6 +778,14 @@ was designed and built in Stage 2 - see "What Stage 2 decided".
   window was when it was bound, and a page load moves a window without
   saying that this is the new zero - so without it the two scroll in step
   around whatever offset they happened to have before the turn.
+  **That `:syncbind` must be the last thing in the key press that
+  scrolls.** It sets Vim's `did_syncbind`, and the next scrollbind check
+  Vim would have made is then skipped — so a levelling done before this
+  window has finished moving swallows the movement that follows it. That
+  is why `s:GotoOffset()` passes `s:GotoPage()` a 0 and calls
+  `s:BindPageTurn()` itself once the cursor has arrived, with the byte it
+  arrived at: a jump to a byte on another page is two movements, and only
+  the second one is where level is.
 - **The markings are drawn in both views**, and `HexPairPagedMarkingPositions(layer, first, last)`
   is the one entry point that says where — dispatching on the view so the
   four layers cannot drift apart about which one they are drawing in, and
