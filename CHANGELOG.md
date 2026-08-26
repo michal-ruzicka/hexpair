@@ -9,6 +9,16 @@ and this project adheres to
 
 ## [v2.2.0-devel] – 2026-08-24
 
+### Changed
+- **`<Leader>G` is the suggested key for `:HexPairPageGoto!`** - ask which
+  page to go to, discarding unwritten changes - where `hexpair.vimrc` and
+  the `README.md` example both said `<Leader>P`. It belongs beside
+  `<Leader>g`, which is the same question without the bang, the way every
+  other pair here is a letter and its capital; `G` was the go-to-mark key
+  until v2.1.0 moved the marks under `<Leader>m`, and freeing it is what
+  the pair was waiting for. The plugin still defines no key mappings of
+  its own - this is the mapping file and the documentation.
+
 ## [v2.1.0] – 2026-08-24
 
 ### Added
