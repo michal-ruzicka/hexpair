@@ -3809,6 +3809,47 @@ check "and says why" \
 check "a window that is not bound is not dragged" "[2, 8]" \
     "$(sed -n 8p "$WORK/tbind.out")"
 
+# --- A jump to a byte takes them to that byte, not to the page ------------
+# Turning the page and arriving at the byte are two steps, and the windows
+# may only be levelled after BOTH: ":syncbind" swallows the next scrollbind
+# check Vim would make, so a levelling done between the two left the bound
+# window on the page's first byte while this one scrolled on to the byte it
+# was going to - two windows showing different parts of two files, which is
+# the one thing 'scrollbind' is here to prevent. What that costs cannot be
+# measured headlessly (a `vim -es` window has no geometry, so its toplines
+# say nothing), but the byte each window ends on can be, and it is the same
+# mistake seen from the other side.
+cat > "$WORK/tbindjump.vim" <<EOF
+$(printf "$HEX")
+let out = []
+HexPairOpen $WORK/diffa.bin 1
+setlocal scrollbind
+rightbelow vsplit
+HexPairOpen $WORK/diffb.bin 1
+setlocal scrollbind
+wincmd t
+HexPairGoOffset 0x701
+call add(out, HexPairStatus())
+wincmd b
+call add(out, HexPairStatus())
+wincmd t
+HexPairGoOffset 0x102
+call add(out, HexPairStatus())
+wincmd b
+call add(out, HexPairStatus())
+call writefile(out, '$WORK/tbindjump.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tbindjump.vim" < /dev/null
+check "a jump across pages goes to the byte it names" \
+    "hex 4/10 @0x701 (1793)" "$(sed -n 1p "$WORK/tbindjump.out")"
+check "and takes the bound window to that byte, not to the page" \
+    "hex 4/10 @0x701 (1793)" "$(sed -n 2p "$WORK/tbindjump.out")"
+check "a jump back turns them both again" "hex 1/10 @0x102 (258)" \
+    "$(sed -n 3p "$WORK/tbindjump.out")"
+check "the bound window on the byte again" "hex 1/10 @0x102 (258)" \
+    "$(sed -n 4p "$WORK/tbindjump.out")"
+
 # ---------------------------------------------------------------------------
 if [ "$FAIL" -eq 0 ]; then
     echo "All tests passed ($CHECKS checks)."

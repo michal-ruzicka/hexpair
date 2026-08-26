@@ -19,6 +19,25 @@ and this project adheres to
   the pair was waiting for. The plugin still defines no key mappings of
   its own - this is the mapping file and the documentation.
 
+### Fixed
+- **A jump to a byte on another page keeps the scroll-bound windows
+  together.** In `vimhexdiff`, walking the differences with
+  `:HexPairDiffNext` / `:HexPairDiffPrev` came apart the moment a jump
+  crossed a page boundary: the other window turned to the right page but
+  stayed at its first byte, while this one went on to the byte it was
+  going to - two windows scrolling in step through different parts of two
+  files, which is the one thing `'scrollbind'` is there to prevent. A
+  page turn and the cursor's arrival are two steps, and the windows were
+  being levelled between them: `:syncbind`, which is what tells Vim where
+  level is after a page has been loaded under a window, also swallows the
+  next scroll it would have followed - and that next scroll was this
+  window going to the byte. The levelling now happens after both steps,
+  and the bound window lands on the same byte rather than on the page's
+  first. Everything that goes to a byte is fixed by the same change:
+  `:HexPairDiffNext` / `:HexPairDiffPrev`, `:HexPairFind` and its
+  repeats, `:HexPairGoOffset`, `:HexPairGoMark` and
+  `:HexPairModifiedNext` / `:HexPairModifiedPrev`.
+
 ## [v2.1.0] – 2026-08-24
 
 ### Added

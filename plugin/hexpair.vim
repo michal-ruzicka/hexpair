@@ -2454,7 +2454,12 @@ function! s:LoadPageInView(pageidx) abort
   return 1
 endfunction
 
-function! s:GotoPage(pageidx, force) abort
+" a:1, when given, says whether to take the scroll-bound windows along
+" (default: yes, to the page's own first byte). A caller that turns the
+" page on the way to a BYTE passes 0 and calls s:BindPageTurn() itself
+" once its cursor has arrived - the levelling has to be the last thing
+" that scrolls, not the first. See s:BindPageTurn().
+function! s:GotoPage(pageidx, force, ...) abort
   if !s:RequirePaged()
     return
   endif
@@ -2464,7 +2469,7 @@ function! s:GotoPage(pageidx, force) abort
     echohl None
     return
   endif
-  if s:LoadPageInView(a:pageidx)
+  if s:LoadPageInView(a:pageidx) && (a:0 ? a:1 : 1)
     call s:BindPageTurn(b:hexpair_page_base)
   endif
 endfunction
@@ -3288,17 +3293,26 @@ function! s:GotoOffset(text, force) abort
       throw err
     endif
     let page = off / b:hexpair_page_size
+    let turned = 0
     if page != b:hexpair_page_index
-      call s:GotoPage(page, a:force)
+      " Not bound yet: this window is on the page but not yet on the byte,
+      " and :syncbind swallows the scroll that comes after it (see
+      " s:BindPageTurn). The bound windows are taken along below, once the
+      " cursor is where it is going.
+      call s:GotoPage(page, a:force, 0)
       if page != b:hexpair_page_index
         return
       endif
+      let turned = 1
     endif
     if s:IsHexView()
       call s:PagedGotoOffset(off)
       call s:PagedHighlight()
     else
       call s:TextGotoOffset(off)
+    endif
+    if turned
+      call s:BindPageTurn(off)
     endif
   catch /^hexpair:/
     echohl ErrorMsg
