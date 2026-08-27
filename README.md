@@ -5,6 +5,19 @@
 [![Ko-fi](https://img.shields.io/badge/Tip-Ko--fi-FF5E5B?style=flat&logo=kofi&logoColor=white)](https://ko-fi.com/michal_ruzicka)
 [![Revolut](https://img.shields.io/badge/Pay-Revolut-191C1F?style=flat&logo=revolut&logoColor=white)](https://revolut.me/ruzicka_michal)
 
+![hexpair at work on its own release tarball: the file downloaded, opened as
+text and then as a hex page, the byte pair lit up in both columns as the cursor
+walks, searches by text and by bytes across the whole file, a byte typed over
+and the ASCII column catching up, the two bytes of a multi-byte character read
+back by the data inspector, a character written in by its bytes, a write that
+says what a longer file costs, and the two files side by side with their
+differences marked](docs/hexpair-demo.gif)
+
+*It edits this project's own **v2.1.0 release tarball**, fetched live — a
+reproducible build, so the bytes on screen are the bytes you get: fetch the
+same 480 KiB and follow along, offset for offset. Recorded from this
+repository, and re-recordable from it: `docs/hexpair-demo.sh`.*
+
 **A Vim plugin that turns the classic `:%!xxd` hex-dump workflow into a
 small, reliable hex editor** — with live highlighting of the byte pair
 under the cursor in *both* the HEX and the ASCII column, byte-exact

@@ -43,11 +43,20 @@ and this project adheres to
   and refused if this Vim does not know it. `<Plug>(HexPairInsertChar)`
   asks for the text (`<Leader>I` in `hexpair.vimrc`).
 - **`docs/`: the animation at the top of `README.md`, and what records
-  it.** Half a minute of the plugin at work - a binary opened as plain
-  text, one command turning it into a hex editor, the byte and its
-  character lit up together, the data inspector, an edit and a write, the
-  same page as text, what differs from another file, and a search that
-  reads a file too large to load. It is recorded rather than drawn
+  it.** The plugin at work on **its own v2.1.0 release tarball**, fetched
+  live: a reproducible build, so the bytes on screen are the bytes anybody
+  else gets, and the same 480 KiB can be fetched and followed along offset
+  for offset. A binary opened as plain text and then as a
+  hex page, the byte and its character lit up together as the cursor walks
+  the columns, searches by text and by bytes across the whole file, a byte
+  typed over and the ASCII column catching up on `:HexPairRefresh`, the two
+  bytes of a multi-byte character read back by the data inspector, a
+  character written in by its bytes, a write that says what a longer file
+  costs, and `vimhexdiff`'s two panes with their differences marked - shown
+  through both the `:HP*` commands and the key mappings, because a recording
+  made only of typed commands reads as if the plugin had no keys, and with
+  every line left on the screen long enough to be read before it is sent.
+  It is recorded rather than drawn
   (`docs/hexpair-demo.sh`), from this repository's own working tree, so
   it can be made again whenever what it shows stops being true.
 

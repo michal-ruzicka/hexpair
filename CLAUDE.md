@@ -61,6 +61,29 @@ plugin/hexpair.vim    - the whole plugin, one script scope; header
 ftplugin/xxd.vim      - dump-editing defaults (guarded by b:did_ftplugin,
                         reverted via b:undo_ftplugin)
 doc/hexpair.txt       - Vim help (:help hexpair)
+docs/                 - the animation at the top of README.md and what
+                        records it: hexpair-demo.tape (the vhs script),
+                        hexpair-demo.vimrc (the Vim it uses - the plugin
+                        out of the working tree, nothing of the person
+                        recording), hexpair-demo.sh (records, converts,
+                        cleans up) and hexpair-demo.gif. The MP4 the GIF
+                        is made from is written beside it and gitignored -
+                        only one of the two belongs in a repository. It
+                        edits the project's own v2.1.0 release tarball,
+                        fetched live - reproducible, so the bytes on
+                        screen are the bytes anybody else gets - renamed
+                        to .bin because Vim's tar plugin would otherwise
+                        show the listing.
+                        NOT in the release tarball, and the packaging
+                        test does not ask for it: none of those names
+                        matches its .md/.vim/.txt/hexpair.* rule. See
+                        CONTRIBUTING.md, "The README demo", for the four
+                        things that took a recording each to find: vhs
+                        cannot type a non-ASCII <Leader>, a freshly
+                        started Vim swallows the first key sequence, vhs's
+                        own GIF writer is OOM-killed on a recording this
+                        long (hence MP4 then ffmpeg), and its work
+                        directory must be short as well as off tmpfs
 test/run-tests.sh     - headless regression suite (vim -es)
 dist/                 - packaged release tarballs (gitignored)
 ```
