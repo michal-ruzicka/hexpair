@@ -95,10 +95,11 @@ call s:Map('n', '<Leader>B', '<Plug>(HexPairGoOffsetForce)')
 " byte under the cursor in the form <Leader>b and vimhex's @BYTE take.
 call s:Map('n', '<Leader>?', '<Plug>(HexPairPages)')
 
-" Bring the other scroll-bound view onto the byte this one is on. 'scrollbind'
-" promises that windows move together, not that they are on the same byte, and
-" within a page they navigate independently - so after a while they are looking
-" at the same lines and different bytes. This is the way back.
+" Bring the other scroll-bound view onto the byte this one is on. A jump does
+" that by itself; moving the cursor by hand does not, because that is about
+" this window and not about the file - and 'scrollbind' promises that windows
+" move together, not that they are on the same byte. So after a while they are
+" looking at the same lines and different bytes. This is the way back.
 call s:Map('n', '<Leader>=', '<Plug>(HexPairSyncViews)')
 
 " --- Reading the bytes ---------------------------------------------------

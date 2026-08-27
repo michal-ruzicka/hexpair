@@ -14,8 +14,9 @@ and this project adheres to
   one is on - the page holding it, the byte itself, and level.
   `'scrollbind'` promises that windows *move* together, not that they are
   on the same byte, and within a page they navigate independently on
-  purpose; this is the way back from that. `<Plug>(HexPairSyncViews)`,
-  `<Leader>=` in `hexpair.vimrc`.
+  purpose; this is the way back from moving the cursor by hand. (A *jump*
+  needs no help - see Fixed.) `<Plug>(HexPairSyncViews)`, `<Leader>=` in
+  `hexpair.vimrc`.
 - **`:HexPairInspect` marks the bytes it just read** (`HexPairInspect`,
   `Visual` by default), in both columns, for as long as the cursor stays
   on the byte they were read from. The report's first line already says
@@ -61,6 +62,12 @@ and this project adheres to
   its own - this is the mapping file and the documentation.
 
 ### Fixed
+- **A jump takes the scroll-bound views along whether the page turned or
+  not.** It used to do it only when the byte was on another page, so the
+  same keystroke moved the other window or left it behind depending on how
+  far it happened to go. A jump names a byte and a byte means the same
+  thing in every view of the file; moving the cursor by hand is the other
+  thing, and stays independent.
 - **`vimhexdiff` starts with both cursors on the first difference**, which
   it has always said it does. `'scrollbind'` syncs movement made from the
   moment a window was bound, and everything `vimhexdiff` does happens

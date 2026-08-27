@@ -3942,9 +3942,11 @@ call writefile(out, '$WORK/tsync.out')
 qa!
 EOF
 "$HEXPAIR_VIM" -es -u NONE -S "$WORK/tsync.vim" < /dev/null
-check "a jump inside a page leaves the other view where it was" \
+# A jump names a byte, and a byte means the same thing in every view - so the
+# bound ones follow, whether the byte was a page away or two lines away.
+check "a jump inside a page takes the bound view along too" \
     "hex 1/10 @0x102 (258)" "$(sed -n 1p "$WORK/tsync.out")"
-check "which is the independence within a page, not a bug" "hex 1/10 @0x1 (1)" \
+check "which is the same rule as across a page" "hex 1/10 @0x102 (258)" \
     "$(sed -n 2p "$WORK/tsync.out")"
 check "and :HexPairSyncViews is the way back" "hex 1/10 @0x102 (258)" \
     "$(sed -n 3p "$WORK/tsync.out")"

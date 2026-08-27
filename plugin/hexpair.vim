@@ -1334,8 +1334,9 @@ endfunction
 " same byte, and it only ever syncs movement made from the moment each window
 " was bound. Two consequences, and this command answers both:
 "
-"   - views that have navigated independently within a page - which they are
-"     meant to be able to do - have no way back to each other;
+"   - views whose cursors have been moved by hand - which is meant to be
+"     independent, and is the one movement a jump's own sync does not cover -
+"     have no way back to each other;
 "   - a window scrolled before Vim's main loop has run is never synced at all,
 "     because the check that would have done it happens in that loop. That is
 "     not a corner: `vimhexdiff` jumps to the first difference from inside
@@ -3827,7 +3828,6 @@ function! s:GotoOffset(text, force) abort
       throw err
     endif
     let page = off / b:hexpair_page_size
-    let turned = 0
     if page != b:hexpair_page_index
       " Not bound yet: this window is on the page but not yet on the byte,
       " and :syncbind swallows the scroll that comes after it (see
@@ -3837,7 +3837,6 @@ function! s:GotoOffset(text, force) abort
       if page != b:hexpair_page_index
         return
       endif
-      let turned = 1
     endif
     if s:IsHexView()
       call s:PagedGotoOffset(off)
@@ -3845,9 +3844,14 @@ function! s:GotoOffset(text, force) abort
     else
       call s:TextGotoOffset(off)
     endif
-    if turned
-      call s:BindPageTurn(off)
-    endif
+    " Whether or not the page turned. A jump names a BYTE, and a byte means the
+    " same thing in every view of the file - so the bound ones follow, and they
+    " follow the same way whether the byte was a page away or two lines away.
+    " Syncing only across a page boundary is the rule that surprises: the same
+    " keystroke took the other window along or did not, depending on how far it
+    " happened to go. Moving the cursor by hand is the other thing, and stays
+    " independent - see |:HexPairSyncViews| for the way back from that.
+    call s:BindPageTurn(off, 1)
   catch /^hexpair:/
     echohl ErrorMsg
     echomsg v:exception

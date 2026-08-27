@@ -294,6 +294,14 @@ last byte, and on a short last line on its last existing byte.
                         byte this one is on: the page holding it, the byte
                         itself, and level.
 
+                        Rarely needed, because a JUMP already does it: a
+                        jump names a byte, a byte means the same thing in
+                        every view of the file, and so |:HexPairGoOffset|,
+                        the search landings, |:HexPairDiffNext| and the
+                        rest take the bound views along - whether the byte
+                        was a page away or two lines away.
+
+                        What does not is moving the cursor by hand.
                         'scrollbind' promises that windows MOVE together,
                         not that they are on the same byte, and within a
                         page they navigate independently - which they are
@@ -1432,10 +1440,12 @@ The same file also defines `vimhexdiff`: >
 <
 which opens both files side by side, each marking the bytes that differ
 from the other (|:HexPairDiff|), with the cursors on the first difference
-and the two windows scroll-bound.  A page turn in either window takes the
-other with it (|g:hexpair_bind_pages|), so the two stay on the same bytes
-however far through the files you go; within one page they navigate
-independently, as two views of anything here do.
+and the two windows scroll-bound.  A jump in either window - a diff jump,
+a search landing, |:HexPairGoOffset|, or a page turn made directly - takes
+the other to the same byte (|g:hexpair_bind_pages|), so the two stay
+together however far through the files you go.  Moving the cursor by hand
+is the one movement that does not; |:HexPairSyncViews| is the way back
+from it.
 
 Set $VIMHEX_VIM to use a particular Vim.
 

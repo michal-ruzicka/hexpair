@@ -47,11 +47,12 @@
 # done the syncing has run even once. Without it the left window jumps to the
 # first difference and the right one stays at the top of page 1.
 #
-# Afterwards they keep showing the same bytes:
-# scrolling within a page keeps them level, and a page turn in either one
-# - by :HexPairDiffNext landing further on, or by turning it directly -
-# takes the other with it (g:hexpair_bind_pages). Within one page they
-# navigate independently, as two views of anything do here.
+# Afterwards they keep showing the same bytes: scrolling keeps them level, and
+# a JUMP in either one - a diff jump, a search landing, :HexPairGoOffset, or a
+# page turn made directly - takes the other to the same byte
+# (g:hexpair_bind_pages). Moving the cursor by hand is the one thing that does
+# not, since that is about this window and not about the file; :HexPairSyncViews
+# is the way back from it.
 #
 # Only the page on screen is read, so the size of the file does not matter.
 # Set VIMHEX_VIM to use a particular Vim, e.g. VIMHEX_VIM=/usr/bin/vim.
