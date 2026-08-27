@@ -1219,10 +1219,14 @@ endfunction
 " mean discarding them, and this window's page turn is no reason to. So
 " is one whose file does not reach that far. Both say so, because a
 " bound window quietly showing something else is the bug this fixes.
-function! s:BindPageTurn(offset) abort
+" a:1, when 1, also puts a bound window on the byte when it is ALREADY on the
+" page holding it - which a page turn never has to do, and :HexPairSyncViews
+" always does.
+function! s:BindPageTurn(offset, ...) abort
   if !g:hexpair_bind_pages || !&l:scrollbind || winnr('$') < 2 || s:binding
     return
   endif
+  let force = a:0 ? a:1 : 0
   let here = winnr()
   let s:binding = 1
   let moved = []
@@ -1232,6 +1236,13 @@ function! s:BindPageTurn(offset) abort
       if w != here && getbufvar(winbufnr(w), 'hexpair_page_active', 0)
         noautocmd execute w . 'wincmd w'
         if s:FollowPageTurn(a:offset)
+          call add(moved, w)
+        elseif force && &l:scrollbind && get(b:, 'hexpair_page_active', 0)
+              \ && a:offset >= b:hexpair_page_base
+              \ && a:offset < b:hexpair_page_base + b:hexpair_page_len
+          " Already on the right page: nothing to turn, but the cursor still
+          " has to be put on the byte, and the levelling below still has to
+          " run - which is the whole of what this command is for.
           call add(moved, w)
         endif
       endif
@@ -1314,6 +1325,37 @@ function! s:FollowPageTurn(offset) abort
     let &l:scrollbind = bound
   endtry
   return done
+endfunction
+
+" :HexPairSyncViews - bring every scroll-bound view onto the byte this one is
+" on: the page holding it, the byte itself, and level.
+"
+" 'scrollbind' promises that windows MOVE together, not that they are on the
+" same byte, and it only ever syncs movement made from the moment each window
+" was bound. Two consequences, and this command answers both:
+"
+"   - views that have navigated independently within a page - which they are
+"     meant to be able to do - have no way back to each other;
+"   - a window scrolled before Vim's main loop has run is never synced at all,
+"     because the check that would have done it happens in that loop. That is
+"     not a corner: `vimhexdiff` jumps to the first difference from inside
+"     VimEnter, and the two windows started life showing different parts of
+"     two files because of it.
+function! s:SyncViews() abort
+  if !s:RequirePaged()
+    return
+  endif
+  if winnr('$') < 2
+    echo 'hexpair: only one window here'
+    return
+  endif
+  if !&l:scrollbind
+    echo 'hexpair: this window is not scroll-bound, so nothing follows it'
+    return
+  endif
+  let at = s:Here()
+  call s:BindPageTurn(at, 1)
+  echo printf('hexpair: the bound views are on byte %d (0x%x)', at + 1, at + 1)
 endfunction
 
 function! s:Stayed(why) abort
@@ -6025,6 +6067,7 @@ command! -bar -bang -nargs=1 HexPairPageGoto
       \ call s:PageGotoText(<q-args>, '<bang>' ==# '!')
 command! -bar -bang -nargs=1 HexPairGoOffset
       \ call s:GotoOffset(<q-args>, '<bang>' ==# '!')
+command! -bar HexPairSyncViews call s:SyncViews()
 command! -bar HexPairPages call s:Pages()
 command! -bar HexPairSelection call s:Selection()
 command! -bar -bang HexPairInspect call s:Inspect('<bang>' ==# '!')
@@ -6075,6 +6118,7 @@ if g:hexpair_short_commands
         \ ['-bar -bang', 'HPPagePrev', 'HexPairPagePrev'],
         \ ['-bar -bang -nargs=1', 'HPPageGoto', 'HexPairPageGoto'],
         \ ['-bar -bang -nargs=1', 'HPGoOffset', 'HexPairGoOffset'],
+        \ ['-bar', 'HPSyncViews', 'HexPairSyncViews'],
         \ ['-bar', 'HPPages', 'HexPairPages'],
         \ ['-bar', 'HPSelection', 'HexPairSelection'],
         \ ['-bar -bang', 'HPInspect', 'HexPairInspect'],
@@ -6127,6 +6171,7 @@ nnoremap <silent> <Plug>(HexPairPageGotoForce) :<C-U>call <SID>PageGotoPrompt(1)
 nnoremap <silent> <Plug>(HexPairGoOffset) :<C-U>call <SID>GotoOffsetPrompt(0)<CR>
 nnoremap <silent> <Plug>(HexPairGoOffsetForce) :<C-U>call <SID>GotoOffsetPrompt(1)<CR>
 nnoremap <silent> <Plug>(HexPairPages) :<C-U>HexPairPages<CR>
+nnoremap <silent> <Plug>(HexPairSyncViews) :<C-U>HexPairSyncViews<CR>
 " Both modes: from Visual mode it reports the selection being made (the
 " :<C-U> leaves Visual mode, which is what sets '< and '>), from Normal
 " mode the one made last.

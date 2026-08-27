@@ -3900,6 +3900,65 @@ check "a jump back turns them both again" "hex 1/10 @0x102 (258)" \
 check "the bound window on the byte again" "hex 1/10 @0x102 (258)" \
     "$(sed -n 4p "$WORK/tbindjump.out")"
 
+# --- Bringing views that drifted apart back together ----------------------
+# 'scrollbind' promises that windows MOVE together, not that they are on the
+# same byte, and within a page they navigate independently - so after a while
+# they show the same lines and different bytes, with no way back. It also only
+# ever syncs movement made from the moment a window was bound, which is why
+# vimhexdiff's own startup needs this: everything it does happens inside
+# VimEnter, before the loop that would have done the syncing has run once, and
+# the two windows began life showing different parts of two files.
+cat > "$WORK/tsync.vim" <<EOF
+$(printf "$HEX")
+let out = []
+HexPairOpen $WORK/diffa.bin 1
+setlocal scrollbind
+rightbelow vsplit
+HexPairOpen $WORK/diffb.bin 1
+setlocal scrollbind
+wincmd t
+HexPairGoOffset 0x102
+call add(out, HexPairStatus())
+wincmd b
+call add(out, HexPairStatus())
+wincmd t
+HexPairSyncViews
+call add(out, HexPairStatus())
+wincmd b
+call add(out, HexPairStatus())
+wincmd t
+HexPairGoOffset 0x701
+HexPairSyncViews
+call add(out, HexPairStatus())
+wincmd b
+call add(out, HexPairStatus())
+setlocal noscrollbind
+wincmd t
+HexPairGoOffset 0x102
+HexPairSyncViews
+wincmd b
+call add(out, HexPairStatus())
+call writefile(out, '$WORK/tsync.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tsync.vim" < /dev/null
+check "a jump inside a page leaves the other view where it was" \
+    "hex 1/10 @0x102 (258)" "$(sed -n 1p "$WORK/tsync.out")"
+check "which is the independence within a page, not a bug" "hex 1/10 @0x1 (1)" \
+    "$(sed -n 2p "$WORK/tsync.out")"
+check "and :HexPairSyncViews is the way back" "hex 1/10 @0x102 (258)" \
+    "$(sed -n 3p "$WORK/tsync.out")"
+check "for the bound view too" "hex 1/10 @0x102 (258)" \
+    "$(sed -n 4p "$WORK/tsync.out")"
+# The same across a page boundary, where it also has to turn the page.
+check "across a page it turns the other view too" "hex 4/10 @0x701 (1793)" \
+    "$(sed -n 5p "$WORK/tsync.out")"
+check "and lands it on the byte" "hex 4/10 @0x701 (1793)" \
+    "$(sed -n 6p "$WORK/tsync.out")"
+# A window that is not bound is not dragged, here as everywhere else.
+check "a view that is not bound is left alone" "hex 4/10 @0x701 (1793)" \
+    "$(sed -n 7p "$WORK/tsync.out")"
+
 # --- What the inspector is reading, marked ---------------------------------
 # The report's first line says which bytes it is about; reading eight pairs
 # of digits back off a line of forty-eight is the work the marking saves.

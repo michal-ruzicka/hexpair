@@ -205,6 +205,7 @@ nmap <Leader>k <Plug>(HexPairPagePrev)      " previous page
 nmap <Leader>g <Plug>(HexPairPageGoto)      " prompt for a page (N, +N, -N, $)
 nmap <Leader>b <Plug>(HexPairGoOffset)      " prompt for a byte, 1-based (0x... ok)
 nmap <Leader>? <Plug>(HexPairPages)         " where am I: page, range, cursor byte
+nmap <Leader>= <Plug>(HexPairSyncViews)     " bring the other bound view to my byte
 
 " Reading the bytes
 nmap <Leader>i <Plug>(HexPairInspect)       " the bytes at the cursor as numbers
@@ -334,6 +335,7 @@ page. Close and reopen the file for the ordinary view.
 | `:HexPairPageNext[!]` / `:HexPairPagePrev[!]` / `:HexPairPageGoto[!] {page}` | Turn pages (`!` discards unwritten changes); `{page}` is a number, `+N`/`-N` to step, or `$` for the last one |
 | `:HexPairGoOffset[!] {byte}` | Jump to a byte, decimal or `0x`-prefixed, turning the page if needed; 1-based, like the banner. `+N` / `-N` step from where the cursor is |
 | `:HexPairPages` | Report page X of Y, the offsets covered, the file size and the byte under the cursor |
+| `:HexPairSyncViews` | Bring every scroll-bound view onto the byte this one is on |
 | `:HexPairInspect[!]` | Read the bytes at the cursor as numbers: 8/16/32/64-bit, unsigned and signed, both endiannesses, and both IEEE 754 floats — and mark them on the page; `!` unmarks them |
 | `:HexPairInsertChar [++enc={encoding}] {text}` | Put the bytes of `{text}` in at the cursor, in `g:hexpair_insert_encoding` or in `{encoding}` |
 | `:HexPairSelection` | Say how many bytes the Visual selection covers, and which |

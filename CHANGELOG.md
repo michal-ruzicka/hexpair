@@ -10,6 +10,12 @@ and this project adheres to
 ## [v2.2.0-devel] – 2026-08-24
 
 ### Added
+- **`:HexPairSyncViews`** brings every scroll-bound view onto the byte this
+  one is on - the page holding it, the byte itself, and level.
+  `'scrollbind'` promises that windows *move* together, not that they are
+  on the same byte, and within a page they navigate independently on
+  purpose; this is the way back from that. `<Plug>(HexPairSyncViews)`,
+  `<Leader>=` in `hexpair.vimrc`.
 - **`:HexPairInspect` marks the bytes it just read** (`HexPairInspect`,
   `Visual` by default), in both columns, for as long as the cursor stays
   on the byte they were read from. The report's first line already says
@@ -55,6 +61,13 @@ and this project adheres to
   its own - this is the mapping file and the documentation.
 
 ### Fixed
+- **`vimhexdiff` starts with both cursors on the first difference**, which
+  it has always said it does. `'scrollbind'` syncs movement made from the
+  moment a window was bound, and everything `vimhexdiff` does happens
+  inside `VimEnter` - before the loop that would have done the syncing has
+  run even once. The left window jumped to the first difference and the
+  right one stayed at the top of page 1, showing a different part of a
+  different file.
 - **The question a length-changing write asks says which way the length
   changed.** A page that *grows* by more than the tail behind it is cheaper
   to write the file afresh than to shift in place, and takes the same road

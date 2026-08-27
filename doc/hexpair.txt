@@ -289,6 +289,32 @@ last byte, and on a short last line on its last existing byte.
                         begin with ++enc= just as the command's argument
                         may.
 
+                                                        *:HexPairSyncViews*
+:HexPairSyncViews       Bring every scroll-bound view of a page onto the
+                        byte this one is on: the page holding it, the byte
+                        itself, and level.
+
+                        'scrollbind' promises that windows MOVE together,
+                        not that they are on the same byte, and within a
+                        page they navigate independently - which they are
+                        meant to.  After a while that leaves them showing
+                        the same lines and different bytes, with no way
+                        back.  This is the way back.
+
+                        It also only ever syncs movement made from the
+                        moment each window was bound, so a window scrolled
+                        before Vim's main loop has run is never synced at
+                        all.  That is not a corner: `vimhexdiff` jumps to
+                        the first difference from inside |VimEnter|, and
+                        without this the left window went to it while the
+                        right one stayed at the top of page 1.
+
+                        Only bound views follow, and only those showing a
+                        page.  One that has unwritten changes, or whose
+                        file does not reach that far, stays where it is
+                        and says so - as for a page turn
+                        (|g:hexpair_bind_pages|).
+
                                                           *:HexPairSelection*
 :HexPairSelection       Say how many bytes the |Visual| selection covers,
                         and which: >

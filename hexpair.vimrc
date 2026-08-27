@@ -95,6 +95,12 @@ call s:Map('n', '<Leader>B', '<Plug>(HexPairGoOffsetForce)')
 " byte under the cursor in the form <Leader>b and vimhex's @BYTE take.
 call s:Map('n', '<Leader>?', '<Plug>(HexPairPages)')
 
+" Bring the other scroll-bound view onto the byte this one is on. 'scrollbind'
+" promises that windows move together, not that they are on the same byte, and
+" within a page they navigate independently - so after a while they are looking
+" at the same lines and different bytes. This is the way back.
+call s:Map('n', '<Leader>=', '<Plug>(HexPairSyncViews)')
+
 " --- Reading the bytes ---------------------------------------------------
 " The bytes at the cursor as the numbers they could be - 8/16/32/64-bit,
 " signed and unsigned, both endiannesses, both IEEE 754 floats - and as
