@@ -4978,9 +4978,12 @@ function! s:DiffJump(forward) abort
     " longer, and every byte it has beyond ours is one. There is nowhere
     " to put the cursor for that, so say it rather than jump.
     if at >= b:hexpair_page_total
+      " Short (:~:.), like the other two things a jump key can print - see
+      " the comment below. This one is the longest of the three, so it is
+      " the one that would wrap.
       echo printf('hexpair: %s is longer: its bytes from %d (0x%x) on have '
-            \ . 'nothing here to differ from', b:hexpair_diff_file,
-            \ at + 1, at + 1)
+            \ . 'nothing here to differ from',
+            \ fnamemodify(b:hexpair_diff_file, ':~:.'), at + 1, at + 1)
       return
     endif
     call s:GotoOffset(string(at + 1), 0)

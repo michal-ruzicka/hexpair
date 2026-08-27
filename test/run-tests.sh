@@ -2973,17 +2973,26 @@ HexPairGoOffset 4999
 redir => msg2
 silent HexPairDiffNext
 redir END
-call writefile([onpage, substitute(msg2, '^[\r\n]*', '', ''), HexPairStatus()], '$WORK/tdf2.out')
+call writefile([onpage, substitute(msg2, '^[\r\n]*', '', ''), HexPairStatus(), fnamemodify('$WORK/diffc.bin', ':~:.')], '$WORK/tdf2.out')
 qa!
 EOF
 "$HEXPAIR_VIM" -es -u NONE -S "$WORK/tdf2.vim" < /dev/null
+# Both of these name the file the short way (:~:.), so the expectation is
+# what VIM shortens the path to and not a literal the harness built - which
+# is the same rule as the "two files that agree" check above, and the one
+# this pair got wrong. On Linux tempname() is under /tmp, :~ has nothing to
+# do and the two spellings are identical; on Windows the fixtures live under
+# the user's profile and the message says ~/AppData/... . Line 4 of the
+# output is that spelling, computed by the same fnamemodify() the plugin
+# calls.
+short=$(sed -n 4p "$WORK/tdf2.out")
 check_path "a longer file agrees over the bytes it shares" \
-    "hexpair: bytes 4609-5000 are the same in $WORK/diffc.bin" \
+    "hexpair: bytes 4609-5000 are the same in $short" \
     "$(sed -n 1p "$WORK/tdf2.out")"
 # The bytes past this file's end are a difference too, and the jump lands
 # on the first of them.
 check_path "but differs from where it grows, with nowhere to put the cursor" \
-    "hexpair: $WORK/diffc.bin is longer: its bytes from 5001 (0x1389) on have nothing here to differ from" \
+    "hexpair: $short is longer: its bytes from 5001 (0x1389) on have nothing here to differ from" \
     "$(sed -n 2p "$WORK/tdf2.out")"
 
 # ===========================================================================

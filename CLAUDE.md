@@ -328,6 +328,7 @@ come back**; each names the test that would catch it.
 | The `<Plug>`-coverage test was vacuous: `map <Plug>` under `-u NONE` reads `<Plug>` as six literal characters ('compatible' puts `<` in `'cpoptions'`), and the plugin was never sourced in that script, so there were no targets to miss | "and leaves no `<Plug>` target without a key" — `set cpoptions-=<`, the plugin sourced, and the keys looked for in the mappings *file* rather than in `map` (where every target is its own left-hand side) |
 | A jump synced the scroll-bound windows only when it crossed a page boundary, so the same keystroke took the other window along or left it behind depending on how far it happened to go | "a jump inside a page takes the bound view along too" and "which is the same rule as across a page" |
 | `vimhexdiff` opened with its two windows on different parts of two files: everything it does runs inside `VimEnter`, and `'scrollbind'` syncs only movement made after the main loop has seen the window bound | "and :HexPairSyncViews is the way back" and the block around it — the startup now ends in `:HexPairSyncViews` |
+| Two assertions about the diff summary compared the message against a path the harness had built, while the plugin prints one `fnamemodify(':~:.')` has been over. Identical on Linux, where `tempname()` is under `/tmp` and `:~` has nothing to do; on Windows the fixtures live under the user's profile and the message says `~/AppData/...`, so the suite passed everywhere it was run and failed only in Windows CI | "a longer file agrees over the bytes it shares" and "but differs from where it grows" — the expected path is now line 4 of the fixture's own output, written by the same `fnamemodify()` call the plugin makes |
 | A search match straddling a page boundary was marked on neither page: it fits whole inside neither, and each page was searched alone | "and the page it starts on marks the byte it has" — `s:PageHexForSearch()` reads the page with span-1 bytes of each neighbour |
 | Mark completion with nothing typed yet offered nothing: `v:val[0 : strlen('') - 1]` is `[0 : -1]`, the whole name, which matches no empty lead | "mark completion offers all the names, and the matching ones" |
 | A selection report echoed from a Visual-mode mapping was painted over by `-- VISUAL --` before it could be read | not testable headlessly — the tmux recipe above, and the hit-enter prompt is the fix |
@@ -395,6 +396,24 @@ traps in the recipe itself: a test vimrc needs `set nocompatible` before
 any `<>` key notation (`'compatible'` puts `<` in `'cpoptions'`, and the
 mappings are then silently not what they read as), and packages in
 `~/.vim/pack` load even under `-u`, so a plugin can be loaded twice.
+
+**A `:~` bug is invisible on Linux, and one line of environment makes it
+visible.** Anything the plugin shortens with `fnamemodify(..., ':~:.')` looks
+unchanged in this suite, because `mktemp -d` puts `$WORK` under `/tmp` and `:~`
+only does something to a path under `$HOME`. On Windows `%TEMP%` *is* under the
+user's profile, so the same code prints `~/AppData/...` and an assertion built
+from a literal path fails — in Windows CI only. Put the work directory under a
+home of its own and Linux reproduces it exactly:
+
+```sh
+mkdir -p /tmp/fakehome
+HOME=/tmp/fakehome TMPDIR=/tmp/fakehome test/run-tests.sh
+```
+
+Worth running before touching anything that prints a file name. The rule it
+serves is the one already stated above: **assert against the value the code will
+actually use** — here, by having the fixture's own Vim script write out
+`fnamemodify(path, ':~:.')` and comparing against that.
 
 **Read the check COUNT, not just the last line.** The suite is one long
 sequence of blocks, and an edit that replaces a span of it can swallow

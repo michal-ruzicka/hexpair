@@ -123,8 +123,11 @@ and this project adheres to
 
 - **`:HexPairDiff` names the file it is comparing against the short way**
   (`~` for your home directory, relative where it is below the working
-  directory), as the jump messages already did. Spelled out in full its
-  summary ran past the command line, wrapped, and cost a hit-enter
+  directory), as the jump messages already did - and so does the one
+  jump message that still spelled it out in full, "*file* is longer:
+  its bytes from N on have nothing here to differ from", which of the
+  three is the longest and so the likeliest to wrap. Spelled out in full
+  the summary ran past the command line, wrapped, and cost a hit-enter
   prompt - which is not only a keystroke: the prompt holds the screen as
   it was, so the jump the next command made was not drawn until the
   prompt was dismissed, and the view looked like it had ignored it.
