@@ -3663,10 +3663,13 @@ check "and stops at the last of them" \
 # pack-release.py carries the file list by hand, and a new file that users
 # are told to source can be added to the repo, documented, and then simply
 # not ship - which is exactly what happened to hexpair.vimrc between one
-# commit and the next. The rule is mechanical: every .md, .vim, .txt and
-# hexpair.* outside the test directory is something a user gets.
+# commit and the next. The rule is mechanical: every .md, .vim, .txt,
+# hexpair.* and vimhex*.cmd outside the test directory is something a user
+# gets. vimhex*.cmd rather than *.cmd, because pack-release.cmd is a tool for
+# building a release and not a part of one.
 shipped=$(cd "$ROOT" && find . -maxdepth 2 -type f \
-    \( -name '*.md' -o -name '*.vim' -o -name '*.txt' -o -name 'hexpair.*' \) \
+    \( -name '*.md' -o -name '*.vim' -o -name '*.txt' -o -name 'hexpair.*' \
+       -o -name 'vimhex*.cmd' \) \
     ! -path './test/*' ! -path './.git/*' ! -path './dist/*' \
     | sed 's|^\./||' | sort | tr '\n' ' ')
 packed=$(sed -n '/^FILES/,/^]/p' "$ROOT/pack-release.py" \

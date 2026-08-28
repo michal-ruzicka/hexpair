@@ -9,6 +9,19 @@ and this project adheres to
 
 ## [v2.3.0-devel] – 2026-08-28
 
+### Added
+- **`vimhex.cmd` and `vimhexdiff.cmd`**, the `cmd.exe` counterparts of the
+  two shell functions in `hexpair.bashrc` - same names, same arguments, so
+  a hex view is opened the same way whichever shell you are standing in.
+  Put the plugin's own directory on `PATH` and updating the plugin updates
+  the commands; `VIMHEX_VIM` picks the Vim, `gvim` included.
+- **Explorer context-menu entries**, as registry snippets in `README.md`
+  under "Windows: `vimhex` and `vimhexdiff` outside Vim". One file is one
+  click. Two files are two, because Explorer runs a verb once per selected
+  file and there is no `%2` without a COM handler - so `vimhexdiff.cmd`
+  grew `/pick FILE` and `/with FILE`, the same "select left side, then
+  compare against it" every diff tool on Windows uses.
+
 ### Fixed
 - **A `^M` at the end of every line of a page, on Windows.** `xxd` opens a
   dump in text mode there (`xxd.c`: `BIN_ASSIGN(fpo = stdout, revert)` for

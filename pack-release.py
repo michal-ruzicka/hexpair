@@ -48,6 +48,8 @@ FILES = [
     "hexpair/hexpair.bashrc",
     "hexpair/hexpair.vimrc",
     "hexpair/plugin/hexpair.vim",
+    "hexpair/vimhex.cmd",
+    "hexpair/vimhexdiff.cmd",
 ]
 
 

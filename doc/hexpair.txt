@@ -1464,6 +1464,39 @@ itself so they survive being copied out of it:
   ++bin afterwards (|hexpair-page-source|).  Save piped input with
   `:w {file}`; a plain |:w| has no file to write back to.
 
+                                                    *hexpair-vimhex-windows*
+The same two commands for cmd.exe ship beside it as vimhex.cmd and
+vimhexdiff.cmd, taking the same arguments: >
+
+    vimhex bigfile.bin
+    vimhex bigfile.bin 3
+    vimhex bigfile.bin $
+    vimhex bigfile.bin @0x4a2000
+    type bigfile.bin | vimhex -
+    vimhexdiff old.img new.img
+<
+They need to be on $PATH, and the plugin's own directory is the tidiest
+thing to put there, since updating the plugin then updates the commands:
+`%USERPROFILE%\vimfiles\pack\plugins\start\hexpair`.  Add it through the
+Environment Variables dialog rather than with `setx PATH "%PATH%;..."`,
+which writes the system and user paths joined together into your user
+Path and truncates the result at 1024 characters.
+
+They default to the console `vim`; set $VIMHEX_VIM to `gvim`, or to a full
+path, for another one.
+
+vimhexdiff.cmd takes two more forms, for the Explorer context menu: >
+
+    vimhexdiff /pick FILE    remember FILE as the left-hand side
+    vimhexdiff /with FILE    diff it against the remembered one
+<
+Explorer runs a context-menu command once per selected file, each with its
+own %1, so a verb cannot be handed two of them at once without a COM
+handler; these are the two steps every diff tool on Windows solves that
+with.  The remembered path lives in %LOCALAPPDATA%\hexpair\diff-left.txt
+and is forgotten as soon as it is used.  README.md, under "Windows: vimhex
+and vimhexdiff outside Vim", has the registry entries.
+
 ==============================================================================
 9. Limitations                                           *hexpair-limitations*
 

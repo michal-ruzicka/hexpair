@@ -321,6 +321,101 @@ cat bigfile.bin | vimhex -      # piped input
 it later. Set `VIMHEX_VIM` to pick a particular Vim. Details are in the
 file's own comments and in `:help hexpair-vimhex`.
 
+### Windows: `vimhex` and `vimhexdiff` outside Vim
+
+`vimhex.cmd` and `vimhexdiff.cmd` are the same two commands for `cmd.exe`,
+taking the same arguments as the shell functions above:
+
+```bat
+vimhex bigfile.bin              REM the first page
+vimhex bigfile.bin 3            REM page 3
+vimhex bigfile.bin $            REM the last page, without counting them
+vimhex bigfile.bin @0x4a2000    REM the page holding that byte
+type bigfile.bin | vimhex -     REM piped input
+vimhexdiff old.img new.img      REM the two side by side
+```
+
+They default to the console `vim`. Set `VIMHEX_VIM` for another one —
+`gvim` for the GUI, or a full path such as
+`C:\Program Files\Vim\vim91\gvim.exe`.
+
+**Where to put them.** They only need to be on `PATH`, and the plugin's own
+directory is the tidiest place to point at, because then updating the plugin
+updates the commands:
+
+```
+%USERPROFILE%\vimfiles\pack\plugins\start\hexpair
+```
+
+Add it through *Settings → System → About → Advanced system settings →
+Environment Variables* (or `rundll32 sysdm.cpl,EditEnvironmentVariables`),
+editing **Path** under *User variables*. Do not do it with
+`setx PATH "%PATH%;..."`: `%PATH%` there is the system and user paths already
+joined together, so that writes the whole lot into your user `Path` and
+truncates it at 1024 characters.
+
+Copying the two files into a directory you already have on `PATH` works just
+as well — they are self-contained, and they find Vim through `PATH` or
+`VIMHEX_VIM` rather than through where they sit themselves.
+
+#### From the Explorer context menu
+
+One file is straightforward. Save this as `hexpair-menu.reg`, with the path
+to `vimhex.cmd` as you actually installed it (the doubled backslashes are
+the `.reg` format's own escaping, not a typo), and double-click it:
+
+```
+Windows Registry Editor Version 5.00
+
+[HKEY_CURRENT_USER\Software\Classes\*\shell\hexpair]
+@="Open in he&xpair"
+
+[HKEY_CURRENT_USER\Software\Classes\*\shell\hexpair\command]
+@="cmd.exe /c \"\"C:\\Users\\you\\vimfiles\\pack\\plugins\\start\\hexpair\\vimhex.cmd\" \"%1\"\""
+```
+
+Under `HKEY_CURRENT_USER` it needs no administrator rights and touches
+nobody else's account; deleting the `hexpair` key removes the entry again.
+Set `VIMHEX_VIM=gvim` in your user environment if you want the GUI, since a
+verb has no way to pass one in. A console window appears for as long as the
+`.cmd` runs, which is a fraction of a second — the only way to avoid it
+entirely is a GUI stub executable, which this plugin does not ship.
+
+**Two selected files is not science fiction, but it is not one click
+either.** Explorer runs a context-menu command *once per selected file*,
+each invocation getting its own `%1`; there is no `%2`. Getting all of a
+selection into a single invocation needs a `DropTarget` or `ExplorerCommand`
+COM handler — a registered in-process server, which is a different kind of
+project from a batch file. So `vimhexdiff.cmd` does what every diff tool on
+Windows does instead, in two clicks:
+
+```
+Windows Registry Editor Version 5.00
+
+[HKEY_CURRENT_USER\Software\Classes\*\shell\hexpair-pick]
+@="Hex diff: &select left side"
+
+[HKEY_CURRENT_USER\Software\Classes\*\shell\hexpair-pick\command]
+@="cmd.exe /c \"\"C:\\Users\\you\\vimfiles\\pack\\plugins\\start\\hexpair\\vimhexdiff.cmd\" /pick \"%1\"\""
+
+[HKEY_CURRENT_USER\Software\Classes\*\shell\hexpair-with]
+@="Hex diff: &against selected"
+
+[HKEY_CURRENT_USER\Software\Classes\*\shell\hexpair-with\command]
+@="cmd.exe /c \"\"C:\\Users\\you\\vimfiles\\pack\\plugins\\start\\hexpair\\vimhexdiff.cmd\" /with \"%1\"\""
+```
+
+Right-click the first file and *select left side*, then right-click the
+second and *against selected*. The remembered path lives in
+`%LOCALAPPDATA%\hexpair\diff-left.txt` and is forgotten as soon as it is
+used, so the next comparison starts from a fresh pick rather than silently
+reusing a stale one. The same two steps work from `cmd.exe`:
+
+```bat
+vimhexdiff /pick old.img
+vimhexdiff /with new.img
+```
+
 A buffer hexpair has touched is in one of two views, and `:HexPairToggle`
 moves between them:
 

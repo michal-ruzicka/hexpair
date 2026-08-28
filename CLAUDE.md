@@ -50,6 +50,24 @@ hexpair.vimrc         - the mappings the maintainer uses, in a form a
                         g:loaded_hexpair_vimrc, restores 'cpoptions', and
                         never takes a key the user has already mapped.
                         Bundled in the release tarball.
+vimhex.cmd            the cmd.exe counterparts of the two shell
+vimhexdiff.cmd        functions in hexpair.bashrc, same names and same
+                      arguments. CRLF line endings, pinned by
+                      .gitattributes - a batch file with LF endings
+                      breaks `goto` under cmd.exe. Both pass paths
+                      through the ENVIRONMENT into $NAME inside a Vim
+                      expression, for hexpair.bashrc's reason, and that
+                      is also what makes them safe to call from an
+                      Explorer verb. vimhexdiff.cmd additionally has
+                      /pick and /with: a context-menu verb is run once
+                      per selected file and there is no %2, so two files
+                      take two clicks unless one writes a COM handler.
+                      Bundled in the release tarball, and the packaging
+                      test's rule was widened to vimhex*.cmd to keep
+                      them there (pack-release.cmd is a build tool, not
+                      part of a release). NOT exercised by CI: the
+                      Windows job runs the Vim suite under Git Bash, so
+                      the batch itself is only ever run by hand.
 pack-release          - POSIX wrapper around pack-release.py
 pack-release.cmd      - Windows wrapper around pack-release.py
 pack-release.py       - the packaging implementation (python3, stdlib
