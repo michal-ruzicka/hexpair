@@ -7,6 +7,131 @@ and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html); the
 `Version:` header in `plugin/hexpair.vim` is the single source of truth.
 
+## [v2.2.0] – 2026-08-28
+
+### Added
+- **`:HexPairSyncViews`** brings every scroll-bound view onto the byte this
+  one is on - the page holding it, the byte itself, and level.
+  `'scrollbind'` promises that windows *move* together, not that they are
+  on the same byte, and within a page they navigate independently on
+  purpose; this is the way back from moving the cursor by hand. (A *jump*
+  needs no help - see Fixed.) `<Plug>(HexPairSyncViews)`, `<Leader>=` in
+  `hexpair.vimrc`.
+- **`:HexPairInspect` marks the bytes it just read** (`HexPairInspect`,
+  `Visual` by default), in both columns, for as long as the cursor stays
+  on the byte they were read from. The report's first line already says
+  which bytes it is about; the marking is what saves counting eight pairs
+  of digits back off a line of forty-eight. Near the end of a page or of
+  the file the report can only read three or four, and then three or four
+  are marked - a marking of eight would be saying something the report
+  does not. `:HexPairInspect!` takes it off at once,
+  `g:hexpair_show_inspect = 0` never draws it.
+- **`:HexPairInsertChar [++enc={encoding}] {text}`** puts the bytes of a
+  character in at the cursor - the data inspector read backwards. It says
+  what the bytes at the cursor would be as utf-8, utf-16 and utf-32; this
+  writes a character in exactly those. `Š` is `c5 a0`, or `60 01`, or
+  `00 00 01 60`, and which of them is meant is
+  `g:hexpair_insert_encoding` (`'utf-8'` unless you say otherwise) - a
+  file is in one encoding, so the question is worth answering once, and
+  `++enc=` overrules it for a single insert. The bytes go in before the
+  byte under the cursor and push the page along, exactly as typing them
+  into the dump would, so one `u` takes the insert back and nothing
+  reaches the file until `:w` does. utf-8, utf-16le/be, utf-32le/be,
+  latin1 and ascii are computed from the code point rather than converted,
+  because a Vim string cannot hold a NUL and `A` in utf-16le is `41 00`;
+  any other name is handed to `iconv()`, checked by converting it back,
+  and refused if this Vim does not know it. `<Plug>(HexPairInsertChar)`
+  asks for the text (`<Leader>I` in `hexpair.vimrc`).
+- **`docs/`: the animation at the top of `README.md`, and what records
+  it.** The plugin at work on **its own v2.1.0 release tarball**, fetched
+  live: a reproducible build, so the bytes on screen are the bytes anybody
+  else gets, and the same 480 KiB can be fetched and followed along offset
+  for offset. A binary opened as plain text and then as a
+  hex page, the byte and its character lit up together as the cursor walks
+  the columns, searches by text and by bytes across the whole file, a byte
+  typed over and the ASCII column catching up on `:HexPairRefresh`, the two
+  bytes of a multi-byte character read back by the data inspector, a
+  character written in by its bytes, a write that says what a longer file
+  costs, and `vimhexdiff`'s two panes with their differences marked - shown
+  through both the `:HP*` commands and the key mappings, because a recording
+  made only of typed commands reads as if the plugin had no keys, and with
+  every line left on the screen long enough to be read before it is sent.
+  It is recorded rather than drawn
+  (`docs/hexpair-demo.sh`), from this repository's own working tree, so
+  it can be made again whenever what it shows stops being true.
+
+### Changed
+- **`<Leader>G` is the suggested key for `:HexPairPageGoto!`** - ask which
+  page to go to, discarding unwritten changes - where `hexpair.vimrc` and
+  the `README.md` example both said `<Leader>P`. It belongs beside
+  `<Leader>g`, which is the same question without the bang, the way every
+  other pair here is a letter and its capital; `G` was the go-to-mark key
+  until v2.1.0 moved the marks under `<Leader>m`, and freeing it is what
+  the pair was waiting for. The plugin still defines no key mappings of
+  its own - this is the mapping file and the documentation.
+
+### Fixed
+- **A jump takes the scroll-bound views along whether the page turned or
+  not.** It used to do it only when the byte was on another page, so the
+  same keystroke moved the other window or left it behind depending on how
+  far it happened to go. A jump names a byte and a byte means the same
+  thing in every view of the file; moving the cursor by hand is the other
+  thing, and stays independent.
+- **`vimhexdiff` starts with both cursors on the first difference**, which
+  it has always said it does. `'scrollbind'` syncs movement made from the
+  moment a window was bound, and everything `vimhexdiff` does happens
+  inside `VimEnter` - before the loop that would have done the syncing has
+  run even once. The left window jumped to the first difference and the
+  right one stayed at the top of page 1, showing a different part of a
+  different file.
+- **The question a length-changing write asks says which way the length
+  changed.** A page that *grows* by more than the tail behind it is cheaper
+  to write the file afresh than to shift in place, and takes the same road
+  as a shortening - where it announced itself as "Shortening a file means
+  writing it afresh" about a file that was getting longer.
+- **A jump to a byte on another page keeps the scroll-bound windows
+  together.** In `vimhexdiff`, walking the differences with
+  `:HexPairDiffNext` / `:HexPairDiffPrev` came apart the moment a jump
+  crossed a page boundary: the other window turned to the right page but
+  stayed at its first byte, while this one went on to the byte it was
+  going to - two windows scrolling in step through different parts of two
+  files, which is the one thing `'scrollbind'` is there to prevent. A
+  page turn and the cursor's arrival are two steps, and the windows were
+  being levelled between them: `:syncbind`, which is what tells Vim where
+  level is after a page has been loaded under a window, also swallows the
+  next scroll it would have followed - and that next scroll was this
+  window going to the byte. The levelling now happens after both steps,
+  and the bound window lands on the same byte rather than on the page's
+  first. Everything that goes to a byte is fixed by the same change:
+  `:HexPairDiffNext` / `:HexPairDiffPrev`, `:HexPairFind` and its
+  repeats, `:HexPairGoOffset`, `:HexPairGoMark` and
+  `:HexPairModifiedNext` / `:HexPairModifiedPrev`.
+- **The progress line of a file-wide scan is readable, and `CTRL-C` stops
+  the scan.** Neither was true: the line was echoed and then wiped by the
+  redraw meant to show it, dozens of times a second, so a search of a
+  large file looked like a hang with a flicker in the message line; and
+  every block read caught the interrupt along with everything else and
+  went on to read the next block, so `CTRL-C` only worked if it landed in
+  the sliver of time between two reads. It stops the scan now, wherever
+  it is pressed, and answers `hexpair: stopped` - a scan only reads, so
+  there is nothing to undo. The line also says how far it has got as a
+  size, not only as a percentage, because one per cent of a 70 GiB file
+  is 700 MB and minutes of reading, and a figure that does not move is a
+  figure that says "hung":
+
+      hexpair: searching 2.3 GiB of 70.0 GiB (3%, CTRL-C stops)
+
+- **`:HexPairDiff` names the file it is comparing against the short way**
+  (`~` for your home directory, relative where it is below the working
+  directory), as the jump messages already did - and so does the one
+  jump message that still spelled it out in full, "*file* is longer:
+  its bytes from N on have nothing here to differ from", which of the
+  three is the longest and so the likeliest to wrap. Spelled out in full
+  the summary ran past the command line, wrapped, and cost a hit-enter
+  prompt - which is not only a keystroke: the prompt holds the screen as
+  it was, so the jump the next command made was not drawn until the
+  prompt was dismissed, and the view looked like it had ignored it.
+
 ## [v2.1.0] – 2026-08-24
 
 ### Added
@@ -432,6 +557,8 @@ in one place:
   not on `PATH`.
 - Vim help documentation (`:help hexpair`).
 
+
+[v2.2.0]: https://github.com/michal-ruzicka/hexpair/compare/v2.1.0...v2.2.0
 [v2.1.0]: https://github.com/michal-ruzicka/hexpair/compare/v2.0.0...v2.1.0
 [v2.0.0]: https://github.com/michal-ruzicka/hexpair/compare/v1.1.0...v2.0.0
 [v1.1.0]: https://github.com/michal-ruzicka/hexpair/compare/v1.0.0...v1.1.0

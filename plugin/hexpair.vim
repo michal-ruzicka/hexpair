@@ -1,8 +1,8 @@
 " hexpair.vim - Hex viewing with hex<->ASCII pair highlighting
 " Maintainer:  Michal Růžička <ruzicka.mich@gmail.com>
 " URL:         https://github.com/michal-ruzicka/hexpair
-" Version:     2.1.0
-" Date:        2026-08-24
+" Version:     2.2.0
+" Date:        2026-08-28
 " License:     Vim License - same terms as Vim itself (see LICENSE.md
 "              or :help license); SPDX-License-Identifier: Vim
 "
@@ -52,6 +52,10 @@
 "                              and not yet written (default 1)
 "   g:hexpair_show_marks       set to 0 to stop underlining the byte a
 "                              mark stands on (default 1)
+"   g:hexpair_show_inspect     set to 0 to stop marking the bytes the
+"                              data inspector is reading (default 1)
+"   g:hexpair_insert_encoding  which encoding |:HexPairInsertChar| writes
+"                              a character in (default 'utf-8')
 "   g:hexpair_split_views      set to 1 to make a plain :split of a hex
 "                              page a view of its own (default 0)
 "   g:hexpair_short_commands   set to 0 to leave the short HP names
@@ -62,7 +66,8 @@
 "   g:hexpair_debug            set to 1 to echo position-mapping traces
 "                              (inspect with :messages)
 "   HexPairActive, HexPairMirror, HexPairPageBanner, HexPairModified,
-"   HexPairDiff, HexPairFind, HexPairMark   highlight groups
+"   HexPairDiff, HexPairFind, HexPairMark, HexPairInspect
+"                              highlight groups
 "
 " Editing defaults for the dump (tabstop, shiftwidth, no automatic
 " formatting) live in the bundled ftplugin/xxd.vim; see
@@ -146,6 +151,24 @@ if !exists('g:hexpair_show_marks')
   let g:hexpair_show_marks = 1
 endif
 
+" Whether the bytes |:HexPairInspect| has just read are highlighted
+" (HexPairInspect). The report says which bytes it is about in its first
+" line, but reading eight pairs of digits back off a line of forty-eight
+" is exactly the work the marking saves. It costs nothing at all until
+" the command is used, and goes as soon as the cursor moves off the byte
+" it was read from.
+if !exists('g:hexpair_show_inspect')
+  let g:hexpair_show_inspect = 1
+endif
+
+" Which encoding |:HexPairInsertChar| writes a character in. A standing
+" choice rather than an argument, because a file is in one encoding and
+" the question is answered once for it; ++enc= on the command overrules it
+" for a single insert without changing it back afterwards.
+if !exists('g:hexpair_insert_encoding')
+  let g:hexpair_insert_encoding = 'utf-8'
+endif
+
 " Whether a window that ends up showing a page a SECOND time becomes an
 " independent view of the same file - its own buffer, its own page, its
 " own cursor - instead of a second window onto the same buffer, which is
@@ -227,6 +250,15 @@ highlight default link HexPairFind Search
 " markings do not blend (see the priorities in s:MarkHighlight()).
 highlight default HexPairMark term=underline,bold cterm=underline,bold
       \ gui=underline,bold
+
+" Highlight group for the bytes |:HexPairInspect| is reading. Visual,
+" because that is what it means - a run of bytes taken together, the way
+" a selection is - and because it is the one of Vim's stock groups that
+" the four markings above have not already taken. It is transient: the
+" run is marked while the cursor stays on the byte it was read from, so
+" it never has to share a byte with a marking that is about the bytes
+" themselves.
+highlight default link HexPairInspect Visual
 
 " --------------------------------------------------------------------------
 " Vim version gate
@@ -1088,6 +1120,7 @@ function! s:RefreshOtherWindows() abort
         call s:DiffHighlight()
         call s:FindHighlight()
         call s:MarkHighlight()
+        call s:InspectHighlight()
       endif
       let w += 1
     endwhile
@@ -1114,25 +1147,64 @@ endfunction
 " What a scan says while it runs. Pure, and therefore testable: the
 " message is the only part of a progress report that can be wrong in a
 " way anyone would notice.
+"
+" It says how far it has got as a size and not only as a percentage,
+" because a percentage of a very large file hardly moves: one per cent of
+" 70 GiB is 700 MB, minutes of reading between one figure and the next,
+" and a line that does not change is a line that says "hung".
 function! HexPairPagedProgressText(what, done, total) abort
-  return printf('hexpair: %s %d%% of %s (CTRL-C stops)', a:what,
-        \ a:total > 0 ? a:done * 100 / a:total : 100,
-        \ HexPairPagedSizeText(a:total))
+  return printf('hexpair: %s %s of %s (%d%%, CTRL-C stops)', a:what,
+        \ HexPairPagedSizeText(a:done), HexPairPagedSizeText(a:total),
+        \ a:total > 0 ? a:done * 100 / a:total : 100)
 endfunction
 
-" Scans of a big file report where they have got to. The redraw AFTER the
-" echo is what puts the line on the screen while a function is still
-" running, and it has to be the forcing one: measured in a terminal over
-" five updates, a plain :redraw before the echo showed one of them, after
-" it two, and :redraw! all five - Vim skips a redraw it believes changes
-" nothing, and a message written from inside a running function is
-" exactly that.
+" The progress line currently on the screen, so that the same one is not
+" written over itself thousands of times. Reset wherever a scan starts:
+" by then the screen has been used for something else and the line has to
+" be put back even if it reads the same.
+let s:progressline = ''
+
+function! s:ProgressReset() abort
+  let s:progressline = ''
+endfunction
+
+" Scans of a big file report where they have got to. The redraw goes AFTER
+" the echo, and must NOT be the forcing one.
+"
+" `redraw!` repaints the screen from scratch, and what it paints does not
+" include a message a still-running function echoed - so `echo` followed
+" by `redraw!` wrote the line and wiped it again, dozens of times a
+" second, and the progress report was never readable at all. (The measure
+" that put the `!` there counted how often something appeared, which a
+" flash of one frame satisfies.) A plain `redraw` flushes what is pending
+" and leaves the message standing.
+"
+" And only when the line would say something new. A 70 GiB file is 70000
+" blocks; repainting for each of them costs more than reading them does,
+" and every repaint is a chance for the line to be caught half written.
 function! s:Progress(what, done, total) abort
   if a:total < s:progressfrom
     return
   endif
-  echo HexPairPagedProgressText(a:what, a:done, a:total)
-  redraw!
+  let line = HexPairPagedProgressText(a:what, a:done, a:total)
+  if line ==# s:progressline
+    return
+  endif
+  let s:progressline = line
+  echo line
+  redraw
+endfunction
+
+" What CTRL-C during a scan says. A scan only reads, so there is nothing
+" to put back and nothing to warn about: it stopped, and that is all.
+"
+" The redraw comes FIRST here, the other way round from s:Progress(): the
+" screen is left half painted by the scan that was interrupted, and a
+" repaint after this message would take the message with it. This one is
+" the last word, so the screen is put right and then written on.
+function! s:Stopped() abort
+  redraw
+  echo 'hexpair: stopped'
 endfunction
 
 " A page turn is scrolling by a whole page, and 'scrollbind' cannot follow
@@ -1147,10 +1219,14 @@ endfunction
 " mean discarding them, and this window's page turn is no reason to. So
 " is one whose file does not reach that far. Both say so, because a
 " bound window quietly showing something else is the bug this fixes.
-function! s:BindPageTurn(offset) abort
+" a:1, when 1, also puts a bound window on the byte when it is ALREADY on the
+" page holding it - which a page turn never has to do, and :HexPairSyncViews
+" always does.
+function! s:BindPageTurn(offset, ...) abort
   if !g:hexpair_bind_pages || !&l:scrollbind || winnr('$') < 2 || s:binding
     return
   endif
+  let force = a:0 ? a:1 : 0
   let here = winnr()
   let s:binding = 1
   let moved = []
@@ -1160,6 +1236,13 @@ function! s:BindPageTurn(offset) abort
       if w != here && getbufvar(winbufnr(w), 'hexpair_page_active', 0)
         noautocmd execute w . 'wincmd w'
         if s:FollowPageTurn(a:offset)
+          call add(moved, w)
+        elseif force && &l:scrollbind && get(b:, 'hexpair_page_active', 0)
+              \ && a:offset >= b:hexpair_page_base
+              \ && a:offset < b:hexpair_page_base + b:hexpair_page_len
+          " Already on the right page: nothing to turn, but the cursor still
+          " has to be put on the byte, and the levelling below still has to
+          " run - which is the whole of what this command is for.
           call add(moved, w)
         endif
       endif
@@ -1244,6 +1327,38 @@ function! s:FollowPageTurn(offset) abort
   return done
 endfunction
 
+" :HexPairSyncViews - bring every scroll-bound view onto the byte this one is
+" on: the page holding it, the byte itself, and level.
+"
+" 'scrollbind' promises that windows MOVE together, not that they are on the
+" same byte, and it only ever syncs movement made from the moment each window
+" was bound. Two consequences, and this command answers both:
+"
+"   - views whose cursors have been moved by hand - which is meant to be
+"     independent, and is the one movement a jump's own sync does not cover -
+"     have no way back to each other;
+"   - a window scrolled before Vim's main loop has run is never synced at all,
+"     because the check that would have done it happens in that loop. That is
+"     not a corner: `vimhexdiff` jumps to the first difference from inside
+"     VimEnter, and the two windows started life showing different parts of
+"     two files because of it.
+function! s:SyncViews() abort
+  if !s:RequirePaged()
+    return
+  endif
+  if winnr('$') < 2
+    echo 'hexpair: only one window here'
+    return
+  endif
+  if !&l:scrollbind
+    echo 'hexpair: this window is not scroll-bound, so nothing follows it'
+    return
+  endif
+  let at = s:Here()
+  call s:BindPageTurn(at, 1)
+  echo printf('hexpair: the bound views are on byte %d (0x%x)', at + 1, at + 1)
+endfunction
+
 function! s:Stayed(why) abort
   echomsg printf('hexpair: %s %s, so that view stayed on page %d',
         \ s:PageLabel(), a:why, b:hexpair_page_index + 1)
@@ -1272,6 +1387,8 @@ function! HexPairPagedMarkingPositions(layer, first, last) abort
   elseif a:layer ==# 'find'
     return hex ? HexPairPagedFindPositions(a:first, a:last)
           \ : s:TextFindPositions(a:first, a:last)
+  elseif a:layer ==# 'inspect'
+    return s:InspectPositions(a:first, a:last)
   endif
   return hex ? HexPairPagedMarkPositions(a:first, a:last)
         \ : s:TextMarkPositions(a:first, a:last)
@@ -1282,14 +1399,22 @@ function! s:ClearMarkings() abort
   call s:ClearDiffHighlight()
   call s:ClearFindHighlight()
   call s:ClearMarkHighlight()
+  call s:ClearInspectHighlight()
 endfunction
 
 function! s:PagedHighlight() abort
   call s:PagedClearHighlight()
+  " The inspector's marking is the one that answers a question rather than
+  " describing the bytes, so it lives exactly as long as the question: the
+  " cursor moving off the byte it was read from is the answer being over.
+  " Dropped here, before anything is drawn, and before s:RefreshOtherWindows()
+  " goes hopping through windows whose cursor is not this one.
+  call s:InspectExpire()
   call s:ModifiedHighlight()
   call s:DiffHighlight()
   call s:FindHighlight()
   call s:MarkHighlight()
+  call s:InspectHighlight()
   call s:RefreshOtherWindows()
   if !get(b:, 'hexpair_page_active', 0) || !s:IsHexView()
     return
@@ -1816,7 +1941,17 @@ function! s:FileHex(file, off, len) abort
     " 1 MiB block comes to, 16 ms against 51 ms, and a scan of a large
     " file is thousands of those.
     return substitute(substitute(out, '\n', '', 'g'), '\r', '', 'g')
-  catch
+  catch /^hexpair:/
+    " A read that failed - a file that went away, an xxd that could not
+    " open it - is an empty block, and the caller finds nothing in it.
+    "
+    " Only that, where this used to be a catch-all. CTRL-C inside a :try
+    " becomes the exception "Vim:Interrupt", and a catch-all catches that
+    " one too: every block read of a scan swallowed the interrupt and went
+    " on to read the next block, so stopping a scan of a large file meant
+    " pressing the key in the sliver of time between two reads. It cannot
+    " be caught here and re-thrown either (E608 refuses an exception with
+    " a 'Vim' prefix); the answer is not to catch what is not ours.
     return ''
   endtry
 endfunction
@@ -1984,9 +2119,15 @@ endfunction
 " in place, all of them when it has to be rewritten.
 function! HexPairPagedResizeMessage(delta, total, moved) abort
   let head = printf("hexpair: this page changed length by %+d bytes.\n", a:delta)
+  " a:moved >= a:total is "the whole file gets written again", and a shortening
+  " is only one of the two ways to get there: a page that GROWS by more than
+  " the tail behind it is cheaper to write afresh than to shift in place, and
+  " came through here saying "Shortening a file" about a file that was getting
+  " longer. The direction is a:delta's to report, not this branch's.
   if a:moved >= a:total
-    return head . printf('Shortening a file means writing it afresh, so all '
-          \ . "%d of its bytes are rewritten (%d -> %d bytes).\nContinue?",
+    return head . printf('%s means writing the file afresh, so all %d of its '
+          \ . "bytes are rewritten (%d -> %d bytes).\nContinue?",
+          \ a:delta < 0 ? 'Shortening it' : 'Growing it by this much',
           \ a:total, a:total, a:total + a:delta)
   endif
   return head . printf('Everything after this page has to move, so %d of '
@@ -2454,7 +2595,12 @@ function! s:LoadPageInView(pageidx) abort
   return 1
 endfunction
 
-function! s:GotoPage(pageidx, force) abort
+" a:1, when given, says whether to take the scroll-bound windows along
+" (default: yes, to the page's own first byte). A caller that turns the
+" page on the way to a BYTE passes 0 and calls s:BindPageTurn() itself
+" once its cursor has arrived - the levelling has to be the last thing
+" that scrolls, not the first. See s:BindPageTurn().
+function! s:GotoPage(pageidx, force, ...) abort
   if !s:RequirePaged()
     return
   endif
@@ -2464,7 +2610,7 @@ function! s:GotoPage(pageidx, force) abort
     echohl None
     return
   endif
-  if s:LoadPageInView(a:pageidx)
+  if s:LoadPageInView(a:pageidx) && (a:0 ? a:1 : 1)
     call s:BindPageTurn(b:hexpair_page_base)
   endif
 endfunction
@@ -3100,8 +3246,129 @@ function! HexPairPagedInspectLines(bytes, at, total) abort
   return map(out, "substitute(v:val, '\\s\\+$', '', '')")
 endfunction
 
-function! s:Inspect() abort
+" Where the bytes the inspector last read are, as matchaddpos() positions
+" for the lines a:first to a:last, in whichever view the buffer is in.
+"
+" b:hexpair_inspect is [absolute offset, count], and the count is what the
+" report actually managed to read: s:InspectBytes() stops at the end of
+" the page and at the end of the file, so a run near either is short and
+" the marking is short with it. Marking eight bytes when the report could
+" only tell you about three would be the marking saying something the
+" report does not.
+function! s:InspectRuns() abort
+  let at = get(b:, 'hexpair_inspect', [])
+  if len(at) != 2 || at[1] <= 0
+    return []
+  endif
+  let from = at[0] - b:hexpair_page_base
+  let len = at[1]
+  if from < 0
+    let len += from
+    let from = 0
+  endif
+  if len > b:hexpair_page_len - from
+    let len = b:hexpair_page_len - from
+  endif
+  return len > 0 ? [[from, len]] : []
+endfunction
+
+function! s:InspectPositions(first, last) abort
+  let runs = s:InspectRuns()
+  if empty(runs)
+    return []
+  endif
+  if !s:IsHexView()
+    return HexPairPagedTextPositions(s:TextSpans(a:first, a:last), runs)
+  endif
+  return HexPairPagedRunPositions(runs, a:first, a:last)
+endfunction
+
+" One or more runs of bytes of the page, as positions in the DUMP: three
+" columns per byte in the hex column, one in the ASCII column, and a run
+" that crosses a line break split at it. The layer that needed this is the
+" inspector's, but nothing here is about the inspector.
+function! HexPairPagedRunPositions(runs, first, last) abort
+  let out = []
+  let n = b:hexpair_n
+  let header = s:HeaderLines()
+  for run in a:runs
+    let b0 = run[0]
+    let b1 = run[0] + run[1] - 1
+    if b1 < b0
+      continue
+    endif
+    let line = b0 / n
+    while line <= b1 / n
+      let lnum = line + 1 + header
+      if lnum >= a:first && lnum <= a:last
+        let [n2, hexstart, hexend, asciistart] = s:PagedLineLayout(lnum)
+        let s0 = b0 > line * n ? b0 - line * n : 0
+        let s1 = b1 < (line + 1) * n - 1 ? b1 - line * n : n - 1
+        call add(out, [lnum, hexstart + s0 * 3, (s1 - s0 + 1) * 3 - 1])
+        if strlen(getline(lnum)) >= asciistart
+          call add(out, [lnum, asciistart + s0, s1 - s0 + 1])
+        endif
+      endif
+      let line += 1
+    endwhile
+  endfor
+  return out
+endfunction
+
+function! s:ClearInspectHighlight() abort
+  if exists('w:hexpair_inspect_ids')
+    for id in w:hexpair_inspect_ids
+      silent! call matchdelete(id)
+    endfor
+  endif
+  let w:hexpair_inspect_ids = []
+  let w:hexpair_inspect_state = []
+endfunction
+
+function! s:InspectHighlight() abort
+  if !g:hexpair_show_inspect || !get(b:, 'hexpair_page_active', 0)
+    return
+  endif
+  let state = [get(b:, 'hexpair_inspect', []), b:hexpair_page_base,
+        \ line('w0'), line('w$')]
+  if get(w:, 'hexpair_inspect_state', []) ==# state
+    return
+  endif
+  call s:ClearInspectHighlight()
+  let w:hexpair_inspect_state = state
+  let positions = HexPairPagedMarkingPositions('inspect',
+        \ line('w0'), line('w$'))
+  for i in range(0, len(positions) - 1, 8)
+    call add(w:hexpair_inspect_ids,
+          \ matchaddpos('HexPairInspect', positions[i : i + 7]))
+  endfor
+endfunction
+
+" Forget the run once the cursor is no longer on the byte it was read
+" from. Not on any cursor movement: a redraw, a window hop and a
+" :syncbind all run through the highlighting without the cursor having
+" gone anywhere, and the marking has to survive those.
+function! s:InspectExpire() abort
+  let at = get(b:, 'hexpair_inspect', [])
+  if len(at) == 2 && at[0] != s:Here()
+    call s:InspectForget()
+  endif
+endfunction
+
+function! s:InspectForget() abort
+  if exists('b:hexpair_inspect')
+    unlet b:hexpair_inspect
+  endif
+endfunction
+
+function! s:Inspect(clear) abort
   if !s:RequirePaged()
+    return
+  endif
+  if a:clear
+    call s:InspectForget()
+    call s:PagedHighlight()
+    echo 'hexpair: nothing inspected'
     return
   endif
   if b:hexpair_page_len <= 0
@@ -3109,11 +3376,284 @@ function! s:Inspect() abort
     return
   endif
   let bytes = s:InspectBytes(8)
-  let at = empty(bytes) ? 0 :
-        \ (s:IsHexView() ? s:PagedByteOffset() : s:TextByteOffset()) + 1
+  let here = s:Here()
+  let at = empty(bytes) ? 0 : here + 1
+  " The marking is the report's first line said in the dump's own columns,
+  " so it covers exactly the bytes the report is about - see s:InspectRuns().
+  if empty(bytes)
+    call s:InspectForget()
+  else
+    let b:hexpair_inspect = [here, len(bytes)]
+  endif
+  call s:InspectHighlight()
+  call s:RefreshOtherWindows()
   for line in HexPairPagedInspectLines(bytes, at, b:hexpair_page_total)
     echo line
   endfor
+endfunction
+
+
+" ---------------------------------------------------------------------------
+" Inserting the bytes of a character
+" ---------------------------------------------------------------------------
+"
+" A hex editor is where you end up when a file holds a character it should
+" not, and putting the right one in means knowing its bytes. This is the
+" other direction of the data inspector: it reads the bytes at the cursor
+" as utf-8, utf-16 and utf-32, and |:HexPairInsertChar| writes a character
+" in exactly those. 'S' with a caron is c5 a0 in utf-8, 60 01 in utf-16le,
+" 8a in cp1250 and nothing at all in latin1, and which of those is meant is
+" g:hexpair_insert_encoding - or ++enc= on the command, for one insert.
+"
+" The Unicode encodings are COMPUTED from the code points rather than
+" converted by iconv(), and that is not a preference: iconv() answers with
+" a Vim String, a Vim String cannot hold a NUL, and 'A' in utf-16le is
+" 41 00 - what comes back ends at the first of those. Computing them also
+" means they do not depend on what the machine's iconv was built with.
+"
+" Anything else IS handed to iconv(), and then converted back and compared:
+" a conversion that lost a byte does not survive the round trip. So a Vim
+" whose iconv knows cp1250 can insert into a cp1250 file, and one whose
+" iconv does not says so instead of writing something else.
+
+" The code points of the text the user typed.
+"
+" char2nr() answers in terms of 'encoding', which is the right answer for
+" the two encodings where a character IS a code point - utf-8, and latin1,
+" whose 256 characters are the first 256 code points. On anything else the
+" character is converted to utf-8 first and read as utf-8 explicitly. A
+" character that cannot be read at all comes back as -1.
+function! HexPairPagedCodePoints(text) abort
+  let out = []
+  let native = &encoding ==# 'utf-8' || &encoding ==# 'latin1'
+  for c in split(a:text, '\zs')
+    if native
+      call add(out, char2nr(c))
+    else
+      let u = iconv(c, &encoding, 'utf-8')
+      call add(out, u ==# '' ? -1 : char2nr(u, 1))
+    endif
+  endfor
+  return out
+endfunction
+
+" One code point in one encoding, as hex digits; '' when that encoding
+" cannot hold it. Pure, and the only place any of these encodings is
+" spelled out.
+function! HexPairPagedEncodeCodePoint(cp, enc) abort
+  let cp = a:cp
+  " A surrogate is half of a utf-16 pair and not a character in its own
+  " right; nothing may encode one, or a round trip through utf-16 would
+  " turn it into something else.
+  if cp < 0 || cp > 0x10ffff || (cp >= 0xd800 && cp <= 0xdfff)
+    return ''
+  endif
+  let enc = tolower(a:enc)
+  if enc ==# 'utf-8'
+    if cp < 0x80
+      return printf('%02x', cp)
+    elseif cp < 0x800
+      return printf('%02x%02x', 0xc0 + cp / 0x40, 0x80 + cp % 0x40)
+    elseif cp < 0x10000
+      return printf('%02x%02x%02x', 0xe0 + cp / 0x1000,
+            \ 0x80 + (cp / 0x40) % 0x40, 0x80 + cp % 0x40)
+    endif
+    return printf('%02x%02x%02x%02x', 0xf0 + cp / 0x40000,
+          \ 0x80 + (cp / 0x1000) % 0x40, 0x80 + (cp / 0x40) % 0x40,
+          \ 0x80 + cp % 0x40)
+  elseif enc ==# 'utf-16le' || enc ==# 'utf-16be'
+    " Above the BMP a code point is two 16-bit halves, the surrogate pair.
+    let units = cp < 0x10000 ? [cp]
+          \ : [0xd800 + (cp - 0x10000) / 0x400,
+          \    0xdc00 + (cp - 0x10000) % 0x400]
+    let out = ''
+    for u in units
+      let out .= enc ==# 'utf-16le'
+            \ ? printf('%02x%02x', u % 256, u / 256)
+            \ : printf('%02x%02x', u / 256, u % 256)
+    endfor
+    return out
+  elseif enc ==# 'utf-32le' || enc ==# 'utf-32be'
+    let b = [cp / 0x1000000 % 256, (cp / 0x10000) % 256,
+          \  (cp / 0x100) % 256, cp % 256]
+    if enc ==# 'utf-32le'
+      call reverse(b)
+    endif
+    return printf('%02x%02x%02x%02x', b[0], b[1], b[2], b[3])
+  elseif enc ==# 'latin1' || enc ==# 'iso-8859-1'
+    return cp < 0x100 ? printf('%02x', cp) : ''
+  elseif enc ==# 'ascii' || enc ==# 'us-ascii'
+    return cp < 0x80 ? printf('%02x', cp) : ''
+  endif
+  return ''
+endfunction
+
+" Every encoding this file can compute, as opposed to convert.
+let s:computed_encodings = ['utf-8', 'utf-16le', 'utf-16be',
+      \ 'utf-32le', 'utf-32be', 'latin1', 'iso-8859-1', 'ascii', 'us-ascii']
+
+" The bytes of a Vim String, as hex. Through a file and xxd, which is the
+" one way to see a string's bytes exactly whatever 'encoding' is - the same
+" round trip the inspector's text view uses, and for the same reason.
+function! s:HexOfString(text) abort
+  " Everything else here runs with a page open, which is what resolves
+  " s:xxd; this one is also reachable from HexPairPagedCharBytes() with no
+  " buffer at all, which is how the suite asks it questions.
+  if !exists('s:xxd') || s:xxd ==# ''
+    let s:xxd = s:ResolveXxd()
+    if s:xxd ==# ''
+      throw 'hexpair: xxd not found in PATH nor in $VIMRUNTIME'
+    endif
+  endif
+  let raw = tempname()
+  try
+    call writefile([a:text], raw, 'b')
+    return tolower(substitute(s:Run(printf('%s -p %s', s:xxd,
+          \ shellescape(raw))), '[^0-9a-fA-F]', '', 'g'))
+  finally
+    call delete(raw)
+  endtry
+endfunction
+
+" The bytes of a:text in a:enc: {'hex': ..., 'bytes': ...} or {'msg': ...}.
+function! HexPairPagedCharBytes(text, enc) abort
+  if a:text ==# ''
+    return {'msg': 'hexpair: nothing to insert'}
+  endif
+  let enc = tolower(a:enc)
+  if index(s:computed_encodings, enc) >= 0
+    let hex = ''
+    for cp in HexPairPagedCodePoints(a:text)
+      let one = cp < 0 ? '' : HexPairPagedEncodeCodePoint(cp, enc)
+      if one ==# ''
+        return {'msg': printf('hexpair: %s cannot hold %s', a:enc,
+              \ cp < 0 ? 'that character' : printf('U+%04X', cp))}
+      endif
+      let hex .= one
+    endfor
+    return {'hex': hex, 'bytes': strlen(hex) / 2}
+  endif
+  " Not one this file computes, so ask the machine's iconv.
+  if !s:IconvKnows(enc)
+    return {'msg': printf('hexpair: this Vim does not know the encoding %s; '
+          \ . 'it can always write utf-8, utf-16le/be, utf-32le/be, latin1 '
+          \ . 'and ascii', a:enc)}
+  endif
+  " Checked by converting it back, which is the only way to see that a NUL
+  " cut the answer short (see the note at the top of this section) - and
+  " also the way a character the target encoding does not have is caught,
+  " since iconv() writes those as '?' rather than failing.
+  let converted = iconv(a:text, &encoding, enc)
+  if converted ==# '' || iconv(converted, enc, &encoding) !=# a:text
+    return {'msg': printf('hexpair: %s cannot hold %s', a:enc,
+          \ string(a:text))}
+  endif
+  let hex = s:HexOfString(converted)
+  if hex ==# ''
+    return {'msg': printf('hexpair: %s came to no bytes as %s',
+          \ string(a:text), a:enc)}
+  endif
+  return {'hex': hex, 'bytes': strlen(hex) / 2}
+endfunction
+
+" Whether this Vim can convert to a:enc at all.
+"
+" It cannot simply be asked. iconv() answers a conversion it cannot do by
+" handing the text back unchanged, and for a text that encodes the same
+" either way - anything ASCII, in any ASCII-compatible encoding - that is
+" exactly what success looks like too. So the question is put with a
+" character no other encoding spells the way utf-8 does: U+0160, capital S
+" with a caron, which is c5 a0 in utf-8 and two other bytes, one byte, or
+" nothing at all in everything else.
+"
+" On a Vim whose 'encoding' is not utf-8 the canary may not be
+" representable at all, and then only the computed encodings are on offer.
+" That is the limit worth having rather than the guess worth making.
+function! s:IconvKnows(enc) abort
+  if !has('iconv')
+    return 0
+  endif
+  let canary = nr2char(0x160)
+  let there = iconv(canary, &encoding, a:enc)
+  return there !=# '' && there !=# canary
+        \ && iconv(there, a:enc, &encoding) ==# canary
+endfunction
+
+" '++enc={encoding} {text}', or just '{text}'. The ++enc= form is Vim's own
+" (|++enc|), so that one insert in another encoding needs neither a second
+" command nor changing g:hexpair_insert_encoding and changing it back.
+function! HexPairPagedParseInsertArgs(text) abort
+  let m = matchlist(a:text, '^\s*++enc=\(\S\+\)\s\(.*\)$')
+  if !empty(m)
+    return {'enc': m[1], 'text': m[2]}
+  endif
+  if a:text =~# '^\s*++enc=\S*\s*$'
+    return {'msg': 'hexpair: ++enc={encoding} wants the text after it'}
+  endif
+  return {'enc': '', 'text': a:text}
+endfunction
+
+" The hex as a person reads it: pairs, spaced.
+function! HexPairPagedSpacedHex(hex) abort
+  return join(split(a:hex, '..\zs'), ' ')
+endfunction
+
+function! s:InsertChar(text) abort
+  if !s:RequirePaged()
+    return
+  endif
+  try
+    if !s:IsHexView()
+      throw 'hexpair: inserting bytes works in the hex view; :HexPairToggle first'
+    endif
+    if s:IsBannerLine(getline('.'))
+      throw 'hexpair: the cursor is on the banner, not on a byte'
+    endif
+    let parsed = HexPairPagedParseInsertArgs(a:text)
+    if has_key(parsed, 'msg')
+      throw parsed.msg
+    endif
+    let enc = parsed.enc !=# '' ? parsed.enc : g:hexpair_insert_encoding
+    let bytes = HexPairPagedCharBytes(parsed.text, enc)
+    if has_key(bytes, 'msg')
+      throw bytes.msg
+    endif
+    " Length 0: the bytes go in BEFORE the byte under the cursor and push
+    " the rest of the page along, the same edit as typing them into the
+    " dump would be - so nothing reaches the file until :w does, and the
+    " write that carries it is the length-changing one, which says what it
+    " will cost and asks.
+    let at = s:Here() - b:hexpair_page_base
+    call s:SpliceIntoPage(at, 0, bytes.hex)
+    echo printf('hexpair: %s as %s is %s, inserted at byte %d (0x%x)',
+          \ string(parsed.text), enc, HexPairPagedSpacedHex(bytes.hex),
+          \ b:hexpair_page_base + at + 1, b:hexpair_page_base + at + 1)
+  catch /^hexpair:/
+    echohl ErrorMsg
+    echomsg v:exception
+    echohl None
+  endtry
+endfunction
+
+" Ask for the character. The prompt names the encoding it will use, since
+" that is the one thing about this command that is not in what you type -
+" and what you type may still begin with ++enc= to say otherwise.
+"
+" Deliberately untested, for the reason given at s:PageGotoPrompt():
+" input() does not behave usably under this project's `vim -es` harness.
+" Everything it decides is one line.
+function! s:InsertCharPrompt() abort
+  if !s:RequirePaged()
+    return
+  endif
+  let text = input(printf('hexpair: insert the bytes of (%s): ',
+        \ g:hexpair_insert_encoding))
+  redraw
+  if text ==# ''
+    echo 'hexpair: nothing inserted'
+    return
+  endif
+  call s:InsertChar(text)
 endfunction
 
 " ---------------------------------------------------------------------------
@@ -3289,7 +3829,11 @@ function! s:GotoOffset(text, force) abort
     endif
     let page = off / b:hexpair_page_size
     if page != b:hexpair_page_index
-      call s:GotoPage(page, a:force)
+      " Not bound yet: this window is on the page but not yet on the byte,
+      " and :syncbind swallows the scroll that comes after it (see
+      " s:BindPageTurn). The bound windows are taken along below, once the
+      " cursor is where it is going.
+      call s:GotoPage(page, a:force, 0)
       if page != b:hexpair_page_index
         return
       endif
@@ -3300,6 +3844,14 @@ function! s:GotoOffset(text, force) abort
     else
       call s:TextGotoOffset(off)
     endif
+    " Whether or not the page turned. A jump names a BYTE, and a byte means the
+    " same thing in every view of the file - so the bound ones follow, and they
+    " follow the same way whether the byte was a page away or two lines away.
+    " Syncing only across a page boundary is the rule that surprises: the same
+    " keystroke took the other window along or did not, depending on how far it
+    " happened to go. Moving the cursor by hand is the other thing, and stays
+    " independent - see |:HexPairSyncViews| for the way back from that.
+    call s:BindPageTurn(off, 1)
   catch /^hexpair:/
     echohl ErrorMsg
     echomsg v:exception
@@ -3599,19 +4151,25 @@ function! s:FindFrom(from, forward) abort
     echohl None
     return
   endif
-  let at = s:FindScan(a:from, a:forward)
-  if at >= 0
-    call s:FindLand(at, 0)
-    return
-  endif
-  " |'wrapscan'|, the same option Vim's own searches obey.
-  if &wrapscan
-    let at = s:FindScan(a:forward ? 0 : b:hexpair_page_total, a:forward)
+  call s:ProgressReset()
+  try
+    let at = s:FindScan(a:from, a:forward)
     if at >= 0
-      call s:FindLand(at, 1)
+      call s:FindLand(at, 0)
       return
     endif
-  endif
+    " |'wrapscan'|, the same option Vim's own searches obey.
+    if &wrapscan
+      let at = s:FindScan(a:forward ? 0 : b:hexpair_page_total, a:forward)
+      if at >= 0
+        call s:FindLand(at, 1)
+        return
+      endif
+    endif
+  catch /^Vim:Interrupt$/
+    call s:Stopped()
+    return
+  endtry
   echohl ErrorMsg
   echomsg printf('hexpair: %s not found%s', s:find.what,
         \ &wrapscan ? ' in this file' : ' after here (''nowrapscan'')')
@@ -4113,7 +4671,13 @@ function! s:Diff(file, clear) abort
   call s:ClearDiffHighlight()
   call s:DiffHighlight()
   let [differing, first] = s:DiffCount(s:DiffHex())
-  echo HexPairPagedDiffText(file, b:hexpair_page_base,
+  " Named short (:~:.), the way s:DiffJump() names it and for the same
+  " reason: this line already carries two counts and an offset, and with
+  " the file spelled out in full it runs past the command line, wraps,
+  " and costs a hit-enter prompt. Which is not only a keystroke - the
+  " prompt holds the screen as it was, so the next command's jump is not
+  " drawn until it is dismissed, and the view looks like it ignored it.
+  echo HexPairPagedDiffText(fnamemodify(file, ':~:.'), b:hexpair_page_base,
         \ b:hexpair_page_len, differing, first)
 endfunction
 
@@ -4403,6 +4967,7 @@ function! s:DiffJump(forward) abort
   endif
   try
     let here = s:IsHexView() ? s:PagedByteOffset() : s:TextByteOffset()
+    call s:ProgressReset()
     let at = s:DiffSearch(here, a:forward)
     if at < 0
       echo printf('hexpair: no change %s byte %d',
@@ -4413,9 +4978,12 @@ function! s:DiffJump(forward) abort
     " longer, and every byte it has beyond ours is one. There is nowhere
     " to put the cursor for that, so say it rather than jump.
     if at >= b:hexpair_page_total
+      " Short (:~:.), like the other two things a jump key can print - see
+      " the comment below. This one is the longest of the three, so it is
+      " the one that would wrap.
       echo printf('hexpair: %s is longer: its bytes from %d (0x%x) on have '
-            \ . 'nothing here to differ from', b:hexpair_diff_file,
-            \ at + 1, at + 1)
+            \ . 'nothing here to differ from',
+            \ fnamemodify(b:hexpair_diff_file, ':~:.'), at + 1, at + 1)
       return
     endif
     call s:GotoOffset(string(at + 1), 0)
@@ -4426,6 +4994,8 @@ function! s:DiffJump(forward) abort
     echo printf('hexpair: %s change at byte %d (0x%x) against %s',
           \ a:forward ? 'next' : 'previous', at + 1, at + 1,
           \ fnamemodify(b:hexpair_diff_file, ':~:.'))
+  catch /^Vim:Interrupt$/
+    call s:Stopped()
   catch /^hexpair:/
     echohl ErrorMsg
     echomsg v:exception
@@ -5504,9 +6074,10 @@ command! -bar -bang -nargs=1 HexPairPageGoto
       \ call s:PageGotoText(<q-args>, '<bang>' ==# '!')
 command! -bar -bang -nargs=1 HexPairGoOffset
       \ call s:GotoOffset(<q-args>, '<bang>' ==# '!')
+command! -bar HexPairSyncViews call s:SyncViews()
 command! -bar HexPairPages call s:Pages()
 command! -bar HexPairSelection call s:Selection()
-command! -bar HexPairInspect call s:Inspect()
+command! -bar -bang HexPairInspect call s:Inspect('<bang>' ==# '!')
 command! -bar -nargs=1 HexPairMark call s:SetMark(<q-args>)
 command! -bar -nargs=1 -complete=customlist,HexPairPagedMarkComplete
       \ HexPairMarkDelete call s:DeleteMark(<q-args>)
@@ -5519,6 +6090,7 @@ command! -bar -bang -nargs=* HexPairFind call s:Find(<q-args>, '<bang>' ==# '!')
 command! -bar -nargs=+ HexPairFindText call s:FindText(<q-args>)
 command! -bar HexPairFindNext call s:FindRepeat(1)
 command! -bar HexPairFindPrev call s:FindRepeat(0)
+command! -bar -nargs=+ HexPairInsertChar call s:InsertChar(<q-args>)
 command! -bar -nargs=+ HexPairReplace call s:Replace(<q-args>)
 command! -bar -nargs=+ HexPairReplaceAllInPage call s:ReplaceAll(<q-args>)
 command! -bar HexPairDiffNext call s:DiffJump(1)
@@ -5553,9 +6125,10 @@ if g:hexpair_short_commands
         \ ['-bar -bang', 'HPPagePrev', 'HexPairPagePrev'],
         \ ['-bar -bang -nargs=1', 'HPPageGoto', 'HexPairPageGoto'],
         \ ['-bar -bang -nargs=1', 'HPGoOffset', 'HexPairGoOffset'],
+        \ ['-bar', 'HPSyncViews', 'HexPairSyncViews'],
         \ ['-bar', 'HPPages', 'HexPairPages'],
         \ ['-bar', 'HPSelection', 'HexPairSelection'],
-        \ ['-bar', 'HPInspect', 'HexPairInspect'],
+        \ ['-bar -bang', 'HPInspect', 'HexPairInspect'],
         \ ['-bar -nargs=1', 'HPMark', 'HexPairMark'],
         \ ['-bar -nargs=1 -complete=customlist,HexPairPagedMarkComplete',
         \  'HPMarkDelete', 'HexPairMarkDelete'],
@@ -5571,6 +6144,7 @@ if g:hexpair_short_commands
         \ ['-bar -nargs=+', 'HPFindText', 'HexPairFindText'],
         \ ['-bar', 'HPFindNext', 'HexPairFindNext'],
         \ ['-bar', 'HPFindPrev', 'HexPairFindPrev'],
+        \ ['-bar -nargs=+', 'HPInsertChar', 'HexPairInsertChar'],
         \ ['-bar -nargs=+', 'HPReplace', 'HexPairReplace'],
         \ ['-bar -nargs=+', 'HPReplaceAllInPage', 'HexPairReplaceAllInPage'],
         \ ['-bar -nargs=?', 'HPSplit', 'HexPairSplit'],
@@ -5604,6 +6178,7 @@ nnoremap <silent> <Plug>(HexPairPageGotoForce) :<C-U>call <SID>PageGotoPrompt(1)
 nnoremap <silent> <Plug>(HexPairGoOffset) :<C-U>call <SID>GotoOffsetPrompt(0)<CR>
 nnoremap <silent> <Plug>(HexPairGoOffsetForce) :<C-U>call <SID>GotoOffsetPrompt(1)<CR>
 nnoremap <silent> <Plug>(HexPairPages) :<C-U>HexPairPages<CR>
+nnoremap <silent> <Plug>(HexPairSyncViews) :<C-U>HexPairSyncViews<CR>
 " Both modes: from Visual mode it reports the selection being made (the
 " :<C-U> leaves Visual mode, which is what sets '< and '>), from Normal
 " mode the one made last.
@@ -5618,6 +6193,7 @@ nnoremap <silent> <Plug>(HexPairMark) :<C-U>call <SID>MarkPrompt()<CR>
 nnoremap <silent> <Plug>(HexPairMarkDelete) :<C-U>call <SID>MarkDeletePrompt()<CR>
 nnoremap <silent> <Plug>(HexPairGoMark) :<C-U>call <SID>GoMarkPrompt(0)<CR>
 nnoremap <silent> <Plug>(HexPairGoMarkForce) :<C-U>call <SID>GoMarkPrompt(1)<CR>
+nnoremap <silent> <Plug>(HexPairInsertChar) :<C-U>call <SID>InsertCharPrompt()<CR>
 nnoremap <silent> <Plug>(HexPairFind) :<C-U>call <SID>FindPrompt()<CR>
 nnoremap <silent> <Plug>(HexPairFindText) :<C-U>call <SID>FindTextPrompt()<CR>
 nnoremap <silent> <Plug>(HexPairFindNext) :<C-U>HexPairFindNext<CR>

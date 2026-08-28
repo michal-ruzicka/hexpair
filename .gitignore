@@ -12,7 +12,7 @@ Thumbs.db
 Desktop.ini
 $RECYCLE.BIN/
 
-# Editor temp
+# Vim editor temp
 # Vim names its swap files .swp, then .swo, .swn ... down to .swa when
 # more than one is open at once - and a buffer with no name of its own
 # leaves the bare ".swo" this pattern also has to catch, which is how one
@@ -20,3 +20,6 @@ $RECYCLE.BIN/
 *.sw[a-p]
 .*.sw[a-p]
 *~
+
+# Demo videos in MP4 format
+demo/*.mp4

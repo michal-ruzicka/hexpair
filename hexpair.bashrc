@@ -40,11 +40,19 @@
 #
 #     vimhexdiff old.img new.img
 #
-# The two windows are scroll-bound, so they keep showing the same bytes:
-# scrolling within a page keeps them level, and a page turn in either one
-# - by :HexPairDiffNext landing further on, or by turning it directly -
-# takes the other with it (g:hexpair_bind_pages). Within one page they
-# navigate independently, as two views of anything do here.
+# The two windows are scroll-bound and both cursors land on the first
+# difference. That last step is :HexPairSyncViews, and it is not decoration:
+# 'scrollbind' syncs movement made from the moment a window was bound, and
+# everything here happens inside VimEnter - before the loop that would have
+# done the syncing has run even once. Without it the left window jumps to the
+# first difference and the right one stays at the top of page 1.
+#
+# Afterwards they keep showing the same bytes: scrolling keeps them level, and
+# a JUMP in either one - a diff jump, a search landing, :HexPairGoOffset, or a
+# page turn made directly - takes the other to the same byte
+# (g:hexpair_bind_pages). Moving the cursor by hand is the one thing that does
+# not, since that is about this window and not about the file; :HexPairSyncViews
+# is the way back from it.
 #
 # Only the page on screen is read, so the size of the file does not matter.
 # Set VIMHEX_VIM to use a particular Vim, e.g. VIMHEX_VIM=/usr/bin/vim.
@@ -127,5 +135,5 @@ vimhexdiff()
         "${VIMHEX_VIM:-vim}" \
             -c 'autocmd VimEnter * call HexPairOpenFile($HEXPAIR_DIFF_A) | call HexPairDiffWith($HEXPAIR_DIFF_B)' \
             -c 'autocmd VimEnter * rightbelow vsplit | call HexPairOpenFile($HEXPAIR_DIFF_B) | call HexPairDiffWith($HEXPAIR_DIFF_A) | setlocal scrollbind' \
-            -c 'autocmd VimEnter * wincmd t | setlocal scrollbind | HexPairDiffNext'
+            -c 'autocmd VimEnter * wincmd t | setlocal scrollbind | HexPairDiffNext | HexPairSyncViews'
 }

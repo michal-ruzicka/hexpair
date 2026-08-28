@@ -25,11 +25,12 @@ reports and patches are welcome via the project's
 | `plugin/hexpair.vim` | The base plugin (whole-buffer toggle); its header carries `Version:` and `Date:` — the single source of truth parsed by the packaging scripts |
 | `ftplugin/xxd.vim` | Dump-editing defaults for `filetype=xxd`, bundled with the plugin |
 | `doc/hexpair.txt` | Vim help documentation (`:help hexpair`) |
+| `docs/` | The animation at the top of `README.md` and what records it (see *The README demo*); not part of a release tarball |
 | `hexpair.bashrc` | The `vimhex` shell wrapper, to be sourced from `~/.bashrc`; bundled in every release tarball |
 | `hexpair.vimrc` | The ready-made mappings, to be sourced from the user's vimrc; bundled in every release tarball |
 | `test/` | Headless regression tests (`run-tests.sh`, see *Testing*) |
 | `.gitattributes` | Line-ending normalization rules |
-| `.gitignore` | Excludes `build/` and `dist/` from version control |
+| `.gitignore` | Excludes `build/`, `dist/` and the demo MP4 from version control |
 | `pack-release` | POSIX wrapper around `pack-release.py` |
 | `pack-release.cmd` | Windows wrapper around `pack-release.py` |
 | `pack-release.py` | The packaging implementation — produces the reproducible release tarball |
@@ -53,6 +54,134 @@ Every behavioural change must come with a test that fails before the
 change and passes after it. The suite is intentionally dependency-free
 beyond `vim`, `xxd` and `python3` (fixture generation), so it runs
 identically on a developer machine and in CI.
+
+## The README demo
+
+`README.md` opens with `docs/hexpair-demo.gif`, about seven minutes of the
+plugin at work, narrated step by step. It is recorded, not hand-made, so it can be
+re-recorded whenever what it shows stops being true:
+
+```sh
+docs/hexpair-demo.sh                 # writes docs/hexpair-demo.{gif,mp4}
+docs/hexpair-demo.sh /tmp/try.gif    # or somewhere else, to look first
+```
+
+Four files, and one of them is the picture:
+
+| Path | Description |
+|---|---|
+| `docs/hexpair-demo.tape` | The script, for [vhs](https://github.com/charmbracelet/vhs) — what is typed, and how long each thing stays on the screen |
+| `docs/hexpair-demo.vimrc` | The Vim the recording uses: the plugin out of *this* working tree, and nothing of whoever is recording |
+| `docs/hexpair-demo.sh` | The runner — records the tape and turns the MP4 into the GIF |
+| `docs/hexpair-demo.gif` | The result, committed because `README.md` points at it |
+| `docs/hexpair-demo.mp4` | The same recording before the palette, a third of the size — a better thing to link from a blog post, and what another GIF can be made from without recording again. **Gitignored**: only one of the two belongs in a repository, and the one `README.md` points at is the GIF |
+
+Needs `vhs` (which needs `ttyd` and `ffmpeg`), `vim`, `curl` and a network
+connection. Linux only, deliberately — vhs is.
+
+**What it edits is the plugin's own v2.1.0 release tarball**, fetched live
+from the GitHub release. That is worth keeping: the tarball is built
+reproducibly, so the bytes on screen are the bytes anybody else gets —
+fetch the same 480 KiB and follow along, offset for offset. It is also an uncompressed `ustar` archive, so the ASCII
+column reads as text — the header says `hexpair/CHANGELOG.md`, the payload
+is the project's own documentation, and the `ů` in `Michal Růžička` is the
+multi-byte character the data inspector stops on. The `.bin` name is
+deliberate too: Vim's own `tar` plugin takes over a file called `.tar` and
+shows the archive's listing instead of its bytes.
+
+Things about it that are deliberate and worth keeping:
+
+- **Both surfaces are shown.** The `:HP*` commands are what a viewer can
+  type back verbatim; the key mappings are what the maintainer actually
+  presses, and a recording made only of typed commands reads as if the
+  plugin had no keys.
+- **Three things in the demo vimrc make a key press visible**, and all
+  three are needed. A mapping Vim can complete is executed the instant its
+  last key arrives, so the key never appears: `'showcmd'` shows only a
+  mapping Vim is still *waiting* on. Hence the **decoys** — `,ix` is
+  mapped to `<Nop>` so that `,i` is ambiguous and Vim has to wait out
+  `'timeoutlen'`, which is the second and a half the whole mapping spends
+  on the screen. And `'showcmdloc=statusline'` moves it out of the bottom
+  right, where nobody is looking, into the statusline beside the file
+  name, in a highlight of its own. The decoys do nothing else and are the
+  reason that file is not something to copy into a real vimrc.
+- **Nothing is sent until it has been read.** Two seconds between the last
+  character typed and the `Enter`, on captions, on `:HP*` commands and on
+  shell commands alike. What a viewer is meant to be able to type back has to
+  be readable before it disappears into its own result, and a command that
+  flashes past is a command nobody learns. That, and the caption dwell, is
+  most of the running time — the tape itself is barely a minute of keystrokes.
+- **Byte positions are 1-based, and the tape says so out loud.** Every number
+  this plugin reports as a position — `:HexPairPages`, the banner, the
+  statusline, `:HexPairInspect`, `:HexPairMarks` — counts the file's first byte
+  as 1, so a position can be read off the screen and typed straight back into
+  `:HexPairGoOffset`, and "go to the first byte" is the 1 a person would
+  naturally write. The offset *column* is `xxd`'s own 0-based address, left
+  exactly as `xxd` writes it. The two are one apart by design.
+
+  It earns a caption because a viewer following along hits it in the first
+  minute, and because the tape's own author did not read his own documentation:
+  the first cut asked for `:HPGoOffset 0`, was refused, and narrated the wrong
+  bytes for three sections. Recording a tour of a plugin is a good way to find
+  out which of its rules you only thought you knew.
+- **`:Say` is the narrator** — a caption line in the tabline, from the
+  demo vimrc, so a viewer knows what is about to happen rather than
+  working it out afterwards. It uses `redraw!` and not `redraw`: setting a
+  variable does not make Vim think the tabline changed, so the plain one
+  repaints everything except the line it is for. The tape types each
+  caption at a reading pace and then leaves it standing for three seconds,
+  which is where most of the running time goes — a caption nobody finishes
+  reading is worse than no caption. Each is a sentence, and each spells the
+  key as `<Leader>`, not as the `,` this recording happens to use.
+- **`curl -#`, and the URL at `Type@0ms`.** The progress bar is the only
+  thing on the screen that says a 480 KiB file is *arriving*; a silent curl
+  looks like nothing happened. (`-v` was tried and dropped: four screens of
+  TLS handshake scrolling past is evidence of nothing anybody was asking
+  about, and it cost more of the GIF than the whole download was worth.) The
+  URL goes in all at once because nobody types a URL that long, and watching
+  one appear character by character is forty seconds of nothing.
+- **The leader in the recording is `,`, not the maintainer's `§`.** vhs
+  cannot type a non-ASCII character reliably — it sends those by a
+  different path and they arrive out of order, so `§>` reaches Vim as `>`
+  followed by `§` and the mapping never matches.
+- **The first keys after Vim starts are a `:` command, not a mapping.**
+  A freshly started Vim here swallows the first key sequence — it is
+  still negotiating with the terminal — and a mapping typed as the very
+  first thing does nothing. The tour opens with `:HPPages` for that
+  reason as much as for what it says.
+- **It records to MP4 and the GIF is made from that.** vhs's own GIF
+  writer builds the whole file in memory and is OOM-killed on a recording
+  this long, leaving a zero-byte file and no error; the two-pass palette
+  conversion streams and does not care how long the tape is. The runner
+  also keeps its work out of `/tmp` — where that is a tmpfs, the frames
+  fill it — and out of any deep directory, because the headless browser
+  vhs renders with puts a unix socket there and the path may not exceed
+  about 104 characters. `HEXPAIR_DEMO_TMP` says where to put it instead.
+- **The terminal queries are turned off with `--cmd`, not in the vimrc.**
+  Vim asks the terminal for its background colour during startup, before a
+  vimrc is read, and the answer arrives seconds *after* Vim has exited —
+  where the shell at the prompt echoes it as a line of escape rubbish in
+  the middle of the recording.
+- **No dithering, 24 colours, 8 fps.** A terminal has a dozen or so colours
+  to begin with — a theme, a handful of highlight groups, and one font's
+  anti-aliasing — so dithering invents noise that nothing can compress.
+  Both knobs are worth turning, and how much each buys depends on how much
+  of the screen moves, which is worth knowing before turning either.
+  Measured on the current tape:
+
+  |          | fps=6 | fps=8 | fps=10 |
+  |---|---|---|---|
+  | 16 colours | 4.8M | 5.4M | 6.0M |
+  | 24 colours | 5.2M | 6.1M | 6.6M |
+  | 32 colours | 5.7M | — | 7.5M |
+
+  A *short* recording is mostly a still screen, and the frame rate then costs
+  almost nothing — three per cent between 10 and 15 on the two-minute version
+  of this tape, which is where the old defaults came from and why this file
+  used to say the frame rate was not a knob at all. It is, once the tape is
+  seven minutes and moving most of the time. `HEXPAIR_DEMO_COLORS` and
+  `HEXPAIR_DEMO_FPS` are the knobs; the MP4 is never resampled, so a different
+  GIF costs a conversion and not a recording.
 
 ## Packaging
 

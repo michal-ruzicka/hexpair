@@ -2,3 +2,6 @@
 * text=auto eol=lf
 # The Windows batch script must keep CRLF to run under cmd.exe.
 *.cmd text eol=crlf
+# The recording at the top of README.md is bytes, whatever text=auto's
+# heuristic makes of it.
+*.gif binary

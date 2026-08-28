@@ -83,7 +83,7 @@ call s:Map('n', '<Leader>K', ':HexPairPagePrev!<CR>')
 " Ask which page to go to ($ for the last, +N / -N to step), and the same
 " discarding unwritten changes.
 call s:Map('n', '<Leader>g', '<Plug>(HexPairPageGoto)')
-call s:Map('n', '<Leader>P', '<Plug>(HexPairPageGotoForce)')
+call s:Map('n', '<Leader>G', '<Plug>(HexPairPageGotoForce)')
 
 " Ask which byte to go to (decimal, or 0x-prefixed; 1-based, the way
 " <Leader>? reports it, and +N / -N steps from where the cursor is), and
@@ -95,11 +95,24 @@ call s:Map('n', '<Leader>B', '<Plug>(HexPairGoOffsetForce)')
 " byte under the cursor in the form <Leader>b and vimhex's @BYTE take.
 call s:Map('n', '<Leader>?', '<Plug>(HexPairPages)')
 
+" Bring the other scroll-bound view onto the byte this one is on. A jump does
+" that by itself; moving the cursor by hand does not, because that is about
+" this window and not about the file - and 'scrollbind' promises that windows
+" move together, not that they are on the same byte. So after a while they are
+" looking at the same lines and different bytes. This is the way back.
+call s:Map('n', '<Leader>=', '<Plug>(HexPairSyncViews)')
+
 " --- Reading the bytes ---------------------------------------------------
 " The bytes at the cursor as the numbers they could be - 8/16/32/64-bit,
 " signed and unsigned, both endiannesses, both IEEE 754 floats - and as
 " text: UTF-8, UTF-16, UTF-32.
 call s:Map('n', '<Leader>i', '<Plug>(HexPairInspect)')
+" ... and the same reading the other way round: ask for a character and put
+" its bytes in, in g:hexpair_insert_encoding (utf-8 unless you say
+" otherwise; what you type may begin with ++enc=NAME for one insert).
+" The capital of the key that reads them, because it writes what that
+" reads.
+call s:Map('n', '<Leader>I', '<Plug>(HexPairInsertChar)')
 
 " How many bytes the selection covers, and which. Worth having in Visual
 " mode as well as Normal: there it reports the selection being made and

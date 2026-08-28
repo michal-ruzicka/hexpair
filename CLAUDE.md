@@ -61,6 +61,29 @@ plugin/hexpair.vim    - the whole plugin, one script scope; header
 ftplugin/xxd.vim      - dump-editing defaults (guarded by b:did_ftplugin,
                         reverted via b:undo_ftplugin)
 doc/hexpair.txt       - Vim help (:help hexpair)
+docs/                 - the animation at the top of README.md and what
+                        records it: hexpair-demo.tape (the vhs script),
+                        hexpair-demo.vimrc (the Vim it uses - the plugin
+                        out of the working tree, nothing of the person
+                        recording), hexpair-demo.sh (records, converts,
+                        cleans up) and hexpair-demo.gif. The MP4 the GIF
+                        is made from is written beside it and gitignored -
+                        only one of the two belongs in a repository. It
+                        edits the project's own v2.1.0 release tarball,
+                        fetched live - reproducible, so the bytes on
+                        screen are the bytes anybody else gets - renamed
+                        to .bin because Vim's tar plugin would otherwise
+                        show the listing.
+                        NOT in the release tarball, and the packaging
+                        test does not ask for it: none of those names
+                        matches its .md/.vim/.txt/hexpair.* rule. See
+                        CONTRIBUTING.md, "The README demo", for the four
+                        things that took a recording each to find: vhs
+                        cannot type a non-ASCII <Leader>, a freshly
+                        started Vim swallows the first key sequence, vhs's
+                        own GIF writer is OOM-killed on a recording this
+                        long (hence MP4 then ffmpeg), and its work
+                        directory must be short as well as off tmpfs
 test/run-tests.sh     - headless regression suite (vim -es)
 dist/                 - packaged release tarballs (gitignored)
 ```
@@ -164,6 +187,23 @@ Key function map:
   then may `b:undo_ftplugin` revert them), and when the restored
   filetype is empty no `FileType` event fires, so the plugin executes
   `b:undo_ftplugin` and clears `b:did_ftplugin` itself.
+- The data inspector's two directions. `s:Inspect()` reads up to eight
+  bytes and `b:hexpair_inspect` is `[absolute offset, count]` of what it
+  actually got — which near a page or file end is fewer, and the marking
+  (layer `'inspect'`, `HexPairPagedRunPositions()` in the dump,
+  `HexPairPagedTextPositions()` in the text view) says exactly that many.
+  It expires in `s:PagedHighlight()` when the cursor is no longer on the
+  byte it was read from — not on any cursor movement, since a redraw, a
+  window hop and a `:syncbind` all run through the highlighting without
+  the cursor having gone anywhere.
+  `HexPairPagedCharBytes()` is the other direction. **The Unicode
+  encodings are computed from the code point, not converted**: `iconv()`
+  answers with a String, a String cannot hold a NUL, and `A` in utf-16le
+  is `41 00`. Anything else goes to `iconv()` and is checked by
+  converting it back — and the *name* is probed separately with a
+  U+0160 canary, because iconv() answers a conversion it cannot do by
+  handing the text back unchanged, which for ASCII in an ASCII-compatible
+  encoding is what success looks like too.
 - `g:hexpair_debug` — `s:Debug()`, an echomsg trace of every position
   mapping step (`:messages`); keep it working, it has already caught two
   field bugs. The Stage 2 rewrite dropped every call site while the docs
@@ -282,6 +322,13 @@ come back**; each names the test that would catch it.
 | Every match on the PAGE was found and then tested against every visible line: `:HexPairFind 2?` cost a second per page | "a match over a line end is marked on both lines" (the positions are window-scoped now) |
 | A new file users are told to source (`hexpair.vimrc`) was in the repo and the docs but not in `pack-release.py`'s hand-written `FILES`, so it did not ship | "the packaging list is what the repository gives a user" — every `.md`, `.vim`, `.txt` and `hexpair.*` outside `test/` must be in the list |
 | A page turn left the bound windows scrolling around a stale offset: `'scrollbind'` syncs RELATIVE movement from the position each window was bound at, and loading a page moves a window without telling Vim that this is the new zero | not testable headlessly (a `vim -es` window has no geometry: `line('w0')` came back above `line('w$')`) — checked in tmux, and `:syncbind` after a bound turn is the fix |
+| The progress line of a scan was echoed and then wiped by the `redraw!` on the next line, dozens of times a second: it was never readable, and a 70 GiB search looked like a hang with a flicker | not testable headlessly (`vim -es` has no message line) — the tmux recipe above, and `echo` + plain `redraw` is the fix |
+| `CTRL-C` could not stop a scan: every block read caught it (a bare `:catch` catches `Vim:Interrupt` too) and read the next block, so it only worked if pressed between two reads | "a scan says how far it has got" pins the message; the catch is `/^hexpair:/` now, and E608 forbids re-throwing what a catch-all would have swallowed |
+| A jump to a byte on another page levelled the scroll-bound windows *before* the cursor arrived, and `:syncbind` swallows the next scroll Vim would have followed — so `vimhexdiff` came apart at every page boundary | "and takes the bound window to that byte, not to the page" |
+| The `<Plug>`-coverage test was vacuous: `map <Plug>` under `-u NONE` reads `<Plug>` as six literal characters ('compatible' puts `<` in `'cpoptions'`), and the plugin was never sourced in that script, so there were no targets to miss | "and leaves no `<Plug>` target without a key" — `set cpoptions-=<`, the plugin sourced, and the keys looked for in the mappings *file* rather than in `map` (where every target is its own left-hand side) |
+| A jump synced the scroll-bound windows only when it crossed a page boundary, so the same keystroke took the other window along or left it behind depending on how far it happened to go | "a jump inside a page takes the bound view along too" and "which is the same rule as across a page" |
+| `vimhexdiff` opened with its two windows on different parts of two files: everything it does runs inside `VimEnter`, and `'scrollbind'` syncs only movement made after the main loop has seen the window bound | "and :HexPairSyncViews is the way back" and the block around it — the startup now ends in `:HexPairSyncViews` |
+| Two assertions about the diff summary compared the message against a path the harness had built, while the plugin prints one `fnamemodify(':~:.')` has been over. Identical on Linux, where `tempname()` is under `/tmp` and `:~` has nothing to do; on Windows the fixtures live under the user's profile and the message says `~/AppData/...`, so the suite passed everywhere it was run and failed only in Windows CI | "a longer file agrees over the bytes it shares" and "but differs from where it grows" — the expected path is now line 4 of the fixture's own output, written by the same `fnamemodify()` call the plugin makes |
 | A search match straddling a page boundary was marked on neither page: it fits whole inside neither, and each page was searched alone | "and the page it starts on marks the byte it has" — `s:PageHexForSearch()` reads the page with span-1 bytes of each neighbour |
 | Mark completion with nothing typed yet offered nothing: `v:val[0 : strlen('') - 1]` is `[0 : -1]`, the whole name, which matches no empty lead | "mark completion offers all the names, and the matching ones" |
 | A selection report echoed from a Visual-mode mapping was painted over by `-- VISUAL --` before it could be read | not testable headlessly — the tmux recipe above, and the hit-enter prompt is the fix |
@@ -349,6 +396,24 @@ traps in the recipe itself: a test vimrc needs `set nocompatible` before
 any `<>` key notation (`'compatible'` puts `<` in `'cpoptions'`, and the
 mappings are then silently not what they read as), and packages in
 `~/.vim/pack` load even under `-u`, so a plugin can be loaded twice.
+
+**A `:~` bug is invisible on Linux, and one line of environment makes it
+visible.** Anything the plugin shortens with `fnamemodify(..., ':~:.')` looks
+unchanged in this suite, because `mktemp -d` puts `$WORK` under `/tmp` and `:~`
+only does something to a path under `$HOME`. On Windows `%TEMP%` *is* under the
+user's profile, so the same code prints `~/AppData/...` and an assertion built
+from a literal path fails — in Windows CI only. Put the work directory under a
+home of its own and Linux reproduces it exactly:
+
+```sh
+mkdir -p /tmp/fakehome
+HOME=/tmp/fakehome TMPDIR=/tmp/fakehome test/run-tests.sh
+```
+
+Worth running before touching anything that prints a file name. The rule it
+serves is the one already stated above: **assert against the value the code will
+actually use** — here, by having the fixture's own Vim script write out
+`fnamemodify(path, ':~:.')` and comparing against that.
 
 **Read the check COUNT, not just the last line.** The suite is one long
 sequence of blocks, and an edit that replaces a span of it can swallow
@@ -740,11 +805,24 @@ was designed and built in Stage 2 - see "What Stage 2 decided".
 - `s:Progress()` / `HexPairPagedProgressText()` — a file-wide scan reads a
   megabyte at a time and can run for minutes, which is indistinguishable
   from a hang, so from 16 MB up it says how far it has got. **The redraw
-  goes after the echo, and it has to be `redraw!`**: measured in a
-  terminal over five updates, a plain `redraw` before the echo showed one
-  of them, after it two, and `redraw!` all five — Vim skips a redraw it
-  believes changes nothing. It costs about 5 ms per update, ~5% of a
-  scan. `CTRL-C` interrupts, which is safe because a scan only reads.
+  goes after the echo and must not be `redraw!`**: a forcing redraw
+  repaints from scratch, and what it paints does not include a message a
+  running function echoed, so `echo` + `redraw!` wrote the line and wiped
+  it again dozens of times a second and the report was never readable —
+  which the measurement that put the `!` there missed by counting how
+  often something appeared rather than how long it stood. `s:Stopped()`
+  is the one that redraws *first*: it is the last word after an
+  interrupted scan, and a repaint after it would take it with it.
+  The line is echoed only when it would differ from the one already
+  there, and it carries the size as well as the percentage — one per cent
+  of 70 GiB is 700 MB, minutes between two figures.
+  **`CTRL-C` reaches a scan only if nothing swallows it**: inside a
+  `:try` it is the exception `Vim:Interrupt`, a bare `:catch` catches it
+  like anything else, and it cannot be caught and re-thrown (E608). Every
+  `:catch` on a scan's path therefore names what it is for
+  (`s:FileHex()`: `catch /^hexpair:/`), and the two scan entry points
+  (`s:FindFrom()`, `s:DiffJump()`) catch `/^Vim:Interrupt$/` and say
+  `hexpair: stopped`. Interrupting is safe because a scan only reads.
 - `s:BindPageTurn()` / `s:FollowPageTurn()` — `'scrollbind'` is Vim's own
   "these windows move together", and a page turn is the one kind of
   scrolling it cannot follow: the bound window keeps its page and the two
@@ -762,6 +840,18 @@ was designed and built in Stage 2 - see "What Stage 2 decided".
   window was when it was bound, and a page load moves a window without
   saying that this is the new zero - so without it the two scroll in step
   around whatever offset they happened to have before the turn.
+  **That `:syncbind` must be the last thing in the key press that
+  scrolls.** It sets Vim's `did_syncbind`, and the next scrollbind check
+  Vim would have made is then skipped — so a levelling done before this
+  window has finished moving swallows the movement that follows it. That
+  is why `s:GotoOffset()` passes `s:GotoPage()` a 0 and calls
+  `s:BindPageTurn()` itself once the cursor has arrived, with the byte it
+  arrived at: a jump to a byte on another page is two movements, and only
+  the second one is where level is. It is called for EVERY jump, page turn
+  or not (`force`): syncing only across a page boundary meant the same
+  keystroke took the other window along or did not, depending on how far it
+  happened to go. Moving the cursor by hand is the one thing that does not
+  sync — `:HexPairSyncViews` is the way back from that.
 - **The markings are drawn in both views**, and `HexPairPagedMarkingPositions(layer, first, last)`
   is the one entry point that says where — dispatching on the view so the
   four layers cannot drift apart about which one they are drawing in, and
