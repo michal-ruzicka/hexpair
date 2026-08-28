@@ -5,18 +5,7 @@
 [![Ko-fi](https://img.shields.io/badge/Tip-Ko--fi-FF5E5B?style=flat&logo=kofi&logoColor=white)](https://ko-fi.com/michal_ruzicka)
 [![Revolut](https://img.shields.io/badge/Pay-Revolut-191C1F?style=flat&logo=revolut&logoColor=white)](https://revolut.me/ruzicka_michal)
 
-![hexpair at work on its own release tarball: the file downloaded, opened as
-text and then as a hex page, the byte pair lit up in both columns as the cursor
-walks, searches by text and by bytes across the whole file, a byte typed over
-and the ASCII column catching up, the two bytes of a multi-byte character read
-back by the data inspector, a character written in by its bytes, a write that
-says what a longer file costs, and the two files side by side with their
-differences marked](docs/hexpair-demo.gif)
 
-*It edits this project's own **v2.1.0 release tarball**, fetched live — a
-reproducible build, so the bytes on screen are the bytes you get: fetch the
-same 480 KiB and follow along, offset for offset. Recorded from this
-repository, and re-recordable from it: `docs/hexpair-demo.sh`.*
 
 **A Vim plugin that turns the classic `:%!xxd` hex-dump workflow into a
 small, reliable hex editor** — with live highlighting of the byte pair
@@ -25,28 +14,34 @@ cursor mapping between the views, `:w` that writes only the page you are
 looking at, and forgiving editing where the offset and ASCII columns are
 purely decorative.
 
+![hexpair at work on its own release tarball: the file downloaded, opened as
+text and then as a hex page, the byte pair lit up in both columns as the cursor
+walks, searches by text and by bytes across the whole file, a byte typed over
+and the ASCII column catching up, the two bytes of a multi-byte character read
+back by the data inspector, a character written in by its bytes, a write that
+says what a longer file costs, and the two files side by side with their
+differences marked](demo/hexpair-demo.gif)
+
+**It is not the best hex editor in the world**, and does not try to be. **But it
+is always a _single command_ away wherever you already
+have in Vim** — no system install, no package manager, nothing to get approved.
+Everything runs on `xxd`, which ships with Vim itself, and portable
+VimScript: no `sed`, `tr`, `dd` or anything else, so it behaves the same
+on Linux, on native Windows (where `xxd.exe` is found inside the Vim
+installation even when it is not on `PATH`) and inside WSL.
+
+And it is **good enough for real work on real, even _very_ big, files:** 
+because it shows one page at a time and writes one page at a time, a file that 
+does not fit in memory — a disk image, a core dump, a database — is no different 
+from a small one. Editing an 8 TiB file costs the same ~20 MiB of memory as 
+editing an 8 KiB one.
+
 **The hex*pair* name:** hex and text, always paired. *Within a line* —
 the byte under the cursor and its character light up together, whichever
 column you are in, one byte or a whole Visual selection. *Between the
 views* — the page as a hex dump and the same page as raw text, toggled
 with the cursor left on the same byte.
 
-It is not the best hex editor in the world, and does not try to be. It
-is the one that is always a single command away wherever you already
-have Vim — no install, no package manager, nothing to get approved.
-Everything runs on `xxd`, which ships with Vim itself, and portable
-VimScript: no `sed`, `tr`, `dd` or anything else, so it behaves the same
-on Linux, on native Windows (where `xxd.exe` is found inside the Vim
-installation even when it is not on `PATH`) and inside WSL.
-
-And it is good enough for real work on real files: because it shows one
-page at a time and writes one page at a time, a file that does not fit
-in memory — a disk image, a core dump, a database — is no different from
-a small one. Editing an 8 GiB file costs the same 13 MB of memory as
-editing an 8 KiB one. (A block device such as `/dev/sda` is the one
-thing it cannot page: the size the system reports for one is 0, and
-hexpair pages what a file says it holds. Copy a slice of it into a file,
-or pipe one in — `dd if=/dev/sda bs=1M count=64 | vimhex -`.)
 
 **Project page:** <https://github.com/michal-ruzicka/hexpair> — source
 code, releases and issue tracker.
@@ -814,7 +809,7 @@ Vim 8.0 with nothing but `xxd`. Details: `:help hexpair-paged`.
 
 Memory does not follow the size of the file. A page is read, written and
 patched a block at a time, so the numbers below are the same for a file
-of 8 KiB and one of 8 TiB — measured on this machine with the default
+of 8 KiB and one of 8 TiB — measured with the default
 128 KiB page:
 
 | Operation | Memory | Temporary disk space |
