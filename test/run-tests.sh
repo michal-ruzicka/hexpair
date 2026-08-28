@@ -265,6 +265,8 @@ open(os.path.join(w, 'cbo1.bin'), 'wb').write(bytes(i % 256 for i in range(5000)
 open(os.path.join(w, 'dbg1.bin'), 'wb').write(bytes(i % 256 for i in range(5000)))
 # and a 32-byte one, for the lines a scan must not be thrown by
 open(os.path.join(w, 'scan3.bin'), 'wb').write(bytes(range(32)))
+# CRLF-dump fixture: several pages at the 512-byte page size used here
+open(os.path.join(w, 'crlf1.bin'), 'wb').write(bytes(i % 256 for i in range(5000)))
 # single-page fixture, so a shrinking write can empty the file entirely
 open(os.path.join(w, 'sp5.bin'), 'wb').write(bytes(range(16)))
 # a real file past the 4 GiB mark, where xxd's offset column widens from
@@ -4106,6 +4108,93 @@ check "++enc= writes that encoding instead" \
 check "the text view has no columns to insert into" \
     "hexpair: inserting bytes works in the hex view; :HexPairToggle first" \
     "$(sed -n 12p "$WORK/tchar.out")"
+
+# --- A Windows xxd ends every dump line CRLF -------------------------------
+# xxd opens a dump in TEXT mode on Windows (xxd.c: BIN_ASSIGN(fpo = stdout,
+# revert) for the stream, BIN_WRITE(revert) for a named output file), so every
+# line of it arrives CRLF-terminated; only a reverse is binary. What became of
+# that CR on the way into the buffer used to be left to 'fileformats'
+# auto-detection, which is a USER option - so with `set fileformats=unix` in a
+# vimrc, every line of every page was fringed with a ^M.
+#
+# Windows CI runs this against the real xxd.exe, which does it by itself.
+# Everywhere else a stand-in supplies the CRLF, because the platform's own xxd
+# will not: the same output CRLF-terminated, to stdout and to a named output
+# file alike, and untouched for -r. It has to call the real one through an
+# absolute path, resolved BEFORE the stand-in goes on PATH - or it finds
+# itself.
+CRLF_PATH=$PATH
+if ! command -v cygpath >/dev/null 2>&1; then
+    mkdir -p "$WORK/crlf-xxd"
+    cat > "$WORK/crlf-xxd/crxxd.py" <<'PYSTUB'
+import os, subprocess, sys
+
+real = os.environ['CRXXD_REAL']
+args = sys.argv[1:]
+if '-r' in args or '-revert' in args:
+    os.execvp(real, [real] + args)
+
+# xxd's own rule: the first two words that are neither an option nor an
+# option's value are infile and outfile.
+TAKES_VALUE = ('-c', '-g', '-l', '-n', '-o', '-s', '-R')
+plain, skip = [], False
+for a in args:
+    if skip:
+        skip = False
+    elif a in TAKES_VALUE:
+        skip = True
+    elif not a.startswith('-'):
+        plain.append(a)
+out = plain[1] if len(plain) > 1 else None
+if out is not None:
+    args = [a for a in args if a != out]
+
+dump = subprocess.run([real] + args, stdout=subprocess.PIPE, check=True).stdout
+dump = dump.replace(b'\n', b'\r\n')
+if out is None:
+    sys.stdout.buffer.write(dump)
+else:
+    open(out, 'wb').write(dump)
+PYSTUB
+    crlf_real=$(command -v "$HEXPAIR_XXD")
+    cat > "$WORK/crlf-xxd/xxd" <<EOF
+#!/bin/sh
+CRXXD_REAL='$crlf_real' exec $PY '$WORK/crlf-xxd/crxxd.py' "\$@"
+EOF
+    chmod +x "$WORK/crlf-xxd/xxd"
+    CRLF_PATH=$WORK/crlf-xxd:$PATH
+fi
+
+cat > "$WORK/tcrlf.vim" <<EOF
+$(printf "$HEX")
+set fileformats=unix
+execute 'goto 1'
+HexPairToggle
+let first = getline(3)
+HexPairPageNext
+let turned = getline(3)
+HexPairRefresh
+let refreshed = getline(3)
+write
+call writefile([first =~# "\r" ? 'CR' : 'clean', turned =~# "\r" ? 'CR' : 'clean', refreshed =~# "\r" ? 'CR' : 'clean', first], '$WORK/tcrlf.out')
+qa!
+EOF
+crlf_before=$(hash_range "$WORK/crlf1.bin" 0 -1)
+PATH="$CRLF_PATH" "$HEXPAIR_VIM" -es -b -u NONE "$WORK/crlf1.bin" -S "$WORK/tcrlf.vim" < /dev/null
+check "a CRLF dump loads without a ^M at the end of the line" \
+    "clean" "$(sed -n 1p "$WORK/tcrlf.out")"
+check "and a page turn does not bring one back" \
+    "clean" "$(sed -n 2p "$WORK/tcrlf.out")"
+check "nor is a refresh any different from either" \
+    "clean" "$(sed -n 3p "$WORK/tcrlf.out")"
+# Not merely CR-free: the line xxd actually spelled. The CR sits past the
+# ASCII column, in the region the payload rules ignore, so it never reached
+# the file either - which is what the write here says.
+check "the dump line is the one xxd spelled" \
+    "00000010: 10 11 12 13 14 15 16 17 18 19 1a 1b 1c 1d 1e 1f  ................" \
+    "$(sed -n 4p "$WORK/tcrlf.out")"
+check "and a write of that page leaves the bytes alone" \
+    "$crlf_before" "$(hash_range "$WORK/crlf1.bin" 0 -1)"
 
 # ---------------------------------------------------------------------------
 if [ "$FAIL" -eq 0 ]; then

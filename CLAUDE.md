@@ -231,8 +231,10 @@ Key function map:
 7. A dump line is buffer line `k + s:HeaderLines()`, **never** a literal
    2: `g:hexpair_ruler` puts a second line above the dump. Every mapping
    between a line number and a byte offset — `s:PagedLineBase()`,
-   `s:PagedGotoOffset()`, `s:PosOffset()`, `HexPairStatus()`, the line
-   count `s:LoadPage()` checks xxd's output against — goes through it.
+   `s:PagedGotoOffset()`, `s:PosOffset()`, `HexPairStatus()` — goes
+   through it. (`s:LoadPage()`'s shape check is the one that does not,
+   and must not: it counts the lines xxd produced, before they are a
+   buffer and before a banner or a ruler is anywhere near them.)
    The text view has no ruler, so its own header is always the one
    banner line, matched by exact text (`s:TextBodyRange()`).
 
@@ -334,6 +336,8 @@ come back**; each names the test that would catch it.
 | A selection report echoed from a Visual-mode mapping was painted over by `-- VISUAL --` before it could be read | not testable headlessly — the tmux recipe above, and the hit-enter prompt is the fix |
 | Refreshing the other windows (a `wincmd w` there and back) ENDED the Visual selection on every cursor movement, so Visual mode was unusable in `vimhexdiff` | "a Visual or Insert mode keeps this window" — the modes are a pure function, since mode() cannot be driven into a Visual one here |
 | The window's markings survived a toggle to the text view and sat there at the columns the hex view had put them | "the text view is left unmarked, not marked in the wrong columns" |
+| A Windows `xxd` ends every dump line CRLF (`xxd.c`: `BIN_ASSIGN(fpo = stdout, revert)`, `BIN_WRITE(revert)` - text mode for a dump, binary only for `-r`), and the page loader read it through a `%!` filter, which leaves the CR to `'fileformats'` auto-detection. With `set fileformats=unix` in a vimrc nothing stripped it: a `^M` on every line of every page, cleared by `:HexPairRefresh` only because that path already went through `readfile()` | "a CRLF dump loads without a ^M at the end of the line" and the four checks with it - Windows CI uses the real `xxd.exe`, everywhere else a stand-in supplies the CRLF |
+| The page state was assigned before the dump was read, so a failed read left the buffer's bytes and its idea of which page they are disagreeing - and `:w` would have patched the old page's bytes in at the new page's offset | same block: the read and the shape check both happen before anything about the buffer changes |
 
 **The Vim version floor is a claim that has to be run.** The plugin says
 everything but the splice works on Vim 8.0; it did not, for a year, and

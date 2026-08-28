@@ -9,6 +9,27 @@ and this project adheres to
 
 ## [v2.3.0-devel] – 2026-08-28
 
+### Fixed
+- **A `^M` at the end of every line of a page, on Windows.** `xxd` opens a
+  dump in text mode there (`xxd.c`: `BIN_ASSIGN(fpo = stdout, revert)` for
+  the stream, `BIN_WRITE(revert)` for a named output file), so every dump
+  line reaches Vim CRLF-terminated - and the page loader read it through a
+  `%!` filter, which leaves what becomes of that CR to `'fileformats'`
+  auto-detection. That is a *user* option: with `set fileformats=unix` in a
+  vimrc nothing stripped it, and the whole dump was fringed with `^M`.
+  Cosmetic only - the CR sat past the ASCII column, in the region the
+  payload rules ignore, so it never reached the file - but it was on screen
+  on every page load and every page turn, and `:HexPairRefresh` cleared it
+  only because that path already went through `readfile()`, whose text mode
+  drops a CR before a NL whatever the options say. The loader now does the
+  same, as every other `xxd` call in the plugin already did.
+- **A page read that fails no longer leaves the buffer claiming to be the
+  new page.** The page state was assigned before the dump was read, so an
+  `xxd` that failed part way left the buffer's bytes and its idea of which
+  page they are disagreeing - and a `:w` would have patched the old page's
+  bytes in at the new page's offset. The read and its shape check now both
+  happen before anything about the buffer changes.
+
 ## [v2.2.0] – 2026-08-28
 
 ### Added

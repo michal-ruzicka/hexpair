@@ -1524,6 +1524,49 @@ function! s:LoadPage(pageidx) abort
     return 0
   endif
 
+  let n = g:hexpair_bytes_per_line
+
+  " Read the page BEFORE anything about this buffer changes. Every
+  " assignment below says "this buffer is showing page N", and a write
+  " believes them: state that had moved on while the dump had not would
+  " offer the PREVIOUS page's bytes for patching in at this page's
+  " offset. So the one step that can fail goes first, and a failure
+  " leaves the buffer exactly as it was, still showing the page it was
+  " showing.
+  "
+  " xxd writes to a FILE that readfile() then reads, rather than the
+  " buffer being filtered through '%!'. Not a detail on Windows: xxd
+  " opens a dump in TEXT mode there (xxd.c: BIN_ASSIGN(fpo = stdout,
+  " revert) for the stream, BIN_WRITE(revert) for a named output file -
+  " binary only when reverting), so every dump line comes back
+  " CRLF-terminated. A filter read leaves what becomes of that CR to
+  " 'fileformats' auto-detection, which is the USER's option: with
+  " `set fileformats=unix` in a vimrc nothing strips it, and the dump
+  " arrives fringed with a ^M on every line. readfile() in text mode
+  " drops a CR before a NL whatever the options say - which is why the
+  " same dump built by s:ToHexView() never showed one, and why every
+  " other xxd call in this file already goes through a file.
+  let dumpfile = tempname()
+  try
+    call s:Run(printf('%s -s %d -l %d -g 1 -c %d %s %s', s:xxd,
+          \ base, len, n, shellescape(b:hexpair_page_file),
+          \ shellescape(dumpfile)))
+    let dump = readfile(dumpfile)
+  finally
+    call delete(dumpfile)
+  endtry
+
+  " xxd runs through the shell, which can fail for reasons Vim never
+  " reports - leaving an empty or short dump presented as the page, and
+  " a later :w patching that into the file. The dump's shape is known
+  " exactly, so check it: one line per bytesperline bytes.
+  let expect = (len + n - 1) / n
+  if len(dump) != expect
+    throw printf('hexpair: reading page %d of %s produced %d lines, '
+          \ . 'expected %d - is xxd working?',
+          \ a:pageidx + 1, b:hexpair_page_file, len(dump), expect)
+  endif
+
   let b:hexpair_page_index      = a:pageidx
   let b:hexpair_page_base       = base
   let b:hexpair_page_len        = len
@@ -1536,7 +1579,7 @@ function! s:LoadPage(pageidx) abort
   let b:hexpair_page_hex        = s:PageHex(base, len)
   let b:hexpair_page_digest     = b:hexpair_page_hex ==# '' || !exists('*sha256')
         \ ? '' : sha256(b:hexpair_page_hex)
-  let b:hexpair_n               = g:hexpair_bytes_per_line
+  let b:hexpair_n               = n
   " Where the page's FIRST line starts its hex column; later lines
   " derive their own (s:PagedLineLayout()), which differs only on a
   " page that straddles an offset-width change.
@@ -1544,48 +1587,16 @@ function! s:LoadPage(pageidx) abort
   " Snapshotted like b:hexpair_n, and for the same reason: every mapping
   " between a line number and a byte offset counts on it.
   let b:hexpair_page_header     = g:hexpair_ruler ? 2 : 1
+  let b:hexpair_banner_top      = s:BannerTop(a:pageidx, totalpages, base,
+        \ len, total, s:PageLabel())
+  let b:hexpair_banner_bottom   = s:BannerBottom(a:pageidx, totalpages)
 
   " Replacing the page must not be an undoable edit: undo history that
   " survived a page turn would let a single |u| put the bytes of a
   " DIFFERENT part of the file into a buffer that now claims to be this
   " page - and a :w would then patch them in at this page's offset.
-  " |clear-undo|: making the change with 'undolevels' at -1 discards the
-  " history; restoring the option afterwards resumes normal undo, so
-  " edits made to the page itself stay undoable. Buffer-local, not
-  " global: 'undolevels' is global-local, and a buffer-local value would
-  " otherwise keep winning over the global one and the history survive.
-  let save_ul = &l:undolevels
-  setlocal noreadonly modifiable
-  try
-    setlocal undolevels=-1
-    silent %delete _
-    silent execute '%!' . s:xxd . printf(' -s %d -l %d -g 1 -c %d %s',
-          \ base, len, b:hexpair_n, shellescape(b:hexpair_page_file))
-    let b:hexpair_banner_top = s:BannerTop(a:pageidx, totalpages, base,
-          \ len, total, s:PageLabel())
-    let b:hexpair_banner_bottom = s:BannerBottom(a:pageidx, totalpages)
-    call append(0, b:hexpair_banner_top)
-    if b:hexpair_page_header > 1
-      call append(1, s:RulerLine(b:hexpair_page_hexstart, b:hexpair_n))
-    endif
-    call append(line('$'), b:hexpair_banner_bottom)
-  finally
-    let &l:undolevels = save_ul
-  endtry
-
-  " xxd runs through the shell, which can fail for reasons Vim never
-  " reports - leaving an empty or short buffer presented as the page,
-  " and a later :w patching that into the file. The dump's shape is
-  " known exactly, so check it: one line per bytesperline bytes, plus the
-  " header (banner, and the ruler when there is one) and the closing
-  " banner.
-  let expect = (len + b:hexpair_n - 1) / b:hexpair_n
-        \ + b:hexpair_page_header + 1
-  if line('$') != expect
-    throw printf('hexpair: reading page %d of %s produced %d lines, '
-          \ . 'expected %d - is xxd working?',
-          \ a:pageidx + 1, b:hexpair_page_file, line('$'), expect)
-  endif
+  " s:SetLines() is what discards it, and says how.
+  call s:SetLines(s:HexViewLines(dump))
 
   " The other file's bytes for THIS page, when there is one to compare
   " against; a page turn moves the window on both files at once.
@@ -5890,7 +5901,13 @@ function! s:TextMarkPositions(first, last) abort
 endfunction
 
 " Replace the buffer with exactly a:lines, without making it an undoable
-" edit (see s:LoadPage() for why).
+" edit (s:LoadPage() says why a page load must not be one).
+"
+" |clear-undo|: making the change with 'undolevels' at -1 discards the
+" history; restoring the option afterwards resumes normal undo, so edits
+" made to the page itself stay undoable. Buffer-local, not global:
+" 'undolevels' is global-local, and a buffer-local value left behind here
+" would keep winning over the global one and the history would survive.
 function! s:SetLines(lines) abort
   let save_ul = &l:undolevels
   setlocal noreadonly modifiable
