@@ -930,8 +930,13 @@ FileStream.Seek takes an Int64 - an external tool this plugin otherwise
 refuses to depend on, but a Windows-only one that Windows ships, and the
 choice is against not reading the file at all.  Arguments go by environment
 variable and the bytes come back through a temp file, so a path with a
-space or a quote survives.  Expect a few hundred milliseconds a page, which
-is process startup; a file-wide scan pays it per block.
+space or a quote survives.
+
+PowerShell does ONLY the seek: it writes the page's raw bytes to a temp
+file, and xxd reads both the dump and the flat hex out of that, where there
+is no seeking to do.  xxd's limit was never its formatting.  What is left
+is one process start a page, a few hundred milliseconds; a file-wide scan
+pays it per block.
 
 Writing past the limit is REFUSED: `xxd -r` has the same 32-bit offsets and
 there is no fallback in place for it, so hexpair declines rather than

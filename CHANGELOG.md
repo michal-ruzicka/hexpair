@@ -77,6 +77,15 @@ and this project adheres to
   answering one in the other's language should not be a mistake.
 
 ### Fixed
+- **A page turn past 2 GiB on Windows took ~30 seconds.** The dump was
+  being formatted byte by byte in VimScript, because `xxd` could not be
+  asked for those offsets — 131072 iterations a page, 3.5 s here and far
+  worse there. But `xxd`'s limit is its *seek*, not its formatting: it now
+  reads the dump out of the temp file PowerShell fetched the bytes into,
+  from offset 0, with only the offset column renumbered in Vim. The same
+  page load also read the range twice, once for the dump and once for the
+  page's hex, which on a path whose cost is process startup was half the
+  total. 3530 ms of formatting became 48 ms, and two reads became one.
 - **The Windows fallback reader refused its own output on a full page.**
   The check that what came back is really hex was written as
   `'^\%(\x\x\)*$'`, a quantified group over the whole run — which on a

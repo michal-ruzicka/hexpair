@@ -1556,9 +1556,36 @@ function! s:LoadPage(pageidx) abort
   " It cannot be done by handing xxd the bytes with -o either: the display
   " offset is an unsigned long in xxd too, so the offset column would wrap
   " at 4 GiB even when the bytes were right.
+  "
+  " Past that limit PowerShell fetches the page's bytes ONCE, into a temp
+  " file, and xxd reads both the dump and the flat hex out of it - two
+  " things the page needs and which used to be two separate reads of the
+  " same range. Starting the process is the expensive part here, so doing
+  " it twice a page turn was half the cost of one.
+  let pagehex = ''
   if !s:XxdCanSeek(base + len)
-    let dump = HexPairPagedDumpLines(s:FileHex(b:hexpair_page_file, base, len),
-          \ base, n)
+    let raw = s:SeekReadRaw(b:hexpair_page_file, base, len)
+    let dumpfile = tempname()
+    try
+      if raw ==# ''
+        let dump = []
+      else
+        call s:Run(printf('%s -g 1 -c %d %s %s', s:xxd, n,
+              \ shellescape(raw), shellescape(dumpfile)))
+        " xxd numbered the temp file from zero, since that is where it
+        " starts. The offset column is the one thing it cannot be told
+        " (-o is an unsigned long too, so it would wrap at 4 GiB), so it
+        " is rewritten here - 8192 lines, 25 ms, against the 3.5 SECONDS
+        " that formatting the whole page in VimScript cost.
+        let dump = HexPairPagedRebaseDump(readfile(dumpfile), base, n)
+        let pagehex = s:HexFromFile(raw)
+      endif
+    finally
+      call delete(dumpfile)
+      if raw !=# ''
+        call delete(raw)
+      endif
+    endtry
   else
     let dumpfile = tempname()
     try
@@ -1591,7 +1618,12 @@ function! s:LoadPage(pageidx) abort
   " One read, two uses: the bytes are what the modified-byte highlight
   " compares against, and their hash is what a write checks the page
   " against (s:CheckFresh()).
-  let b:hexpair_page_hex        = s:PageHex(base, len)
+  " On the slow path the bytes were read once above and pagehex already
+  " holds them; re-reading here would be a second process for the same
+  " range. On the fast path xxd is cheap enough that the plain read wins
+  " over threading a value through.
+  let b:hexpair_page_hex        = s:XxdCanSeek(base + len)
+        \ ? s:PageHex(base, len) : pagehex
   let b:hexpair_page_digest     = b:hexpair_page_hex ==# '' || !exists('*sha256')
         \ ? '' : sha256(b:hexpair_page_hex)
   let b:hexpair_n               = n
@@ -1980,46 +2012,31 @@ let s:xxdseekmax = 2147483647
 " Needs readblob()'s offset and size arguments (patch 8.2.4906), the same
 " Vim the splice already asks for. Without it there is no way to read here
 " at all, and saying so is far better than xxd's silent wrong answer.
-" A run of flat hex as the dump lines `xxd -g 1 -c a:n` would have printed
-" for it, starting at absolute offset a:base.
+" xxd's dump lines for a temp file, renumbered as if it had been read at
+" a:base.
 "
-" Exists because xxd cannot be asked for these pages at all on Windows
-" (s:XxdCanSeek), and cannot be handed the bytes with -o either: its display
-" offset is an unsigned long, so the column would wrap at 4 GiB even given
-" the right bytes.
+" Needed because xxd cannot be TOLD the offset: -o adds a display offset,
+" but it holds that in an unsigned long as well, so on Windows the column
+" would wrap at 4 GiB even given the right bytes. Renumbering here is the
+" only part of the dump that has to be done outside xxd - 8192 lines, about
+" 25 ms, where formatting the whole page byte by byte in VimScript cost 3.5
+" seconds and was what made a page turn on a large file take half a minute.
 "
-" The format is xxd's, exactly, and the suite holds it against real xxd
-" output rather than trusting this comment: offset in lowercase hex padded
-" to at least eight digits and widening past that on its own, ': ', the
-" bytes as %02x separated by single spaces, the hex column padded out to
-" full width when the last line is short, two spaces, then the text column
-" with anything outside printable ASCII as '.'.
+" The offset column is everything before the FIRST ':', which is the same
+" rule the rest of the plugin reads it by (invariant 1) and is safe against
+" a ':' in the text column, since that comes later in the line. Widths take
+" care of themselves: %08x pads to eight digits and grows past them on its
+" own, which is exactly what xxd does at 4 GiB and again at 64 GiB.
 "
 " Global and pure, so it is testable without a 2 GiB file - which is the
-" only way this gets tested at all.
-function! HexPairPagedDumpLines(hex, base, n) abort
-  let out = []
-  let bytes = strlen(a:hex) / 2
-  let width = a:n * 3 - 1
-  let at = 0
-  while at < bytes
-    let span = a:n < bytes - at ? a:n : bytes - at
-    let cols = []
-    let text = ''
-    let i = 0
-    while i < span
-      let pair = strpart(a:hex, (at + i) * 2, 2)
-      call add(cols, pair)
-      let byte = str2nr(pair, 16)
-      let text .= (byte >= 32 && byte <= 126) ? nr2char(byte) : '.'
-      let i += 1
-    endwhile
-    call add(out, printf('%08x: %-*s  %s', a:base + at, width,
-          \ join(cols, ' '), text))
-    let at += span
-  endwhile
-  return out
+" only way it gets tested at all.
+function! HexPairPagedRebaseDump(lines, base, n) abort
+  let base = a:base
+  let n = a:n
+  return map(copy(a:lines),
+        \ 'printf("%08x", base + v:key * n) . strpart(v:val, stridx(v:val, ":"))')
 endfunction
+
 
 " The suite's way in to the fallback reader. The offsets that pick it in
 " earnest are past 2 GiB, which is not a fixture anybody wants to generate,
@@ -2035,33 +2052,37 @@ function! HexPairPagedFileHexForTest(file, off, len) abort
   return s:FileHex(a:file, a:off, a:len)
 endfunction
 
-" Reading a byte range that xxd cannot seek to, on Windows, through
-" PowerShell.
+" Reading a byte range that xxd cannot seek to, on Windows.
+"
+" PowerShell does the SEEK and nothing else: .NET's FileStream.Seek takes an
+" Int64, which is the one thing missing here. Everything after that is xxd's
+" job again, over a temp file starting at offset 0 - because xxd's limit is
+" its SEEK, not its formatting, and formatting 128 KiB in VimScript instead
+" cost 3.5 seconds a page against xxd's 14 milliseconds.
 "
 " readblob() was the obvious fallback and is not one: read_blob() in Vim's
 " blob.c declares a plain `struct stat` and calls plain fstat(), where the
 " rest of Vim uses stat_T (`struct _stat64` on Windows - vim.h says why).
 " st_size is a 32-bit _off_t there, so for a large file the length it
 " computes goes negative and read_blob() returns an EMPTY BLOB AND SUCCESS,
-" with nothing to catch. That is a Vim bug, and until it is fixed the
-" function is no use here.
-"
-" .NET's FileStream.Seek takes an Int64, so PowerShell can do what neither
-" can. It is an external tool, which this plugin otherwise refuses to
-" depend on - but it is Windows-only, Windows ships it, and the choice is
+" with nothing to catch. That is a Vim bug; until it is fixed, PowerShell is
+" what is left. It is an external tool, which this plugin otherwise refuses
+" to depend on - but it is Windows-only, Windows ships it, and the choice is
 " against not reading the file at all rather than against xxd.
 "
 " Everything goes through the ENVIRONMENT and a temp file rather than the
 " command line: a path with a space, a quote or an & does not survive being
-" quoted through Vim's 'shell' into PowerShell's own parser, and that is
-" the same trick vimhex.cmd and hexpair.bashrc already use for the same
-" reason. -Command rather than -File also sidesteps the execution policy,
-" which applies to script files and not to a command string.
+" quoted through Vim's 'shell' into PowerShell's own parser, and that is the
+" same trick vimhex.cmd and hexpair.bashrc already use. -Command rather than
+" -File also sidesteps the execution policy, which applies to script files
+" and not to a command string. The script uses single quotes only and no &
+" or %, so there is nothing in it for shellescape() or cmd.exe to mangle.
 "
-" The read is a LOOP: FileStream.Read is allowed to return fewer bytes than
-" asked for, and a page read that quietly stopped half way is precisely the
-" failure this whole path exists to prevent.
-let s:pshexscript =
+" The read is a LOOP: FileStream.Read may return fewer bytes than asked for,
+" and a page that quietly stopped half way is the failure this path exists
+" to prevent. The bytes are written raw - no hex conversion here, which
+" would double the data and cost more than the read.
+let s:psreadscript =
       \   '$ErrorActionPreference = ''Stop'';'
       \ . '$fs = [IO.File]::OpenRead($env:HEXPAIR_PS_SRC);'
       \ . '$want = [int]$env:HEXPAIR_PS_LEN;'
@@ -2075,8 +2096,8 @@ let s:pshexscript =
       \ .     '$got += $n'
       \ .   '}'
       \ . '} finally { $fs.Close() };'
-      \ . '[IO.File]::WriteAllText($env:HEXPAIR_PS_OUT,'
-      \ . '[BitConverter]::ToString($buf, 0, $got).Replace(''-'', ''''))'
+      \ . '$out = [IO.File]::Create($env:HEXPAIR_PS_OUT);'
+      \ . 'try { $out.Write($buf, 0, $got) } finally { $out.Close() }'
 
 " Probed once per session, and asked of the thing itself rather than of
 " $PATH: what matters is that it starts and runs a command, which
@@ -2090,14 +2111,18 @@ function! s:HasPowerShell() abort
   return s:has_powershell
 endfunction
 
-" A byte range as flat lowercase hex, for offsets xxd cannot seek to.
-"
-" A partial read is the RIGHT answer past the end of a file - it is how the
-" diff learns the other file stops there - so it cannot be treated as a
-" failure on its own. What the file actually holds decides.
-function! s:SeekReadHex(file, off, len) abort
+" How much of [off, off+len) the file actually holds. A partial read is the
+" RIGHT answer past the end of a file - it is how the diff learns the other
+" file stops there - so it cannot be treated as a failure on its own.
+function! s:AvailableBytes(file, off, len) abort
   let total = getfsize(a:file)
-  let want = total <= a:off ? 0 : (total - a:off < a:len ? total - a:off : a:len)
+  return total <= a:off ? 0 : (total - a:off < a:len ? total - a:off : a:len)
+endfunction
+
+" The byte range in a temp file of its own, which the caller deletes. '' when
+" there is nothing there.
+function! s:SeekReadRaw(file, off, len) abort
+  let want = s:AvailableBytes(a:file, a:off, a:len)
   if want <= 0
     return ''
   endif
@@ -2108,49 +2133,44 @@ function! s:SeekReadHex(file, off, len) abort
           \ . '32-bit limit.', a:off + 1, a:file)
   endif
 
-  let out = tempname()
+  let raw = tempname()
   let $HEXPAIR_PS_SRC = a:file
-  let $HEXPAIR_PS_OUT = out
+  let $HEXPAIR_PS_OUT = raw
   let $HEXPAIR_PS_OFF = a:off
   let $HEXPAIR_PS_LEN = a:len
   try
     call s:Run(printf('powershell -NoProfile -NonInteractive -Command %s',
-          \ shellescape(s:pshexscript)))
-    let hex = join(readfile(out), '')
+          \ shellescape(s:psreadscript)))
   finally
-    call delete(out)
     let $HEXPAIR_PS_SRC = ''
     let $HEXPAIR_PS_OUT = ''
     let $HEXPAIR_PS_OFF = ''
     let $HEXPAIR_PS_LEN = ''
   endtry
 
-  " Anything but hex means the file holds something other than the bytes -
-  " a BOM, a warning PowerShell decided to print, a partial write. Checked
-  " rather than assumed, because it would otherwise reach the dump as
-  " plausible-looking rubbish. (WriteAllText is documented as UTF-8 with no
-  " BOM, which is why there should be nothing here to find.)
-  " `\X` (one non-hex-digit ATOM) and a length test, NOT a quantified group
-  " over the whole run: '^\%(\x\x\)*$' says the same thing and asks the
-  " regex engine to hold the whole page while it backtracks, which on a
-  " 128 KiB page (262144 characters of hex) is E363, "Pattern uses more
-  " memory than 'maxmempattern'". It looks correct and passes on anything
-  " short - the same shape as the negated-collection and \zs traps in
-  " s:PagedScan(). This form is one linear scan, ~7 ms a page.
-  if strlen(hex) % 2 != 0 || hex =~# '\X'
-    throw printf('hexpair: reading byte %d of %s gave something that is '
-          \ . 'not hex: %s', a:off + 1, a:file,
-          \ string(strpart(hex, 0, 40)))
-  endif
-
   " Short when the file is not: something went wrong quietly, and a page of
   " nothing presented as the file is what this path exists to prevent.
-  if strlen(hex) / 2 < want
+  let got = getfsize(raw)
+  if got < want
+    call delete(raw)
     throw printf('hexpair: reading byte %d of %s came back short - asked '
-          \ . 'for %d bytes, got %d.', a:off + 1, a:file, want,
-          \ strlen(hex) / 2)
+          \ . 'for %d bytes, got %d.', a:off + 1, a:file, want, got)
   endif
-  return tolower(hex)
+  return raw
+endfunction
+
+" ... and as flat lowercase hex, which is xxd's -p over that temp file. No
+" seek is involved, so xxd is exactly as usable here as anywhere else.
+function! s:SeekReadHex(file, off, len) abort
+  let raw = s:SeekReadRaw(a:file, a:off, a:len)
+  if raw ==# ''
+    return ''
+  endif
+  try
+    return s:HexFromFile(raw)
+  finally
+    call delete(raw)
+  endtry
 endfunction
 
 " Can xxd be trusted to seek to a:off on this platform?
@@ -2174,28 +2194,31 @@ function! s:XxdCanSeek(off) abort
   return a:off <= s:xxdseekmax || !has('win32')
 endfunction
 
+" The whole of a file as flat lowercase hex. Shared by both readers: xxd -p
+" over a file it does not have to seek in, which is the fast part of xxd and
+" the part that was never in question.
+function! s:HexFromFile(file) abort
+  let out = s:Run(printf('%s -p %s', s:xxd, shellescape(a:file)))
+  " xxd -p prints hex and line breaks and nothing else, so the line breaks
+  " are all there is to remove - the CR because a Windows xxd ends its lines
+  " with one. Two passes over a single character each, rather than one over
+  " a collection: measured on the 2 MB of hex a 1 MiB block comes to, 16 ms
+  " against 51 ms, and a scan of a large file is thousands of those.
+  return substitute(substitute(out, '\n', '', 'g'), '\r', '', 'g')
+endfunction
+
 function! s:FileHex(file, off, len) abort
   if a:len <= 0
     return ''
   endif
-  " Past what xxd can reach, read the bytes with Vim instead. readblob()
-  " takes a 64-bit offset, returns what is actually there (nothing at all
-  " past the end, which is exactly the answer the diff needs), and is the
-  " same call the splice path already reads with. It is about 44% slower
-  " than xxd per megabyte, measured, which is why it is not used for the
-  " offsets xxd handles correctly.
+  " Past what xxd can seek to, PowerShell fetches the bytes and xxd reads
+  " them out of a temp file - see s:SeekReadRaw().
   if !s:XxdCanSeek(a:off)
     return s:SeekReadHex(a:file, a:off, a:len)
   endif
   try
     let out = s:Run(printf('%s -p -s %d -l %d %s', s:xxd, a:off, a:len,
           \ shellescape(a:file)))
-    " xxd -p prints hex and line breaks and nothing else, so the line
-    " breaks are all there is to remove - the CR because a Windows xxd
-    " ends its lines with one. Two passes over a single character each,
-    " rather than one over a collection: measured on the 2 MB of hex a
-    " 1 MiB block comes to, 16 ms against 51 ms, and a scan of a large
-    " file is thousands of those.
     return substitute(substitute(out, '\n', '', 'g'), '\r', '', 'g')
   catch /^hexpair:/
     " A read that failed - a file that went away, an xxd that could not

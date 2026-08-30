@@ -363,10 +363,11 @@ The cause is entirely outside the plugin, in two places at once:
 `FileStream.Seek` takes an `Int64`. It is an external tool, which this
 plugin otherwise refuses to depend on — but it is Windows-only, Windows
 ships it, and the choice is against not reading the file at all rather than
-against `xxd`. Everything is passed by environment variable and returned
-through a temp file, so a path with a space or a quote survives. Expect a
-few hundred milliseconds per page turn, which is process startup; a
-file-wide search past 2 GiB pays it per block and is correspondingly slow.
+against `xxd`. **PowerShell only does the seek**: it writes the page's raw
+bytes to a temp file and `xxd` reads the dump and the hex out of *that*,
+where it has no seeking to do and is as fast as ever. What remains is one
+process start per page turn — a few hundred milliseconds. A file-wide
+search past 2 GiB pays it per block and is correspondingly slow.
 
 **Writing past 2 GiB is refused.** `xxd -r`, which is how bytes get put at
 an offset, has the same 32-bit limit, and there is no equivalent fallback

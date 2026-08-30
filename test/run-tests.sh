@@ -3223,37 +3223,47 @@ check "and still rejects a page with rubbish in it" "rejected" \
 # The page a user LOOKS at is a second xxd call, with the same -s and so the
 # same 2 GiB clamp: every page past it showed the bytes at 2 GiB, which is
 # why paging back from the end of a 120 GiB file showed one page over and
-# over. Past the limit the dump is built here instead - it cannot be handed
-# to xxd with -o either, since that display offset is an unsigned long too
-# and the column would wrap at 4 GiB.
+# over. Past the limit PowerShell fetches the bytes into a temp file and xxd
+# dumps THAT - it has no seeking to do there, so it is as good and as fast
+# as ever. The one thing it cannot be told is the offset column: -o holds
+# its display offset in an unsigned long too, so it would wrap at 4 GiB.
 #
-# So the formatting has to be xxd's exactly. Held against real xxd output
-# rather than against a description of it: full lines, a short last line,
-# and two different bytes-per-line, since the padding of a short line is
-# what a hand-rolled formatter gets wrong.
+# So the offsets are renumbered here, and that renumbering is what gets
+# tested - against real xxd output for the same bytes at the same base,
+# because it has to be indistinguishable from what xxd would have printed.
+# (Formatting the page byte by byte in VimScript instead was correct and
+# cost 3.5 seconds a page, which on Windows read as Vim hanging for half a
+# minute; xxd plus this renumber is 14 ms plus 25 ms.)
 cat > "$WORK/tdump.vim" <<EOF
 $(printf "$HEX")
 let out = []
-for [f, n] in [['$WORK/diffa.bin', 16], ['$WORK/diffa.bin', 23], ['$WORK/char1.bin', 16]]
-  let want = systemlist(printf('$HEXPAIR_XXD -g 1 -c %d %s', n, shellescape(f)))
-  let hex = tolower(substitute(strpart(string(readblob(f)), 2), '\\.', '', 'g'))
-  call add(out, want ==# HexPairPagedDumpLines(hex, 0, n) ? 'match' : 'DIFFER')
-endfor
-" And at a large base, where the offset column is wider than eight digits -
-" the case xxd's own -o could not have produced correctly on Windows.
-call add(out, HexPairPagedDumpLines('00ff41', 0x1234567890, 16)[0])
+" What xxd prints for the bytes at offset 0, renumbered to a big base ...
+let zero = systemlist(printf('$HEXPAIR_XXD -g 1 -c 16 %s', shellescape('$WORK/diffa.bin')))
+let moved = HexPairPagedRebaseDump(zero, 0x1234567890, 16)
+" ... must be what xxd itself prints when told that offset with -o. This is
+" a 64-bit xxd, so -o is trustworthy HERE even though it is not on Windows,
+" which makes it the right thing to check against.
+let want = systemlist(printf('$HEXPAIR_XXD -g 1 -c 16 -o %d %s', 0x1234567890, shellescape('$WORK/diffa.bin')))
+call add(out, want ==# moved ? 'match' : 'DIFFER')
+call add(out, moved[0])
+call add(out, moved[1])
+" A base of zero must leave the lines exactly as they were.
+call add(out, zero ==# HexPairPagedRebaseDump(zero, 0, 16) ? 'unchanged' : 'CHANGED')
 call writefile(out, '$WORK/tdump.out')
 qa!
 EOF
 "$HEXPAIR_VIM" -es -u NONE -S "$WORK/tdump.vim" < /dev/null
-check "the dump built here is the dump xxd prints" "match" \
+check "renumbered offsets are what xxd itself would have printed" "match" \
     "$(sed -n 1p "$WORK/tdump.out")"
-check "including a short last line, at another width" "match" \
+# Past 32 bits the column widens on its own, which is the case no xxd on
+# Windows could have produced with -o.
+check "and the column widens past eight digits" \
+    "1234567890: 00 01 02 03 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f  ................" \
     "$(sed -n 2p "$WORK/tdump.out")"
-check "and a page shorter than one line" "match" \
+check "and each line advances by one line of bytes" \
+    "12345678a0: 10 11 12 13 14 15 16 17 18 19 1a 1b 1c 1d 1e 1f  ................" \
     "$(sed -n 3p "$WORK/tdump.out")"
-check "an offset past 32 bits widens the column and stays exact" \
-    "1234567890: 00 ff 41                                         ..A" \
+check "a base of zero changes nothing" "unchanged" \
     "$(sed -n 4p "$WORK/tdump.out")"
 
 # --- :HexPairDiffShow - what the other file has here ----------------------
