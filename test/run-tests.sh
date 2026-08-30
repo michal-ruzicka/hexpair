@@ -1701,8 +1701,8 @@ source $PLUGIN
 let want = ['(HexPairToggle)', '(HexPairGoHex)', '(HexPairGoAscii)', '(HexPairSwap)', '(HexPairRefresh)', '(HexPairPageNext)', '(HexPairPagePrev)', '(HexPairPageGoto)', '(HexPairPageGotoForce)', '(HexPairGoOffset)', '(HexPairGoOffsetForce)', '(HexPairPages)']
 let listed = execute('nmap')
 let missing = filter(copy(want), 'stridx(listed, "<Plug>" . v:val) < 0')
-let parsed = [HexPairPagedParseOffsetInput(''), HexPairPagedParseOffsetInput('1234'), HexPairPagedParseOffsetInput('0x10'), HexPairPagedParseOffsetInput('zz'), HexPairPagedParseOffsetInput('ff'), HexPairPagedParseOffsetInput('+16'), HexPairPagedParseOffsetInput('-0x10')]
-call writefile([string(missing), string(parsed[0]), string(parsed[1]), string(parsed[2]), parsed[3].msg, parsed[4].msg, string([parsed[5], parsed[6]])], '$WORK/tk1.out')
+let parsed = [HexPairPagedParseOffsetInput(''), HexPairPagedParseOffsetInput('1234'), HexPairPagedParseOffsetInput('0x10'), HexPairPagedParseOffsetInput('zz'), HexPairPagedParseOffsetInput('ff'), HexPairPagedParseOffsetInput('+16'), HexPairPagedParseOffsetInput('-0x10'), HexPairPagedParseOffsetInput('$')]
+call writefile([string(missing), string(parsed[0]), string(parsed[1]), string(parsed[2]), parsed[3].msg, parsed[4].msg, string([parsed[5], parsed[6]]), string(parsed[7])], '$WORK/tk1.out')
 qa!
 EOF
 "$HEXPAIR_VIM" -es -u NONE -S "$WORK/tk1.vim" < /dev/null
@@ -1711,18 +1711,24 @@ check "an empty offset prompt cancels"    "{}" "$(sed -n 2p "$WORK/tk1.out")"
 check "byte 1234 parses to offset 1233"   "{'offset': 1233}" "$(sed -n 3p "$WORK/tk1.out")"
 check "byte 0x10 parses to offset 15"     "{'offset': 15}"   "$(sed -n 4p "$WORK/tk1.out")"
 check "a non-position is reported" \
-    "hexpair: not a byte position: 'zz' (decimal, or 0x for hex; byte 1 is the first, +N and -N step from here)" \
+    "hexpair: not a byte position: 'zz' (decimal, or 0x for hex; byte 1 is the first, +N and -N step from here, $ is the last)" \
     "$(sed -n 5p "$WORK/tk1.out")"
 # A bare "ff" reads as hex to a person and as the decimal 0 to str2nr(),
 # so it is refused as a position rather than reported as "positions start
 # at 1", which is a complaint about the wrong thing.
 check "hex without the 0x is not a position either" \
-    "hexpair: not a byte position: 'ff' (decimal, or 0x for hex; byte 1 is the first, +N and -N step from here)" \
+    "hexpair: not a byte position: 'ff' (decimal, or 0x for hex; byte 1 is the first, +N and -N step from here, $ is the last)" \
     "$(sed -n 6p "$WORK/tk1.out")"
 # A step is the one form where 0 means something ("stay here") and where
 # the 1-based question does not arise at all.
 check "a step parses as a step, in either base" \
     "[{'delta': 16}, {'delta': -16}]" "$(sed -n 7p "$WORK/tk1.out")"
+# '$' is the last byte, the same shorthand :HexPairPageGoto takes for the
+# last page - the two prompts sit under neighbouring keys, and answering one
+# in the other's language should not be a mistake. Left for the caller to
+# resolve, which is the only place that knows how big the file is.
+check "'\$' parses as the last byte, resolved by the caller" \
+    "{'last': 1}" "$(sed -n 8p "$WORK/tk1.out")"
 
 # --- Piped input that Vim may already have transcoded is flagged -----------
 # A named file can be re-read with ++bin; piped input cannot, so if the
@@ -3112,6 +3118,61 @@ check "and the text view marks them as well" "something" \
     "$(sed -n 3p "$WORK/tdfpast.out")"
 check "a comparison with no bytes on the other side is still a comparison" \
     "1 0" "$(sed -n 4p "$WORK/tdfpast.out")"
+
+# --- ':HexPairGoOffset $' is the last byte --------------------------------
+# The same shorthand :HexPairPageGoto takes for the last page. End to end,
+# because the parser hands back {'last': 1} and it is s:GotoOffset() that
+# knows the size - which is also where an empty file has to be caught.
+cat > "$WORK/tgodollar.vim" <<EOF
+$(printf "$HEX")
+let out = []
+HexPairOpen $WORK/diffa.bin 1
+HexPairGoOffset \$
+call add(out, HexPairStatus())
+" and it is the same byte ':HexPairPages' calls the last one
+HexPairGoOffset 5000
+call add(out, HexPairStatus())
+call writefile(out, '$WORK/tgodollar.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tgodollar.vim" < /dev/null
+check "'\$' goes to the file's last byte" \
+    "$(sed -n 2p "$WORK/tgodollar.out")" "$(sed -n 1p "$WORK/tgodollar.out")"
+
+# --- Reading past what xxd can seek to ------------------------------------
+# xxd carries its seek in a long - strtol(), fseek() - which is 32 bits on
+# Windows, and strtol() SATURATES, so an offset past 2 GiB silently becomes
+# 2147483647 and xxd reads a page from there instead of failing. That is why
+# a 120 GiB file diffed against a 77 GiB one showed bytes as matching on
+# pages wholly past the shorter file's end, on Windows but not under WSL.
+#
+# s:FileHex() reads such offsets with readblob() instead. The offsets that
+# trigger it cannot be reached without a 2 GiB fixture, so what is checked
+# here is the thing that would silently rot: that the two ways of reading a
+# range agree byte for byte, and that past the end the blob path returns
+# nothing rather than something.
+cat > "$WORK/tblob.vim" <<EOF
+$(printf "$HEX")
+let out = []
+" A page first: s:xxd is resolved when one is opened, and the xxd reader
+" needs it.
+HexPairOpen $WORK/diffa.bin 1
+let xxd = HexPairPagedFileHexForTest('$WORK/diffa.bin', 1000, 64, 0)
+let blob = HexPairPagedFileHexForTest('$WORK/diffa.bin', 1000, 64, 1)
+call add(out, xxd ==# blob ? 'agree' : 'DIFFER: ' . xxd . ' vs ' . blob)
+call add(out, strlen(blob) . ' ' . (blob =~# '^[0-9a-f]*$' ? 'lowercase-hex' : 'NOT-HEX'))
+" Past the end: nothing there, which is the answer the diff depends on.
+call add(out, string(HexPairPagedFileHexForTest('$WORK/diffa.bin', 99999, 64, 1)))
+call writefile(out, '$WORK/tblob.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tblob.vim" < /dev/null
+check "reading a range with readblob matches reading it with xxd" "agree" \
+    "$(sed -n 1p "$WORK/tblob.out")"
+check "and comes back as flat lowercase hex, dots and all removed" \
+    "128 lowercase-hex" "$(sed -n 2p "$WORK/tblob.out")"
+check "and past the end it is nothing, not something" "''" \
+    "$(sed -n 3p "$WORK/tblob.out")"
 
 # --- :HexPairDiffShow - what the other file has here ----------------------
 # The marking says WHICH bytes differ and no more; past the end of the other

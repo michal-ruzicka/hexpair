@@ -1939,9 +1939,84 @@ endfunction
 " the read fails or the range is empty - every caller treats that as
 " "cannot tell", never as "no bytes". The range may run past the end of
 " the file, in which case what comes back is what there was.
+" The largest offset xxd can seek to, where its own arithmetic is a signed
+" 32-bit long. xxd.c carries the seek in a `long` throughout - `long seekoff`,
+" filled by strtol(), handed to fseek() - and on Windows a long is 32 bits
+" (both MSVC and MinGW are LLP64), so every one of those three steps tops out
+" at 2 GiB - 1. strtol() SATURATES rather than wraps, so an offset past the
+" limit does not fail: it silently becomes 2147483647 and xxd cheerfully
+" reads a page from there.
+"
+" That is the whole of the bug this exists for. On a 120 GiB file compared
+" with a 77 GiB one, every read past 2 GiB came from 2 GiB instead - both
+" files - so a page that should have been wholly past the shorter file's end
+" was compared against real bytes it happened to have there, and came out
+" partly "the same". Under WSL, where a long is 64 bits, the identical
+" hexpair on the identical files was right.
+let s:xxdseekmax = 2147483647
+
+" A byte range as flat lowercase hex, read by Vim rather than by xxd.
+"
+" string() of a Blob is '0z' and then the bytes in uppercase hex - with a
+" '.' every four of them, which is the one thing that has to come back out.
+" That is a great deal faster than formatting the bytes one at a time, and
+" it is checked against the xxd path byte for byte by the suite rather than
+" assumed.
+"
+" Needs readblob()'s offset and size arguments (patch 8.2.4906), the same
+" Vim the splice already asks for. Without it there is no way to read here
+" at all, and saying so is far better than xxd's silent wrong answer.
+" The suite's way in to both readers. The offsets that pick the blob one in
+" earnest are past 2 GiB, which is not a fixture anybody wants to generate,
+" so the test asks for the same small range both ways and holds them against
+" each other - which is the property that would rot silently if either side
+" changed its idea of case, of separators, or of what "past the end" gives.
+function! HexPairPagedFileHexForTest(file, off, len, blob) abort
+  return a:blob ? s:BlobHex(a:file, a:off, a:len)
+        \ : s:FileHex(a:file, a:off, a:len)
+endfunction
+
+function! s:BlobHex(file, off, len) abort
+  if !exists('*readblob')
+    throw printf('hexpair: byte %d is past what xxd can reach on this '
+          \ . 'platform (2 GiB), and reading it here needs Vim patch '
+          \ . '8.2.4906 or later for readblob()', a:off + 1)
+  endif
+  try
+    let blob = readblob(a:file, a:off, a:len)
+  catch
+    " A file that went away, or an offset past its end: an empty block,
+    " which is what every caller already treats as "nothing there".
+    return ''
+  endtry
+  return tolower(substitute(strpart(string(blob), 2), '\.', '', 'g'))
+endfunction
+
+" Can xxd be trusted to seek to a:off on this platform?
+"
+" Only Windows is excluded, and by platform rather than by probing, because
+" a probe is not available: strtol() saturating means a too-large offset and
+" a merely-past-the-end one are indistinguishable from the outside - both
+" produce nothing on a small file - so there is no cheap question whose
+" answer differs between a 32-bit and a 64-bit xxd. A 32-bit Unix build has
+" the same limit and is not covered here; it is recorded in CLAUDE.md rather
+" than guessed at.
+function! s:XxdCanSeek(off) abort
+  return a:off <= s:xxdseekmax || !has('win32')
+endfunction
+
 function! s:FileHex(file, off, len) abort
   if a:len <= 0
     return ''
+  endif
+  " Past what xxd can reach, read the bytes with Vim instead. readblob()
+  " takes a 64-bit offset, returns what is actually there (nothing at all
+  " past the end, which is exactly the answer the diff needs), and is the
+  " same call the splice path already reads with. It is about 44% slower
+  " than xxd per megabyte, measured, which is why it is not used for the
+  " offsets xxd handles correctly.
+  if !s:XxdCanSeek(a:off)
+    return s:BlobHex(a:file, a:off, a:len)
   endif
   try
     let out = s:Run(printf('%s -p -s %d -l %d %s', s:xxd, a:off, a:len,
@@ -2518,6 +2593,23 @@ endfunction
 function! s:Write() abort
   if !get(b:, 'hexpair_page_active', 0)
     throw 'hexpair: not a paged hex buffer; nothing was written'
+  endif
+
+  " Reading past 2 GiB is handled (s:FileHex falls back to readblob), but
+  " WRITING there cannot be: every write path that puts bytes at an offset
+  " goes through xxd - `xxd -r` for a patch, `xxd -r -p -s` for a tail move
+  " or an extend - and xxd's reverse path carries its offsets in the same
+  " 32-bit long as its forward one (`base_off`, `want_off`, `have_off`,
+  " fseek). Vim has no primitive to write at an offset to fall back to.
+  "
+  " So this refuses, rather than doing what it did before: patching the
+  " page's bytes in at 2 GiB, silently, over whatever was there. A refusal
+  " loses the edit; the alternative loses the file.
+  if !s:XxdCanSeek(b:hexpair_page_base + b:hexpair_page_len)
+    throw printf('hexpair: cannot write past 2 GiB on this platform - '
+          \ . 'xxd seeks with a 32-bit offset here, and this page starts at '
+          \ . 'byte %d. Reading is unaffected. Nothing was written.',
+          \ b:hexpair_page_base + 1)
   endif
 
   let target = s:WriteTarget()
@@ -3819,6 +3911,15 @@ function! HexPairPagedParseOffsetInput(text) abort
   if empty(a:text)
     return {}
   endif
+  " '$' is the file's last byte, the same shorthand and the same spelling
+  " |:HexPairPageGoto| takes for its last page - the two prompts sit under
+  " neighbouring keys and answering one in the other's language should not
+  " be a mistake. Resolved by the caller, which is the only place that
+  " knows how big the file is; 'last' rather than an offset for the reason
+  " HexPairPagedParsePageInput() returns it that way.
+  if a:text ==# '$'
+    return {'last': 1}
+  endif
   " A leading + or - makes it a step from the byte the cursor is on
   " rather than a position in the file, which is the only form where 0
   " means something ("stay here") and where the 1-based/0-based question
@@ -3830,7 +3931,8 @@ function! HexPairPagedParseOffsetInput(text) abort
   " ("byte positions start at 1") would be about the wrong thing.
   if text !~# '^\%(0[xX]\x\+\|\d\+\)$'
     return {'msg': printf('hexpair: not a byte position: %s (decimal, or '
-          \ . '0x for hex; byte 1 is the first, +N and -N step from here)',
+          \ . '0x for hex; byte 1 is the first, +N and -N step from '
+          \ . 'here, $ is the last)',
           \ string(a:text))}
   endif
   let n = text =~# '^0[xX]' ? str2nr(text[2:], 16) : str2nr(text)
@@ -3858,6 +3960,17 @@ function! s:GotoOffset(text, force) abort
       " road as one, including the check that it is inside the file.
       let here = s:IsHexView() ? s:PagedByteOffset() : s:TextByteOffset()
       let parsed = {'offset': here + parsed.delta}
+    endif
+    if has_key(parsed, 'last')
+      " '$' is the last byte, resolved here because this is where the size
+      " is known. An empty file has no last byte; letting it through as -1
+      " would be reported as "byte 0 is outside the file", which is true
+      " but says nothing about why.
+      let total = getfsize(b:hexpair_page_file)
+      if total <= 0
+        throw 'hexpair: the file is empty; it has no last byte'
+      endif
+      let parsed = {'offset': total - 1}
     endif
     if !has_key(parsed, 'offset')
       return

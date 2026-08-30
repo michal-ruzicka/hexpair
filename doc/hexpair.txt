@@ -908,6 +908,18 @@ page it shows, so a file of any size opens instantly.
 
 |:w| writes the page back - see |hexpair-paged-write| below.
 
+                                                    *hexpair-windows-2gib*
+On Windows, `xxd` cannot reach past 2 GiB.  It carries its seek offset in a
+C `long` - strtol() into it, fseek() out of it - and a `long` is 32 bits
+there; strtol() saturates rather than failing, so an offset past the limit
+silently becomes 2147483647 and `xxd` reads from THERE.  Reads go through
+readblob() past that point, which takes a 64-bit offset, so viewing,
+comparing and searching a large file are unaffected.  Writing is refused:
+`xxd -r` has the same 32-bit limit and Vim has no primitive to write at an
+offset to fall back to, so a write past 2 GiB would put the bytes in the
+wrong place.  None of this applies under WSL or on Linux, where a `long` is
+64 bits.
+
 Only a write that SHORTENS a file, and `:w {file}`, need a Vim newer than
 the plugin's usual baseline: patch 8.2.4906 with a 64-bit Number type
 (+num64, standard on modern builds), for readblob().  It is checked when
@@ -1263,7 +1275,13 @@ HexPairOpenFile({file} [, {page}])
                         address and is left alone - the same split the
                         banner already makes.)  A hex number needs the
                         0x on it: a bare "ff" is not a byte position, and
-                        says so.  Refuses to leave a page with unwritten
+                        says so.  `+N` and `-N` step from the byte the
+                        cursor is on, and `$` is the file's last byte -
+                        the same shorthand |:HexPairPageGoto| takes for
+                        the last page, since the two prompts sit under
+                        neighbouring keys and answering one in the
+                        other's language should not be a mistake.
+                        Refuses to leave a page with unwritten
                         changes without !, like the other navigation
                         commands, and leaves you in whichever view you
                         were in.

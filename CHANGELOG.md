@@ -71,7 +71,27 @@ and this project adheres to
   hit-enter prompt on each file: a long path plus the size makes the file
   message longer than one line, which is what triggers it.
 
+- **`:HexPairGoOffset` takes `$`** for the file's last byte, the same
+  shorthand `:HexPairPageGoto` already took for the last page - the two
+  prompts sit under neighbouring keys (`<Leader>b` and `<Leader>g`), and
+  answering one in the other's language should not be a mistake.
+
 ### Fixed
+- **On Windows, everything past 2 GiB was read from the wrong place.** `xxd`
+  carries its seek offset in a `long` throughout - `strtol()` into
+  `long seekoff`, then `fseek()` - and on Windows a `long` is 32 bits. Worse,
+  `strtol()` *saturates*: an offset past 2 GiB does not fail, it silently
+  becomes `2147483647` and `xxd` reads a page from there. That is why a
+  120 GiB file compared with a 77 GiB one showed bytes as matching on pages
+  wholly past the shorter file's end - both files were being read at 2 GiB,
+  where the shorter one does have data - while the identical hexpair on the
+  identical files was right under WSL, where a `long` is 64 bits. Reads past
+  that limit now go through `readblob()`, which takes a 64-bit offset.
+- **Writing past 2 GiB on Windows is refused rather than misplaced.** The
+  same limit applies to `xxd -r`, which is how every write puts bytes at an
+  offset, and Vim has no primitive to write at an offset to fall back to. It
+  was patching the page in at 2 GiB, over whatever was there. A refusal
+  loses an edit; the alternative loses the file.
 - **`:saveas` left the buffer modified, and the view editing the old
   file.** The bytes were written, but Vim leaves `'modified'` to the
   autocommand for an `acwrite` buffer and this one only cleared it on the
