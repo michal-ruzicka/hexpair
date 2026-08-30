@@ -30,7 +30,15 @@ and this project adheres to
 - **`vimhex-contex-entry.add.reg` and `vimhex-contex-entry.remove.reg`**,
   ready-made versions of the registry snippets above - one import wires up
   all three context-menu entries (pointing at `gvimhex.cmd`/
-  `gvimhexdiff.cmd`), the other removes them again.
+  `gvimhexdiff.cmd`), the other removes them again. **Nothing to edit for a
+  default install**: the paths are written against
+  `%USERPROFILE%\vimfiles\pack\plugins\start\hexpair` as `REG_EXPAND_SZ`
+  values, the one registry string type whose `%USERPROFILE%` the shell
+  expands - a plain `REG_SZ` would have it look for a folder literally
+  named that. Installed elsewhere? `make-context-entry-reg.py` regenerates
+  the pair for any path, which is also why these two files are generated
+  rather than hand-written: `.reg` can only express that type as `hex(2):`
+  plus UTF-16LE bytes.
 - **`icons/hexpair-open.ico`, `-pick.ico`, `-with.ico`**, custom icons for
   those three entries - Explorer has nothing to show for a verb whose
   command is a `.cmd` file otherwise. A V mark in Vim's own green, a `0x`

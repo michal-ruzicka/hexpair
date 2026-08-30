@@ -371,28 +371,37 @@ together, not a pair on their own.
 #### From the Explorer context menu
 
 Two ready-made files ship with the plugin for this: `vimhex-contex-entry.add.reg`
-adds all three entries below in one import, and `vimhex-contex-entry.remove.reg`
-takes them out again. Edit the plugin's own install path near the top of
-`vimhex-contex-entry.add.reg` first — the same `C:\Users\you\...` placeholder
-used below, six times: once per `command` line and once per `Icon` line,
-since the icons ship inside the plugin's own `icons\` directory too — then
-double-click it, or run `reg import vimhex-contex-entry.add.reg`.
+adds all three entries in one import, and `vimhex-contex-entry.remove.reg`
+takes them out again. **For a default install there is nothing to edit** —
+double-click it, or run `reg import vimhex-contex-entry.add.reg`. The paths
+in it are written against `%USERPROFILE%\vimfiles\pack\plugins\start\hexpair`,
+the package directory the install instructions above use.
 
-What it adds, spelled out: save this as `hexpair-menu.reg`, with the path
-to `gvimhex.cmd` and to `icons\hexpair-open.ico` as you actually installed
-them (the doubled backslashes are the `.reg` format's own escaping, not a
-typo), and double-click it:
+Installed somewhere else? Re-generate the pair rather than editing them:
+
+```sh
+python3 make-context-entry-reg.py "D:\your\path\hexpair"
+```
+
+That works because the values are `REG_EXPAND_SZ`, the one registry string
+type whose `%USERPROFILE%` is expanded when the shell reads it — a plain
+`REG_SZ` would send Explorer looking for a folder literally named
+`%USERPROFILE%`. The `.reg` text format can only write that type as
+`hex(2):` followed by the string's UTF-16LE bytes, which is why these two
+files are generated and carry a "do not edit by hand" banner. What the
+first entry decodes to:
 
 ```
-Windows Registry Editor Version 5.00
-
 [HKEY_CURRENT_USER\Software\Classes\*\shell\hexpair]
 @="Open in he&xpair"
-"Icon"="C:\\Users\\you\\vimfiles\\pack\\plugins\\start\\hexpair\\icons\\hexpair-open.ico"
-
-[HKEY_CURRENT_USER\Software\Classes\*\shell\hexpair\command]
-@="cmd.exe /c \"\"C:\\Users\\you\\vimfiles\\pack\\plugins\\start\\hexpair\\gvimhex.cmd\" \"%1\"\""
+"Icon"   = %USERPROFILE%\vimfiles\pack\plugins\start\hexpair\icons\hexpair-open.ico
+(command)= cmd.exe /c ""%USERPROFILE%\vimfiles\pack\plugins\start\hexpair\gvimhex.cmd" "%1""
 ```
+
+The expansion order is what makes this safe: the shell expands
+`%USERPROFILE%` when it reads the value, and only then substitutes `%1`.
+Once the variable is consumed as a pair, the single remaining `%` is the one
+in `%1`, so it cannot be mis-paired into a bogus variable name.
 
 Under `HKEY_CURRENT_USER` it needs no administrator rights and touches
 nobody else's account; deleting the `hexpair` key removes the entry again,
@@ -427,22 +436,19 @@ COM handler — a registered in-process server, which is a different kind of
 project from a batch file. So `vimhexdiff.cmd` (and `gvimhexdiff.cmd`) does
 what every diff tool on Windows does instead, in two clicks:
 
-```
-Windows Registry Editor Version 5.00
+The other two entries `vimhex-contex-entry.add.reg` adds, decoded the same
+way as above:
 
+```
 [HKEY_CURRENT_USER\Software\Classes\*\shell\hexpair-pick]
 @="Hex diff: &select left side"
-"Icon"="C:\\Users\\you\\vimfiles\\pack\\plugins\\start\\hexpair\\icons\\hexpair-pick.ico"
-
-[HKEY_CURRENT_USER\Software\Classes\*\shell\hexpair-pick\command]
-@="cmd.exe /c \"\"C:\\Users\\you\\vimfiles\\pack\\plugins\\start\\hexpair\\gvimhexdiff.cmd\" /pick \"%1\"\""
+"Icon"   = %USERPROFILE%\...\hexpair\icons\hexpair-pick.ico
+(command)= cmd.exe /c ""%USERPROFILE%\...\hexpair\gvimhexdiff.cmd" /pick "%1""
 
 [HKEY_CURRENT_USER\Software\Classes\*\shell\hexpair-with]
 @="Hex diff: &against selected"
-"Icon"="C:\\Users\\you\\vimfiles\\pack\\plugins\\start\\hexpair\\icons\\hexpair-with.ico"
-
-[HKEY_CURRENT_USER\Software\Classes\*\shell\hexpair-with\command]
-@="cmd.exe /c \"\"C:\\Users\\you\\vimfiles\\pack\\plugins\\start\\hexpair\\gvimhexdiff.cmd\" /with \"%1\"\""
+"Icon"   = %USERPROFILE%\...\hexpair\icons\hexpair-with.ico
+(command)= cmd.exe /c ""%USERPROFILE%\...\hexpair\gvimhexdiff.cmd" /with "%1""
 ```
 
 Right-click the first file and *select left side*, then right-click the

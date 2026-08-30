@@ -111,30 +111,42 @@ gvimhexdiff.cmd       "gvim" instead of "vim" - what a context-menu verb
                       `*`) so it catches these without a separate rule.
 vimhex-contex-entry.  add.reg wires gvimhex.cmd/gvimhexdiff.cmd into the
   add.reg / .remove.reg  Explorer context menu (open, and the diff
-                      /pick+/with pair) under HKEY_CURRENT_USER, as one
-                      importable file rather than the hand-copied
-                      snippets README.md also spells out inline; .remove.reg
-                      deletes the same three keys by name. Ships with the
-                      same C:\Users\you\... placeholder path as the
-                      README snippets - editing it before import is on
-                      the user, there is no way to know the install path
-                      from inside a .reg file. Plain ASCII, CRLF (same
-                      .gitattributes rule, widened to *.reg), no
-                      %ENVVAR% expansion available (Explorer's shell
-                      command values are read literally). Bundled in the
-                      release tarball; same packaging-glob mechanism as
-                      the .cmd files, `*vimhex*.reg`.
-                      Each `\shell\<verb>` key also carries an "Icon"
-                      value, pointing at icons/hexpair-open.ico,
-                      -pick.ico or -with.ico under the SAME
-                      already-editable plugin-path placeholder (an
-                      earlier version pointed Icon at gvim.exe instead -
-                      Vim's own install directory, a SECOND unrelated
-                      placeholder the user had to fill in separately;
-                      shipping real icons removed that). .remove.reg
-                      needs no change for this - deleting the parent key
-                      removes its Icon value along with everything else
-                      under it.
+                      /pick+/with pair) under HKEY_CURRENT_USER;
+                      .remove.reg deletes the same three keys by name (so
+                      it undoes an add.reg generated for ANY path, and
+                      needs no path of its own). Each `\shell\<verb>` key
+                      also carries an "Icon", pointing into icons/.
+                      BOTH ARE GENERATED - see make-context-entry-reg.py;
+                      do not hand-edit them. Bundled in the release
+                      tarball; same packaging-glob mechanism as the .cmd
+                      files, `*vimhex*.reg`.
+make-context-entry-   generates the two .reg files above. Exists because
+  reg.py              the maintainer's requirement is that a DEFAULT
+                      install import and work with nothing edited, and
+                      that forces REG_EXPAND_SZ: a plain REG_SZ does NOT
+                      expand %USERPROFILE% (the shell would look for a
+                      folder literally named that), and REG_EXPAND_SZ is
+                      only expressible in .reg text as `hex(2):` plus the
+                      string's UTF-16LE bytes - unmaintainable by hand,
+                      fine to generate. Takes an optional install path
+                      (default %USERPROFILE%\vimfiles\pack\plugins\start\
+                      hexpair, which is what README.md installs to), so
+                      "installed elsewhere" is a re-run, not an edit.
+                      **The expansion ORDER is the subtle part and is
+                      why %1 survives**: the shell expands the variable
+                      when it READS the value, then substitutes %1 when
+                      it builds the command line. Once %USERPROFILE% is
+                      consumed as a pair, the only % left in the string
+                      is %1's own - a lone %, so it cannot be mis-paired
+                      into a bogus variable name. Adding a second
+                      %VAR% to a command value would need re-checking
+                      against that. Writes CRLF itself (the files are
+                      generated, so .gitattributes' *.reg rule is a
+                      backstop, not the mechanism), and is deterministic
+                      - verified by hashing two consecutive runs.
+                      Development-only, like icons/*.py: it matches no
+                      pattern in the packaging test's shipped-files glob,
+                      so it is correctly never expected in FILES.
 icons/                three custom icons for the entries above, and
                       what generates them:
                       - rasticon.py: a from-scratch vector rasterizer
