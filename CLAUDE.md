@@ -114,11 +114,16 @@ vimhex-contex-entry.  add.reg wires gvimhex.cmd/gvimhexdiff.cmd into the
                       ONE `vimhex` submenu holding three items (open, a
                       separator, then the diff /left+/right pair);
                       .remove.reg deletes the folder and its child key by
-                      name, plus the three TOP-LEVEL keys an older version
-                      created, so an upgrade leaves nothing orphaned - and
-                      needs no path of its own, so it undoes an add.reg
-                      generated for ANY path. Each item carries an "Icon"
-                      pointing into icons/.
+                      name, and needs no path of its own, so it undoes an
+                      add.reg generated for ANY path. Each item carries an
+                      "Icon" pointing into icons/.
+                      It deliberately does NOT clean up after the shapes
+                      this menu had earlier in development (three keys
+                      straight in the "*" menu). Nothing was ever released
+                      with those, so there is no installed base to tidy;
+                      carrying deletions for a layout no user ever had is
+                      dead weight. Same reasoning applies to the next
+                      restructure while v2.3.0 is unreleased.
                       Submenu mechanics, all three of which are load-
                       bearing: the folder is a verb with
                       "ExtendedSubCommandsKey" and NO \command subkey (a

@@ -13,9 +13,7 @@ Windows Registry Editor Version 5.00
 ; Removes the Explorer context-menu folder vimhex-contex-entry.add.reg adds:
 ; the "vimhex" verb and the hexpair.ContextMenu key holding its children,
 ; each deleted whole with the leading "-" (which takes every subkey and
-; value with it). It also removes the three top-level entries an OLDER
-; version of add.reg created, so that upgrading does not leave them orphaned
-; next to the new folder.
+; value with it).
 ;
 ; No path in here at all; a key is removed by name, whatever its command
 ; line says, so this file undoes an add.reg generated for ANY install path.
@@ -26,11 +24,3 @@ Windows Registry Editor Version 5.00
 [-HKEY_CURRENT_USER\Software\Classes\*\shell\vimhex]
 
 [-HKEY_CURRENT_USER\Software\Classes\hexpair.ContextMenu]
-
-; Entries an older version put straight in the "*" menu,
-; removed too so an upgrade leaves nothing orphaned behind.
-[-HKEY_CURRENT_USER\Software\Classes\*\shell\hexpair]
-
-[-HKEY_CURRENT_USER\Software\Classes\*\shell\hexpair-pick]
-
-[-HKEY_CURRENT_USER\Software\Classes\*\shell\hexpair-with]

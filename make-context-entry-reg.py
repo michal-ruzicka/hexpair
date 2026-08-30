@@ -110,9 +110,7 @@ HEADER_REMOVE = """\
 ; Removes the Explorer context-menu folder vimhex-contex-entry.add.reg adds:
 ; the "vimhex" verb and the hexpair.ContextMenu key holding its children,
 ; each deleted whole with the leading "-" (which takes every subkey and
-; value with it). It also removes the three top-level entries an OLDER
-; version of add.reg created, so that upgrading does not leave them orphaned
-; next to the new folder.
+; value with it).
 ;
 ; No path in here at all; a key is removed by name, whatever its command
 ; line says, so this file undoes an add.reg generated for ANY install path.
@@ -151,12 +149,6 @@ ITEMS = [
 # ECF_SEPARATORBEFORE. "CommandFlags" is a DWORD on the item that is to have
 # the horizontal rule drawn above it.
 ECF_SEPARATORBEFORE = 0x20
-
-# Keys an older version of this file created at the top level of the "*"
-# context menu, before the submenu existed. .remove.reg deletes these too,
-# so that upgrading does not leave three orphaned entries behind next to the
-# new folder.
-LEGACY_KEYS = ["hexpair", "hexpair-pick", "hexpair-with"]
 
 
 def expand_sz(value, prefix=""):
@@ -240,12 +232,6 @@ def build_remove():
     lines.append("")
     lines.append("[-HKEY_CURRENT_USER\\Software\\Classes\\%s]" % SUBMENU_KEY)
     lines.append("")
-
-    lines.append("; Entries an older version put straight in the \"*\" menu,")
-    lines.append("; removed too so an upgrade leaves nothing orphaned behind.")
-    for key in LEGACY_KEYS:
-        lines.append("[-HKEY_CURRENT_USER\\Software\\Classes\\*\\shell\\%s]" % key)
-        lines.append("")
     return "\n".join(lines)
 
 
