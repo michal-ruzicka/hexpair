@@ -157,6 +157,12 @@ call s:Map('n', '<Leader>E', '<Plug>(HexPairModifiedPrev)')
 call s:Map('n', '<Leader>]', '<Plug>(HexPairDiffNext)')
 call s:Map('n', '<Leader>[', '<Plug>(HexPairDiffPrev)')
 call s:Map('n', '<Leader>C', '<Plug>(HexPairDiffClear)')
+" What the other file actually holds here - the byte under the cursor, or a
+" whole Visual selection. The marking says which bytes differ and stops
+" there; on a page past the end of the other file every byte is marked and
+" this is what says why.
+call s:Map('n', '<Leader>D', '<Plug>(HexPairDiffShow)')
+call s:Map('x', '<Leader>D', '<Plug>(HexPairDiffShow)')
 
 " --- What has no <Plug> target -------------------------------------------
 " Commands that take an argument cannot have one, so they are typed - or

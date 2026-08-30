@@ -110,8 +110,13 @@ code, releases and issue tracker.
   and `:highlight HexPairModified` says what yours came out as.
 - **Compare with another file.** `:HexPairDiff other.bin` marks every byte
   of the page that differs from the same offset of `other.bin`, and
-  `:HexPairDiffNext` walks the whole file for the next disagreement. The
-  bundled `vimhexdiff a b` opens both files side by side that way.
+  `:HexPairDiffNext` walks the whole file for the next disagreement.
+  `:HexPairDiffShow` says what that file actually holds at the cursor — or
+  over a Visual selection — including when it holds *nothing* there,
+  because it ends before this offset. That last case is one a marking
+  cannot express: every byte of such a page differs, and the reason is not
+  on screen. The bundled `vimhexdiff a b` opens both files side by side
+  that way.
 - **Marks that survive page turns.** `:HexPairMark header` remembers a
   byte of the *file*, not a line of a buffer — and the byte it stands on
   is underlined on the page (`HexPairMark`), so a place worth coming back
@@ -237,6 +242,8 @@ nmap <Leader>e <Plug>(HexPairModifiedNext)  " next run of bytes you edited
 nmap <Leader>E <Plug>(HexPairModifiedPrev)  " previous one
 nmap <Leader>] <Plug>(HexPairDiffNext)      " next change against that file
 nmap <Leader>[ <Plug>(HexPairDiffPrev)      " previous one
+nmap <Leader>D <Plug>(HexPairDiffShow)      " what that file has here
+xmap <Leader>D <Plug>(HexPairDiffShow)      " ... for a whole selection
 nmap <Leader>c <Plug>(HexPairFindClear)     " stop marking the matches
 nmap <Leader>C <Plug>(HexPairDiffClear)     " stop comparing, clear the marking
 
@@ -557,6 +564,7 @@ page. Close and reopen the file for the ordinary view.
 | `:HexPairReplaceAllInPage {pattern} / {bytes}` | ... over every match on the page in view |
 | `:HexPairDiff[!] [file]` | Compare with `{file}`, marking the bytes that differ; `!` stops |
 | `:HexPairDiffNext` / `:HexPairDiffPrev` | Walk to the next/previous byte where the two files differ |
+| `:HexPairDiffShow` | What the compared file holds at the cursor, or over a Visual selection — including that it has nothing there |
 | `:HexPairMark {name}` / `:HexPairGoMark[!] {name}` / `:HexPairMarks` / `:HexPairMarkDelete {name}` | Remember a byte of the file, jump back to it, list them, drop one |
 | `:HexPairSplit [page]` / `:HexPairVSplit [page]` | A second view of the same file in a new window, showing `[page]` (default: this view's) |
 

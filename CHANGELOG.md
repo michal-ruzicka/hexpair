@@ -55,6 +55,15 @@ and this project adheres to
   encoder, no image library); only the `.ico` files ship in the release
   tarball, the generator is a development-only file.
 
+- **`:HexPairDiffShow`** (`<Plug>(HexPairDiffShow)`, `<Leader>D` in
+  `hexpair.vimrc`, Normal and Visual) says what the file being compared
+  with holds at the cursor - or over a whole selection - beside the bytes
+  here. The marking answers *which* bytes differ and stops there; this
+  answers *what is over there instead*, and in particular says when there
+  is nothing there because that file ends before this offset. Missing
+  bytes show as `--`, so an absent byte cannot be misread as a byte that
+  happens to be `00`.
+
 ### Changed
 - **`vimhexdiff` opens maximized** (`:simalt ~x`, guarded by
   `has('gui_running')`) and sets `shortmess+=F`. Two hex views side by side
@@ -63,6 +72,15 @@ and this project adheres to
   message longer than one line, which is what triggers it.
 
 ### Fixed
+- **A page past the end of the file being compared with showed nothing as
+  differing.** Reported on a 120 GiB file compared with a much smaller one:
+  every byte of such a page differs - there is nothing over there to match -
+  but the marking, the count and the text view all fell silent instead.
+  Three guards asked `s:DiffHex()` and read its empty string as "no
+  comparison is running", when for a page beyond the other file's end it
+  means "that file has no bytes here". They now ask
+  `HexPairPagedDiffActive()`, one predicate over the diff *file*, which is
+  the only thing that can tell the two apart.
 - **A failed Vim launch from the Explorer context menu closed too fast to
   read.** `vimhex.cmd`/`vimhexdiff.cmd`/`gvimhex.cmd`/`gvimhexdiff.cmd` all
   run through `cmd.exe /c` when launched from a context-menu verb, which

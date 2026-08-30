@@ -31,7 +31,8 @@
 " Finding bytes:    :HexPairFind, :HexPairFindText, :HexPairFindNext,
 "                   :HexPairFindPrev, :HexPairReplace,
 "                   :HexPairReplaceAllInPage
-" Comparing:        :HexPairDiff, :HexPairDiffNext, :HexPairDiffPrev
+" Comparing:        :HexPairDiff, :HexPairDiffShow, :HexPairDiffNext,
+"                   :HexPairDiffPrev
 " Marks:            :HexPairMark, :HexPairGoMark, :HexPairMarks,
 "                   :HexPairMarkDelete
 " Functions:        HexPairStatus() for 'statusline', HexPairOpenFile()
@@ -4476,6 +4477,23 @@ function! s:DiffHex() abort
   return get(b:, 'hexpair_diff_hex', '')
 endfunction
 
+" Is a comparison running at all?
+"
+" The diff FILE answers that. Its BYTES cannot, and the difference is not
+" academic: a page past the end of the other file has no bytes to compare
+" against, and every byte on it differs precisely because of that. Three
+" separate guards used to ask s:DiffHex() and read its empty string as "no
+" comparison", so on such a page the marking, the count and the text view
+" each fell silent and the page looked identical to a file that does not
+" reach it - reported on a 120 GiB file compared with a smaller one.
+"
+" One predicate, called by all three, so they cannot drift apart about it
+" again. Global because it is the testable half: the drawing itself needs a
+" window with geometry, which `vim -es` does not have.
+function! HexPairPagedDiffActive() abort
+  return get(b:, 'hexpair_diff_file', '') !=# ''
+endfunction
+
 function! s:LoadDiffHex() abort
   if get(b:, 'hexpair_diff_file', '') ==# ''
     let b:hexpair_diff_hex = ''
@@ -4500,7 +4518,8 @@ function! s:ClearDiffHighlight() abort
 endfunction
 
 function! s:DiffHighlight() abort
-  if !get(b:, 'hexpair_page_active', 0) || s:DiffHex() ==# ''
+  " HexPairPagedDiffActive(), never s:DiffHex(): see that function.
+  if !get(b:, 'hexpair_page_active', 0) || !HexPairPagedDiffActive()
     return
   endif
   let state = [b:changedtick, line('w0'), line('w$'), b:hexpair_page_index]
@@ -4530,6 +4549,80 @@ function! HexPairPagedDiffText(theirs, base, len, differing, first) abort
   return printf('hexpair: %d of the %d bytes on this page differ from %s, '
         \ . 'first at byte %d (0x%x)',
         \ a:differing, a:len, a:theirs, a:first + 1, a:first + 1)
+endfunction
+
+" How many bytes to spell out before :HexPairDiffShow stops listing them.
+" A Visual selection can cover a whole page, and a message of eight thousand
+" bytes is not a message.
+let s:diffshowmax = 32
+
+" What |:HexPairDiffShow| says: the byte under the cursor, or the bytes
+" under a Visual selection, beside what the file being compared with holds
+" at the SAME offsets - including when it holds nothing there at all, which
+" is the one question the marking on screen cannot answer. A marked byte
+" says "these differ"; this says what the other file has, or that it stops
+" before here.
+"
+" a:mine and a:theirs are flat hex as s:FileHex() gives it, a:theirs
+" possibly shorter or empty. Offsets are 1-based and inclusive, like every
+" other message here, so they can be typed straight into
+" |:HexPairGoOffset|. Pure, so the wording is testable without a cursor or
+" a Visual selection.
+function! HexPairPagedDiffShowText(name, first, mine, theirs, othersize) abort
+  let bytes = strlen(a:mine) / 2
+  if bytes <= 0
+    return ['hexpair: no bytes here to compare']
+  endif
+  let have = strlen(a:theirs) / 2
+  let ends = printf('ends at byte %d (0x%x)', a:othersize, a:othersize)
+
+  if bytes == 1
+    let mine = strpart(a:mine, 0, 2)
+    if have < 1
+      return [printf('hexpair: byte %d (0x%x): %s here, nothing in %s - it %s',
+            \ a:first + 1, a:first + 1, mine, a:name, ends)]
+    endif
+    let theirs = strpart(a:theirs, 0, 2)
+    if mine ==# theirs
+      return [printf('hexpair: byte %d (0x%x): %s here and in %s',
+            \ a:first + 1, a:first + 1, mine, a:name)]
+    endif
+    return [printf('hexpair: byte %d (0x%x): %s here, %s in %s',
+          \ a:first + 1, a:first + 1, mine, theirs, a:name)]
+  endif
+
+  " Two aligned rows, so the pairs line up under each other and a run that
+  " the other file does not reach reads as a row of dashes rather than as
+  " an absence to be inferred.
+  let shown = bytes > s:diffshowmax ? s:diffshowmax : bytes
+  let differ = 0
+  let mrow = []
+  let trow = []
+  let i = 0
+  while i < bytes
+    let mine = strpart(a:mine, i * 2, 2)
+    let theirs = i < have ? strpart(a:theirs, i * 2, 2) : ''
+    if mine !=# theirs
+      let differ += 1
+    endif
+    if i < shown
+      call add(mrow, mine)
+      call add(trow, theirs ==# '' ? '--' : theirs)
+    endif
+    let i += 1
+  endwhile
+
+  let width = strlen(a:name) > 4 ? strlen(a:name) : 4
+  let out = [printf('hexpair: bytes %d-%d (0x%x-0x%x), %d of %d differ%s',
+        \ a:first + 1, a:first + bytes, a:first + 1, a:first + bytes,
+        \ differ, bytes,
+        \ have < bytes ? printf(' - %s %s', a:name, ends) : '')]
+  call add(out, printf('  %-*s  %s', width, 'here', join(mrow, ' ')))
+  call add(out, printf('  %-*s  %s', width, a:name, join(trow, ' ')))
+  if bytes > shown
+    call add(out, printf('  ... and %d more, not shown', bytes - shown))
+  endif
+  return out
 endfunction
 
 " How many bytes of a:mine differ from a:theirs, and the index of the
@@ -4640,7 +4733,8 @@ endfunction
 
 function! s:DiffCount(hex) abort
   let mine = get(b:, 'hexpair_page_hex', '')
-  if mine ==# '' || a:hex ==# ''
+  " HexPairPagedDiffActive(), never a:hex: see that function.
+  if mine ==# '' || !HexPairPagedDiffActive()
     return [-1, -1]
   endif
   let [differing, first] = HexPairPagedCountDifferences(mine, a:hex)
@@ -4696,6 +4790,68 @@ endfunction
 " with a space or a literal '$' does not survive <f-args>.
 function! HexPairDiffWith(file) abort
   call s:Diff(a:file, 0)
+endfunction
+
+" :HexPairDiffShow - what the file being compared with holds where I am.
+"
+" The marking says WHICH bytes differ and nothing more; on a page past the
+" end of the other file every byte is marked and the reason is invisible.
+" This is the byte under the cursor - or the whole Visual selection, since
+" "what is over there" is as reasonable a question about a run as about one
+" byte - against the same offsets in the other file, saying plainly when
+" there is nothing there.
+"
+" The bytes reported are the page as it was READ, not as the buffer now
+" holds it, for the reason s:DiffCount() gives: this answers "how do these
+" two files compare", which unwritten edits of mine are no part of.
+"
+" a:reselect mirrors s:Selection(): asking from the command line ends
+" Visual mode, and losing the selection to look at it is not a trade worth
+" making, so the gv comes first and the message last.
+function! s:DiffShow(...) abort
+  if !s:RequirePaged()
+    return
+  endif
+  if !HexPairPagedDiffActive()
+    echohl ErrorMsg
+    echomsg 'hexpair: not comparing with anything - :HexPairDiff {file} first'
+    echohl None
+    return
+  endif
+  let reselect = a:0 && a:1
+  if reselect
+    let sel = HexPairPagedSelectionBytes(getpos("'<"), getpos("'>"),
+          \ visualmode())
+    if empty(sel)
+      echo 'hexpair: the selection covers no bytes'
+      return
+    endif
+    let [first, last] = [sel.first, sel.last]
+  else
+    let first = s:PagedByteOffset()
+    let last = first
+  endif
+
+  let at = first - b:hexpair_page_base
+  " NOT `count`: that is v:count and read-only, and a local of that name
+  " aborts the function with E46. Same for errmsg, line and friends.
+  let span = last - first + 1
+  let mine = strpart(get(b:, 'hexpair_page_hex', ''), at * 2, span * 2)
+  " Their bytes for the same offsets, which past the end of that file is
+  " simply nothing - strpart() beyond the end gives '' and the text
+  " function reads that as "not there" rather than as an error.
+  let theirs = strpart(s:DiffHex(), at * 2, span * 2)
+  let lines = HexPairPagedDiffShowText(
+        \ fnamemodify(b:hexpair_diff_file, ':~:.'), first, mine, theirs,
+        \ getfsize(b:hexpair_diff_file))
+
+  if reselect
+    normal! gv
+  endif
+  " More than one line gets Vim's hit-enter prompt, which is what keeps a
+  " multi-line report on the screen long enough to read - and after Visual
+  " mode, what stops "-- VISUAL --" painting over it.
+  echo join(lines, "\n") . (len(lines) > 1 || reselect ? "\n" : '')
 endfunction
 
 " The next (or previous) offset at which the two files differ, from a:from
@@ -5826,13 +5982,17 @@ endfunction
 
 " What the buffer holds against a:hex, over the visible lines only.
 function! s:TextComparePositions(first, last, label, hex) abort
-  if a:hex ==# ''
+  " An empty a:hex means "no bytes over there", which for the 'diff' layer
+  " is a real answer - past the end of the other file every byte differs -
+  " and NOT a reason to mark nothing; see HexPairPagedDiffActive(). Only
+  " the 'page' layer, which holds unwritten edits against the page as it
+  " was read, can take it as nothing to compare, and with a non-empty page
+  " it does not arise there either: both sides are then empty and the run
+  " builders return nothing of their own accord.
+  if a:label ==# 'page' && a:hex ==# ''
     return []
   endif
   let theirs = s:BytesAsText(a:label, a:hex)
-  if theirs ==# ''
-    return []
-  endif
   let spans = s:TextSpans(a:first, a:last)
   let runs = []
   for span in spans
@@ -6094,6 +6254,7 @@ command! -bar -bang -nargs=1 HexPairGoOffset
 command! -bar HexPairSyncViews call s:SyncViews()
 command! -bar HexPairPages call s:Pages()
 command! -bar HexPairSelection call s:Selection()
+command! -bar HexPairDiffShow call s:DiffShow()
 command! -bar -bang HexPairInspect call s:Inspect('<bang>' ==# '!')
 command! -bar -nargs=1 HexPairMark call s:SetMark(<q-args>)
 command! -bar -nargs=1 -complete=customlist,HexPairPagedMarkComplete
@@ -6153,6 +6314,7 @@ if g:hexpair_short_commands
         \  'HPGoMark', 'HexPairGoMark'],
         \ ['-bar', 'HPMarks', 'HexPairMarks'],
         \ ['-bar -bang -nargs=? -complete=file', 'HPDiff', 'HexPairDiff'],
+        \ ['-bar', 'HPDiffShow', 'HexPairDiffShow'],
         \ ['-bar', 'HPDiffNext', 'HexPairDiffNext'],
         \ ['-bar', 'HPDiffPrev', 'HexPairDiffPrev'],
         \ ['-bar', 'HPModifiedNext', 'HexPairModifiedNext'],
@@ -6224,6 +6386,11 @@ nnoremap <silent> <Plug>(HexPairModifiedPrev) :<C-U>HexPairModifiedPrev<CR>
 " matches once the thing has been found.
 nnoremap <silent> <Plug>(HexPairFindClear) :<C-U>HexPairFind!<CR>
 nnoremap <silent> <Plug>(HexPairDiffClear) :<C-U>HexPairDiff!<CR>
+" Two targets, one name: from Normal mode the byte under the cursor, from
+" Visual mode the whole selection - the same shape <Plug>(HexPairSelection)
+" has, and for the same reason.
+nnoremap <silent> <Plug>(HexPairDiffShow) :<C-U>HexPairDiffShow<CR>
+xnoremap <silent> <Plug>(HexPairDiffShow) :<C-U>call <SID>DiffShow(1)<CR>
 
 " No default key mappings are defined; map the <Plug> mappings (or the
 " commands directly) in your vimrc, e.g.:

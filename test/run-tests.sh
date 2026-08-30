@@ -229,6 +229,10 @@ _db[4999] = 0x00
 open(os.path.join(w, 'diffa.bin'), 'wb').write(_da)
 open(os.path.join(w, 'diffb.bin'), 'wb').write(bytes(_db))
 open(os.path.join(w, 'diffc.bin'), 'wb').write(_da + b'tail')
+# Much shorter than diffa.bin, so that whole PAGES of diffa sit past its
+# end - the shape a 120 GiB file compared with a smaller one has, where
+# every byte of such a page differs because there is nothing to differ from.
+open(os.path.join(w, 'diffshort.bin'), 'wb').write(_da[:1000])
 # insert-a-character fixture, its own so that no other test's edits reach it
 open(os.path.join(w, 'char1.bin'), 'wb').write(b'ABCDEFGH')
 # modified-byte fixture
@@ -2996,6 +3000,133 @@ check_path "a longer file agrees over the bytes it shares" \
 check_path "but differs from where it grows, with nowhere to put the cursor" \
     "hexpair: $short is longer: its bytes from 5001 (0x1389) on have nothing here to differ from" \
     "$(sed -n 2p "$WORK/tdf2.out")"
+
+# --- A page entirely past the end of the other file -----------------------
+# Reported from a 120 GiB file compared with a much smaller one: the pages
+# past the smaller file's end came out with bytes NOT marked, as though they
+# matched something. Nothing is there to match - every byte of such a page
+# differs. The cause was that an empty run of other-file bytes was read as
+# "no comparison is running" rather than as "the other file has nothing
+# here", so the marking, the count and the text view's marking each gave up
+# instead of marking everything.
+#
+# diffa.bin is 5000 bytes and diffshort.bin is its first 1000, so with
+# 512-byte pages everything from page 3 on is past the short file's end.
+cat > "$WORK/tdfpast.vim" <<EOF
+$(printf "$HEX")
+let out = []
+HexPairOpen $WORK/diffa.bin 10
+redir => c
+silent HexPairDiff $WORK/diffshort.bin
+redir END
+call add(out, substitute(c, '^[\r\n]*', '', ''))
+" A full dump line's worth of marking: the hex column and the ASCII column
+" are one run each, and the hex one spans all sixteen bytes - 3 columns a
+" byte less the trailing gap.
+let l = 2 + (g:hexpair_ruler ? 1 : 0)
+let pos = HexPairPagedMarkingPositions('diff', l, l)
+call add(out, len(pos) . ' ' . (empty(pos) ? '-' : pos[0][2]))
+" The text view has to mark them too - it took the same wrong turn.
+HexPairToggle
+let t = HexPairPagedMarkingPositions('diff', 2, 2)
+call add(out, empty(t) ? 'nothing' : 'something')
+" The predicate all three guards share. It must still say a comparison is
+" RUNNING here, even though there are no bytes on the other side - which is
+" the whole distinction the bug collapsed. The drawing itself cannot be
+" checked headlessly (a vim -es window has no geometry: line('w\$') comes out
+" above line('w0')), so this is the testable half of that guard.
+" Both halves matter together: running, and with nothing on the other side.
+call add(out, HexPairPagedDiffActive() . ' ' . strlen(b:hexpair_diff_hex))
+call add(out, fnamemodify('$WORK/diffshort.bin', ':~:.'))
+call writefile(out, '$WORK/tdfpast.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tdfpast.vim" < /dev/null
+# Line 4 is the path spelled by the same fnamemodify() the plugin prints
+# with, for the reason the block above spells out.
+shortp=$(sed -n 5p "$WORK/tdfpast.out")
+check_path "a page past the other file's end differs in every byte" \
+    "hexpair: 392 of the 392 bytes on this page differ from $shortp, first at byte 4609 (0x1201)" \
+    "$(sed -n 1p "$WORK/tdfpast.out")"
+check "and every one of them is marked, not none of them" "2 47" \
+    "$(sed -n 2p "$WORK/tdfpast.out")"
+check "and the text view marks them as well" "something" \
+    "$(sed -n 3p "$WORK/tdfpast.out")"
+check "a comparison with no bytes on the other side is still a comparison" \
+    "1 0" "$(sed -n 4p "$WORK/tdfpast.out")"
+
+# --- :HexPairDiffShow - what the other file has here ----------------------
+# The marking says WHICH bytes differ and no more; past the end of the other
+# file every byte is marked and the reason is invisible. This says what is
+# over there, including that there is nothing. The text is a pure function,
+# so every shape of it is checked without a cursor or Visual mode.
+cat > "$WORK/tdfshow.vim" <<EOF
+$(printf "$HEX")
+let out = []
+call extend(out, HexPairPagedDiffShowText('o.bin', 100, '63', 'ff', 5000))
+call extend(out, HexPairPagedDiffShowText('o.bin', 100, '63', '63', 5000))
+call extend(out, HexPairPagedDiffShowText('o.bin', 4608, '00', '', 1000))
+call extend(out, HexPairPagedDiffShowText('o.bin', 100, '0001020304', '0099020304', 5000))
+call extend(out, HexPairPagedDiffShowText('o.bin', 4608, '00010203', '', 1000))
+call extend(out, HexPairPagedDiffShowText('o.bin', 0, '', '', 1000))
+call writefile(out, '$WORK/tdfshow.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tdfshow.vim" < /dev/null
+check "one byte, and the other file differs there" \
+    "hexpair: byte 101 (0x65): 63 here, ff in o.bin" \
+    "$(sed -n 1p "$WORK/tdfshow.out")"
+check "one byte, and the other file agrees" \
+    "hexpair: byte 101 (0x65): 63 here and in o.bin" \
+    "$(sed -n 2p "$WORK/tdfshow.out")"
+# The case the marking cannot express: not a different byte, no byte.
+check "one byte the other file does not reach at all" \
+    "hexpair: byte 4609 (0x1201): 00 here, nothing in o.bin - it ends at byte 1000 (0x3e8)" \
+    "$(sed -n 3p "$WORK/tdfshow.out")"
+check "a run, in two rows that line up" \
+    "hexpair: bytes 101-105 (0x65-0x69), 1 of 5 differ" \
+    "$(sed -n 4p "$WORK/tdfshow.out")"
+check "the bytes here" "  here   00 01 02 03 04" "$(sed -n 5p "$WORK/tdfshow.out")"
+check "and theirs beneath them" "  o.bin  00 99 02 03 04" \
+    "$(sed -n 6p "$WORK/tdfshow.out")"
+check "a run wholly past the end says so in the heading" \
+    "hexpair: bytes 4609-4612 (0x1201-0x1204), 4 of 4 differ - o.bin ends at byte 1000 (0x3e8)" \
+    "$(sed -n 7p "$WORK/tdfshow.out")"
+# Dashes, not blanks: a byte that is not there has to look different from a
+# byte that happens to be 00.
+check "and every missing byte is a dash" "  o.bin  -- -- -- --" \
+    "$(sed -n 9p "$WORK/tdfshow.out")"
+check "and no bytes at all is not a crash" "hexpair: no bytes here to compare" \
+    "$(sed -n 10p "$WORK/tdfshow.out")"
+
+# End to end, through the command, on a page past the other file's end.
+cat > "$WORK/tdfshow2.vim" <<EOF
+$(printf "$HEX")
+let out = []
+HexPairOpen $WORK/diffa.bin 10
+silent HexPairDiff $WORK/diffshort.bin
+HexPairGoOffset 4609
+redir => a
+silent HexPairDiffShow
+redir END
+call add(out, substitute(a, '^[\r\n]*', '', ''))
+silent HexPairDiff!
+redir => b
+silent! HexPairDiffShow
+redir END
+call add(out, substitute(b, '^[\r\n]*', '', ''))
+call add(out, fnamemodify('$WORK/diffshort.bin', ':~:.'))
+call writefile(out, '$WORK/tdfshow2.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tdfshow2.vim" < /dev/null
+shortd=$(sed -n 3p "$WORK/tdfshow2.out")
+check_path "the command says what is over there, from the cursor" \
+    "hexpair: byte 4609 (0x1201): 00 here, nothing in $shortd - it ends at byte 1000 (0x3e8)" \
+    "$(sed -n 1p "$WORK/tdfshow2.out")"
+check "and refuses when nothing is being compared" \
+    "hexpair: not comparing with anything - :HexPairDiff {file} first" \
+    "$(sed -n 2p "$WORK/tdfshow2.out")"
 
 # ===========================================================================
 # Finding bytes, and replacing them

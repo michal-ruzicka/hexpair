@@ -405,6 +405,7 @@ The hex view shows which byte it was.
                              *<Plug>(HexPairFind)* *<Plug>(HexPairFindText)*
                   *<Plug>(HexPairFindNext)* *<Plug>(HexPairFindPrev)*
                   *<Plug>(HexPairDiffNext)* *<Plug>(HexPairDiffPrev)*
+                                                     *<Plug>(HexPairDiffShow)*
          *<Plug>(HexPairModifiedNext)* *<Plug>(HexPairModifiedPrev)*
                  *<Plug>(HexPairFindClear)* *<Plug>(HexPairDiffClear)*
                                                        *<Plug>(HexPairMarks)*
@@ -456,6 +457,9 @@ and so do the three that need a name typed - they ask for it: >
     " Comparing with another file
     nmap <Leader>] <Plug>(HexPairDiffNext)
     nmap <Leader>[ <Plug>(HexPairDiffPrev)
+    " What that file has here - a byte, or a whole Visual selection
+    nmap <Leader>D <Plug>(HexPairDiffShow)
+    xmap <Leader>D <Plug>(HexPairDiffShow)
 
     " Turning the markings off again
     nmap <Leader>c <Plug>(HexPairFindClear)
@@ -1072,7 +1076,7 @@ HexPairOpenFile({file} [, {page}])
                         Both want the hex view: the text view has no hex
                         to replace.
 
-                          *:HexPairDiff* *:HexPairDiffNext* *:HexPairDiffPrev*
+       *:HexPairDiff* *:HexPairDiffShow* *:HexPairDiffNext* *:HexPairDiffPrev*
 :HexPairDiff[!] [file]  Compare this view with [file]: every byte of the
                         page that differs from the same offset of [file]
                         is marked with |HexPairDiff|, and the command says
@@ -1088,6 +1092,30 @@ HexPairOpenFile({file} [, {page}])
                         stops comparing also clears the marking, and has a
                         mapping target of its own:
                         |<Plug>(HexPairDiffClear)|.
+
+:HexPairDiffShow        What the file being compared with holds HERE: the
+                        byte under the cursor, or every byte of a Visual
+                        selection, beside the bytes at the same offsets
+                        over there.
+
+                        The marking answers "which bytes differ" and stops
+                        there.  This answers "what is over there instead",
+                        and in particular says when there is NOTHING there
+                        because that file ends before this offset - the
+                        case a marking cannot express, since every byte of
+                        such a page is marked and the reason is not on
+                        screen.  Missing bytes are shown as `--`, so a byte
+                        that is absent cannot be read as a byte that
+                        happens to be 00.
+
+                        The bytes reported are the page as it was READ,
+                        not as the buffer now holds it, for the reason
+                        |:HexPairDiff|'s counts are: this is about how the
+                        two FILES compare, which unwritten edits are no
+                        part of.  A long selection is summarised and the
+                        listing stops after 32 bytes.
+                        |<Plug>(HexPairDiffShow)| has a Normal-mode and a
+                        Visual-mode form, `<Leader>D` in `hexpair.vimrc`.
 
 :HexPairDiffNext        Go to the next CHANGE, or the previous one -
 :HexPairDiffPrev        anywhere in the file, however many pages away.
