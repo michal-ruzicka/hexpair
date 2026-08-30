@@ -2130,7 +2130,14 @@ function! s:SeekReadHex(file, off, len) abort
   " rather than assumed, because it would otherwise reach the dump as
   " plausible-looking rubbish. (WriteAllText is documented as UTF-8 with no
   " BOM, which is why there should be nothing here to find.)
-  if hex !~# '^\%(\x\x\)*$'
+  " `\X` (one non-hex-digit ATOM) and a length test, NOT a quantified group
+  " over the whole run: '^\%(\x\x\)*$' says the same thing and asks the
+  " regex engine to hold the whole page while it backtracks, which on a
+  " 128 KiB page (262144 characters of hex) is E363, "Pattern uses more
+  " memory than 'maxmempattern'". It looks correct and passes on anything
+  " short - the same shape as the negated-collection and \zs traps in
+  " s:PagedScan(). This form is one linear scan, ~7 ms a page.
+  if strlen(hex) % 2 != 0 || hex =~# '\X'
     throw printf('hexpair: reading byte %d of %s gave something that is '
           \ . 'not hex: %s', a:off + 1, a:file,
           \ string(strpart(hex, 0, 40)))

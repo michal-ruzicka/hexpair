@@ -77,6 +77,13 @@ and this project adheres to
   answering one in the other's language should not be a mistake.
 
 ### Fixed
+- **The Windows fallback reader refused its own output on a full page.**
+  The check that what came back is really hex was written as
+  `'^\%(\x\x\)*$'`, a quantified group over the whole run — which on a
+  page-sized string is `E363: Pattern uses more memory than
+  'maxmempattern'`. It passes on anything short, which is why it survived
+  to the first real page. It is `\X` plus an even-length test now: the same
+  question in one linear scan.
 - **On Windows, everything past 2 GiB was read from the wrong place.** `xxd`
   carries its seek offset in a `long` throughout - `strtol()` into
   `long seekoff`, then `fseek()` - and on Windows a `long` is 32 bits. Worse,

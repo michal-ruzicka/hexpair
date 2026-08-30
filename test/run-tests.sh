@@ -3184,6 +3184,42 @@ check "and comes back as flat lowercase hex" \
 check "and past the end it is nothing, not something" "''" \
     "$(sed -n 3p "$WORK/tblob.out")"
 
+# The fallback reader checks that what came back is hex before letting it
+# reach the dump. That check has to survive a PAGE-SIZED run, which is where
+# the obvious spelling of it does not: '^\%(\x\x\)*$' is a quantified
+# group over the whole string, and on 262144 characters Vim answers E363,
+# "Pattern uses more memory than 'maxmempattern'". It passes on anything
+# short, which is exactly why it reached a user - the same shape as the
+# negated-collection and \zs traps the whole-page scan already carries.
+#
+# So the test is the check itself, on a page-sized string, both ways round.
+cat > "$WORK/tre.vim" <<EOF
+$(printf "$HEX")
+let out = []
+let hex = repeat('00112233445566778899aabbccddeeff', 8192)
+call add(out, strlen(hex) . '')
+try
+  call add(out, (strlen(hex) % 2 != 0 || hex =~# '\\X') ? 'rejected' : 'accepted')
+catch
+  call add(out, 'THREW ' . v:exception)
+endtry
+let bad = strpart(hex, 0, 100) . 'zz' . strpart(hex, 102)
+try
+  call add(out, (strlen(bad) % 2 != 0 || bad =~# '\\X') ? 'rejected' : 'accepted')
+catch
+  call add(out, 'THREW ' . v:exception)
+endtry
+call writefile(out, '$WORK/tre.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tre.vim" < /dev/null
+check "the hex check runs on a page-sized string at all" "262144" \
+    "$(sed -n 1p "$WORK/tre.out")"
+check "and accepts a page of real hex" "accepted" \
+    "$(sed -n 2p "$WORK/tre.out")"
+check "and still rejects a page with rubbish in it" "rejected" \
+    "$(sed -n 3p "$WORK/tre.out")"
+
 # The page a user LOOKS at is a second xxd call, with the same -s and so the
 # same 2 GiB clamp: every page past it showed the bytes at 2 GiB, which is
 # why paging back from the end of a 120 GiB file showed one page over and
