@@ -27,14 +27,24 @@ is always a _single command_ away wherever you already
 have Vim** — no system install, no package manager, nothing to get approved.
 Everything runs on `xxd`, which ships with Vim itself, and portable
 VimScript: no `sed`, `tr`, `dd` or anything else, so it behaves the same
-on Linux, on native Windows (where `xxd.exe` is found inside the Vim
-installation even when it is not on `PATH`) and inside WSL.
+on Linux, macOS and the BSDs, on native Windows (where `xxd.exe` is found
+inside the Vim installation even when it is not on `PATH`) and inside WSL —
+with one exception, files over 2 GiB on native Windows, described below.
 
 And it is **good enough for real work on real, even _very_ big, files:** 
 because it shows one page at a time and writes one page at a time, a file that 
 does not fit in memory — a disk image, a core dump, a database — is no different 
 from a small one. Editing an 8 TiB file costs the same ~20 MiB of memory as 
 editing an 8 KiB one.
+
+> **On native Windows, that stops at 2 GiB.** Not a hexpair limit and not
+> one it can work around: `xxd` keeps its seek offset in a C `long`, which
+> is 32 bits on Windows, and Vim's own `readblob()` — the obvious fallback —
+> reads the file size into a plain `struct stat` there, which is 32-bit too.
+> Past 2 GiB hexpair now says so and refuses, rather than showing or writing
+> the bytes from 2 GiB. Files under 2 GiB are unaffected, and **WSL has
+> neither limit**, so a large file on a Windows machine is a `wsl vim` away.
+> See [Windows and the 2 GiB limit](#windows-and-the-2-gib-limit).
 
 **The hex*pair* name:** hex and text, always paired. *Within a line* —
 the byte under the cursor and its character light up together, whichever
@@ -327,6 +337,38 @@ cat bigfile.bin | vimhex -      # piped input
 `@BYTE` takes, so you can note where you were and come straight back to
 it later. Set `VIMHEX_VIM` to pick a particular Vim. Details are in the
 file's own comments and in `:help hexpair-vimhex`.
+
+### Windows and the 2 GiB limit
+
+**Files over 2 GiB cannot be read or written on native Windows.** hexpair
+detects this and says so; it does not show you bytes from the wrong place.
+The cause is entirely outside the plugin, in two places at once:
+
+- **`xxd` seeks with a C `long`.** `strtol()` into `long seekoff`, then
+  `fseek()` — and on Windows a `long` is 32 bits, because Windows is LLP64
+  (only pointers and `long long` widen in a 64-bit build; `long` does not).
+  Worse, `strtol()` *saturates* instead of failing, so an offset past the
+  limit silently becomes `2147483647` and `xxd` reads from there. `xxd -r`,
+  which is how bytes get written at an offset, has the same limit.
+- **Vim's `readblob()` — the obvious fallback — has it too.** `read_blob()`
+  in `blob.c` declares a plain `struct stat` and calls plain `fstat()`,
+  where the rest of Vim uses `stat_T`, defined in `vim.h` as
+  `struct _stat64` on Windows with a comment saying exactly why. `st_size`
+  is a 32-bit `_off_t` in the plain one, so for a large file the computed
+  length goes negative and `read_blob()` returns an **empty blob and
+  success** — no error to catch. That looks like a Vim bug rather than a
+  design decision.
+
+**Everywhere else is fine.** Linux, macOS and the BSDs are LP64: `long` is
+64 bits, so `xxd`'s seek is; and their `struct stat.st_size` is a 64-bit
+`off_t`, so `readblob()` is too. **WSL is a Linux build**, so a large file
+on a Windows machine is a `wsl vim` away. A 32-bit build of anything has
+the same limit as Windows for the `xxd` half, which hexpair does not
+currently detect — it is gated on being Windows.
+
+So on native Windows, treat hexpair as a hex editor up to 2 GiB, and as
+nothing at all past it — not as a viewer either, since the reads that
+would feed a viewer are the ones that fail.
 
 ### Windows: `vimhex` and `vimhexdiff` outside Vim
 

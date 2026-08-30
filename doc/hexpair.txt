@@ -909,16 +909,27 @@ page it shows, so a file of any size opens instantly.
 |:w| writes the page back - see |hexpair-paged-write| below.
 
                                                     *hexpair-windows-2gib*
-On Windows, `xxd` cannot reach past 2 GiB.  It carries its seek offset in a
-C `long` - strtol() into it, fseek() out of it - and a `long` is 32 bits
-there; strtol() saturates rather than failing, so an offset past the limit
-silently becomes 2147483647 and `xxd` reads from THERE.  Reads go through
-readblob() past that point, which takes a 64-bit offset, so viewing,
-comparing and searching a large file are unaffected.  Writing is refused:
-`xxd -r` has the same 32-bit limit and Vim has no primitive to write at an
-offset to fall back to, so a write past 2 GiB would put the bytes in the
-wrong place.  None of this applies under WSL or on Linux, where a `long` is
-64 bits.
+On native Windows, files over 2 GiB cannot be read or written at all.
+hexpair says so and refuses rather than working on the wrong bytes.  Two
+separate limits, both outside this plugin:
+
+- `xxd` carries its seek offset in a C `long` - strtol() into it, fseek()
+  out of it - and a `long` is 32 bits on Windows, which is LLP64 (a 64-bit
+  build widens pointers and `long long`, not `long`).  strtol() SATURATES
+  rather than failing, so an offset past the limit silently becomes
+  2147483647 and `xxd` reads from THERE.  `xxd -r`, which writes bytes at
+  an offset, has the same limit.
+- readblob(), the obvious fallback, has it too: read_blob() in Vim's
+  blob.c declares a plain `struct stat` and calls plain fstat(), where the
+  rest of Vim uses stat_T - `struct _stat64` on Windows, and vim.h says
+  why.  st_size is a 32-bit _off_t in the plain one, so the computed
+  length goes negative for a large file and read_blob() returns an empty
+  blob AND success, with no error to catch.
+
+Linux, macOS and the BSDs are LP64: a `long` is 64 bits, so xxd's seek is,
+and their struct stat.st_size is a 64-bit off_t, so readblob() is.  WSL is
+a Linux build and has neither limit.  A 32-bit build of anything shares the
+xxd half of this; hexpair does not detect that, being gated on Windows.
 
 Only a write that SHORTENS a file, and `:w {file}`, need a Vim newer than
 the plugin's usual baseline: patch 8.2.4906 with a 64-bit Number type

@@ -2037,13 +2037,38 @@ function! s:BlobHex(file, off, len) abort
           \ . 'platform (2 GiB), and reading it here needs Vim patch '
           \ . '8.2.4906 or later for readblob()', a:off + 1)
   endif
+  " How much is genuinely there. A short read is the RIGHT answer past the
+  " end of a file - that is how the diff learns the other file stops here -
+  " so it cannot simply be treated as a failure; it has to be measured
+  " against what the file actually holds.
+  let total = getfsize(a:file)
+  let want = total <= a:off ? 0 : (total - a:off < a:len ? total - a:off : a:len)
+  if want <= 0
+    return ''
+  endif
+
   try
     let blob = readblob(a:file, a:off, a:len)
-  catch
-    " A file that went away, or an offset past its end: an empty block,
-    " which is what every caller already treats as "nothing there".
-    return ''
+  catch /^Vim\%((\a\+)\)\=:E/
+    throw printf('hexpair: could not read %d bytes at byte %d of %s: %s',
+          \ a:len, a:off + 1, a:file, v:exception)
   endtry
+
+  " readblob() coming back short when the file HAS those bytes is not a
+  " normal outcome, and on Windows it is not even an error - it is silent.
+  " Vim's own read_blob() declares a plain `struct stat` and calls plain
+  " fstat(), where the rest of Vim uses stat_T (`struct _stat64` on Windows,
+  " with a comment in vim.h saying why). st_size is a 32-bit _off_t there,
+  " so for a file this size the computed length goes negative and read_blob
+  " returns an EMPTY BLOB AND OK. Reporting that is the whole point of this
+  " check: the alternative is a page of nothing, presented as the file.
+  if len(blob) < want
+    throw printf('hexpair: could not read byte %d of %s - asked for %d '
+          \ . 'bytes, got %d. Past 2 GiB neither xxd (32-bit seek here) nor '
+          \ . 'readblob() (Vim reads the file size into a 32-bit struct stat '
+          \ . 'on Windows) can reach; this file needs a Vim without that '
+          \ . 'limit, or WSL.', a:off + 1, a:file, want, len(blob))
+  endif
   return tolower(substitute(strpart(string(blob), 2), '\.', '', 'g'))
 endfunction
 
