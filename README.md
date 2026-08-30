@@ -37,13 +37,13 @@ does not fit in memory — a disk image, a core dump, a database — is no diffe
 from a small one. Editing an 8 TiB file costs the same ~20 MiB of memory as 
 editing an 8 KiB one.
 
-> **On native Windows, that stops at 2 GiB.** Not a hexpair limit and not
-> one it can work around: `xxd` keeps its seek offset in a C `long`, which
-> is 32 bits on Windows, and Vim's own `readblob()` — the obvious fallback —
-> reads the file size into a plain `struct stat` there, which is 32-bit too.
-> Past 2 GiB hexpair now says so and refuses, rather than showing or writing
-> the bytes from 2 GiB. Files under 2 GiB are unaffected, and **WSL has
-> neither limit**, so a large file on a Windows machine is a `wsl vim` away.
+> **On native Windows, editing stops at 2 GiB — reading does not.** `xxd`
+> keeps its seek offset in a C `long`, 32 bits on Windows, so past 2 GiB it
+> reads and writes the wrong place. Reading falls back to PowerShell, whose
+> `FileStream.Seek` takes an `Int64`, so viewing, searching and comparing a
+> huge file still work; **writing there is refused**, because the same limit
+> applies to `xxd -r` and putting the bytes in the wrong place is worse than
+> declining. **WSL has neither limit.**
 > See [Windows and the 2 GiB limit](#windows-and-the-2-gib-limit).
 
 **The hex*pair* name:** hex and text, always paired. *Within a line* —
@@ -359,6 +359,19 @@ The cause is entirely outside the plugin, in two places at once:
   success** — no error to catch. That looks like a Vim bug rather than a
   design decision.
 
+**Reading past 2 GiB therefore goes through PowerShell**, whose
+`FileStream.Seek` takes an `Int64`. It is an external tool, which this
+plugin otherwise refuses to depend on — but it is Windows-only, Windows
+ships it, and the choice is against not reading the file at all rather than
+against `xxd`. Everything is passed by environment variable and returned
+through a temp file, so a path with a space or a quote survives. Expect a
+few hundred milliseconds per page turn, which is process startup; a
+file-wide search past 2 GiB pays it per block and is correspondingly slow.
+
+**Writing past 2 GiB is refused.** `xxd -r`, which is how bytes get put at
+an offset, has the same 32-bit limit, and there is no equivalent fallback
+in place — so hexpair declines rather than writing to the wrong offset.
+
 **Everywhere else is fine.** Linux, macOS and the BSDs are LP64: `long` is
 64 bits, so `xxd`'s seek is; and their `struct stat.st_size` is a 64-bit
 `off_t`, so `readblob()` is too. **WSL is a Linux build**, so a large file
@@ -366,9 +379,8 @@ on a Windows machine is a `wsl vim` away. A 32-bit build of anything has
 the same limit as Windows for the `xxd` half, which hexpair does not
 currently detect — it is gated on being Windows.
 
-So on native Windows, treat hexpair as a hex editor up to 2 GiB, and as
-nothing at all past it — not as a viewer either, since the reads that
-would feed a viewer are the ones that fail.
+So on native Windows, treat hexpair as a full hex editor up to 2 GiB, and
+as a read-only viewer past it.
 
 ### Windows: `vimhex` and `vimhexdiff` outside Vim
 

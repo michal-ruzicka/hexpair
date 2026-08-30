@@ -909,8 +909,7 @@ page it shows, so a file of any size opens instantly.
 |:w| writes the page back - see |hexpair-paged-write| below.
 
                                                     *hexpair-windows-2gib*
-On native Windows, files over 2 GiB cannot be read or written at all.
-hexpair says so and refuses rather than working on the wrong bytes.  Two
+On native Windows, files over 2 GiB can be READ but not written.  Two
 separate limits, both outside this plugin:
 
 - `xxd` carries its seek offset in a C `long` - strtol() into it, fseek()
@@ -926,10 +925,23 @@ separate limits, both outside this plugin:
   length goes negative for a large file and read_blob() returns an empty
   blob AND success, with no error to catch.
 
+Reading past the limit therefore goes through PowerShell, whose
+FileStream.Seek takes an Int64 - an external tool this plugin otherwise
+refuses to depend on, but a Windows-only one that Windows ships, and the
+choice is against not reading the file at all.  Arguments go by environment
+variable and the bytes come back through a temp file, so a path with a
+space or a quote survives.  Expect a few hundred milliseconds a page, which
+is process startup; a file-wide scan pays it per block.
+
+Writing past the limit is REFUSED: `xxd -r` has the same 32-bit offsets and
+there is no fallback in place for it, so hexpair declines rather than
+putting the bytes somewhere else.
+
 Linux, macOS and the BSDs are LP64: a `long` is 64 bits, so xxd's seek is,
-and their struct stat.st_size is a 64-bit off_t, so readblob() is.  WSL is
-a Linux build and has neither limit.  A 32-bit build of anything shares the
-xxd half of this; hexpair does not detect that, being gated on Windows.
+and their struct stat.st_size is a 64-bit off_t, so readblob() would be
+too.  WSL is a Linux build and has neither limit.  A 32-bit build of
+anything shares the xxd half of this; hexpair does not detect that, being
+gated on Windows.
 
 Only a write that SHORTENS a file, and `:w {file}`, need a Vim newer than
 the plugin's usual baseline: patch 8.2.4906 with a 64-bit Number type

@@ -86,7 +86,11 @@ and this project adheres to
   wholly past the shorter file's end - both files were being read at 2 GiB,
   where the shorter one does have data - while the identical hexpair on the
   identical files was right under WSL, where a `long` is 64 bits. Reads past
-  that limit now go through `readblob()`, which takes a 64-bit offset —
+  that limit now go through PowerShell, whose `FileStream.Seek` takes an
+  `Int64` (`readblob()` was tried first and cannot do it either: Vim's
+  `read_blob()` reads the file size into a plain 32-bit `struct stat` on
+  Windows and returns an empty blob *and success* for a large file, which
+  looks like a Vim bug) —
   including the page you actually look at, which is a second `xxd` call with
   the same clamp: every page past 2 GiB showed the bytes at 2 GiB, so paging
   back from the end of a 120 GiB file showed one page over and over. That

@@ -1557,7 +1557,7 @@ function! s:LoadPage(pageidx) abort
   " offset is an unsigned long in xxd too, so the offset column would wrap
   " at 4 GiB even when the bytes were right.
   if !s:XxdCanSeek(base + len)
-    let dump = HexPairPagedDumpLines(s:BlobHex(b:hexpair_page_file, base, len),
+    let dump = HexPairPagedDumpLines(s:FileHex(b:hexpair_page_file, base, len),
           \ base, n)
   else
     let dumpfile = tempname()
@@ -2021,55 +2021,129 @@ function! HexPairPagedDumpLines(hex, base, n) abort
   return out
 endfunction
 
-" The suite's way in to both readers. The offsets that pick the blob one in
+" The suite's way in to the fallback reader. The offsets that pick it in
 " earnest are past 2 GiB, which is not a fixture anybody wants to generate,
 " so the test asks for the same small range both ways and holds them against
-" each other - which is the property that would rot silently if either side
-" changed its idea of case, of separators, or of what "past the end" gives.
-function! HexPairPagedFileHexForTest(file, off, len, blob) abort
-  return a:blob ? s:BlobHex(a:file, a:off, a:len)
-        \ : s:FileHex(a:file, a:off, a:len)
+" each other. That runs for real in Windows CI, where PowerShell is what
+" answers - which is the only place this path can be exercised at all.
+function! HexPairPagedSeekReadHexForTest(file, off, len) abort
+  return s:SeekReadHex(a:file, a:off, a:len)
 endfunction
 
-function! s:BlobHex(file, off, len) abort
-  if !exists('*readblob')
-    throw printf('hexpair: byte %d is past what xxd can reach on this '
-          \ . 'platform (2 GiB), and reading it here needs Vim patch '
-          \ . '8.2.4906 or later for readblob()', a:off + 1)
+" And the xxd side of the same comparison.
+function! HexPairPagedFileHexForTest(file, off, len) abort
+  return s:FileHex(a:file, a:off, a:len)
+endfunction
+
+" Reading a byte range that xxd cannot seek to, on Windows, through
+" PowerShell.
+"
+" readblob() was the obvious fallback and is not one: read_blob() in Vim's
+" blob.c declares a plain `struct stat` and calls plain fstat(), where the
+" rest of Vim uses stat_T (`struct _stat64` on Windows - vim.h says why).
+" st_size is a 32-bit _off_t there, so for a large file the length it
+" computes goes negative and read_blob() returns an EMPTY BLOB AND SUCCESS,
+" with nothing to catch. That is a Vim bug, and until it is fixed the
+" function is no use here.
+"
+" .NET's FileStream.Seek takes an Int64, so PowerShell can do what neither
+" can. It is an external tool, which this plugin otherwise refuses to
+" depend on - but it is Windows-only, Windows ships it, and the choice is
+" against not reading the file at all rather than against xxd.
+"
+" Everything goes through the ENVIRONMENT and a temp file rather than the
+" command line: a path with a space, a quote or an & does not survive being
+" quoted through Vim's 'shell' into PowerShell's own parser, and that is
+" the same trick vimhex.cmd and hexpair.bashrc already use for the same
+" reason. -Command rather than -File also sidesteps the execution policy,
+" which applies to script files and not to a command string.
+"
+" The read is a LOOP: FileStream.Read is allowed to return fewer bytes than
+" asked for, and a page read that quietly stopped half way is precisely the
+" failure this whole path exists to prevent.
+let s:pshexscript =
+      \   '$ErrorActionPreference = ''Stop'';'
+      \ . '$fs = [IO.File]::OpenRead($env:HEXPAIR_PS_SRC);'
+      \ . '$want = [int]$env:HEXPAIR_PS_LEN;'
+      \ . '$buf = New-Object byte[] $want;'
+      \ . '$got = 0;'
+      \ . 'try {'
+      \ .   '[void]$fs.Seek([int64]$env:HEXPAIR_PS_OFF, ''Begin'');'
+      \ .   'while ($got -lt $want) {'
+      \ .     '$n = $fs.Read($buf, $got, $want - $got);'
+      \ .     'if ($n -le 0) { break };'
+      \ .     '$got += $n'
+      \ .   '}'
+      \ . '} finally { $fs.Close() };'
+      \ . '[IO.File]::WriteAllText($env:HEXPAIR_PS_OUT,'
+      \ . '[BitConverter]::ToString($buf, 0, $got).Replace(''-'', ''''))'
+
+" Probed once per session, and asked of the thing itself rather than of
+" $PATH: what matters is that it starts and runs a command, which
+" executable('powershell') does not answer.
+function! s:HasPowerShell() abort
+  if exists('s:has_powershell')
+    return s:has_powershell
   endif
-  " How much is genuinely there. A short read is the RIGHT answer past the
-  " end of a file - that is how the diff learns the other file stops here -
-  " so it cannot simply be treated as a failure; it has to be measured
-  " against what the file actually holds.
+  call system('powershell -NoProfile -NonInteractive -Command exit 0')
+  let s:has_powershell = !v:shell_error
+  return s:has_powershell
+endfunction
+
+" A byte range as flat lowercase hex, for offsets xxd cannot seek to.
+"
+" A partial read is the RIGHT answer past the end of a file - it is how the
+" diff learns the other file stops there - so it cannot be treated as a
+" failure on its own. What the file actually holds decides.
+function! s:SeekReadHex(file, off, len) abort
   let total = getfsize(a:file)
   let want = total <= a:off ? 0 : (total - a:off < a:len ? total - a:off : a:len)
   if want <= 0
     return ''
   endif
+  if !s:HasPowerShell()
+    throw printf('hexpair: byte %d of %s is past the 2 GiB xxd can seek to '
+          \ . 'on this platform, and PowerShell - which could read it - did '
+          \ . 'not run. This file needs WSL, or a Vim and xxd without the '
+          \ . '32-bit limit.', a:off + 1, a:file)
+  endif
 
+  let out = tempname()
+  let $HEXPAIR_PS_SRC = a:file
+  let $HEXPAIR_PS_OUT = out
+  let $HEXPAIR_PS_OFF = a:off
+  let $HEXPAIR_PS_LEN = a:len
   try
-    let blob = readblob(a:file, a:off, a:len)
-  catch /^Vim\%((\a\+)\)\=:E/
-    throw printf('hexpair: could not read %d bytes at byte %d of %s: %s',
-          \ a:len, a:off + 1, a:file, v:exception)
+    call s:Run(printf('powershell -NoProfile -NonInteractive -Command %s',
+          \ shellescape(s:pshexscript)))
+    let hex = join(readfile(out), '')
+  finally
+    call delete(out)
+    let $HEXPAIR_PS_SRC = ''
+    let $HEXPAIR_PS_OUT = ''
+    let $HEXPAIR_PS_OFF = ''
+    let $HEXPAIR_PS_LEN = ''
   endtry
 
-  " readblob() coming back short when the file HAS those bytes is not a
-  " normal outcome, and on Windows it is not even an error - it is silent.
-  " Vim's own read_blob() declares a plain `struct stat` and calls plain
-  " fstat(), where the rest of Vim uses stat_T (`struct _stat64` on Windows,
-  " with a comment in vim.h saying why). st_size is a 32-bit _off_t there,
-  " so for a file this size the computed length goes negative and read_blob
-  " returns an EMPTY BLOB AND OK. Reporting that is the whole point of this
-  " check: the alternative is a page of nothing, presented as the file.
-  if len(blob) < want
-    throw printf('hexpair: could not read byte %d of %s - asked for %d '
-          \ . 'bytes, got %d. Past 2 GiB neither xxd (32-bit seek here) nor '
-          \ . 'readblob() (Vim reads the file size into a 32-bit struct stat '
-          \ . 'on Windows) can reach; this file needs a Vim without that '
-          \ . 'limit, or WSL.', a:off + 1, a:file, want, len(blob))
+  " Anything but hex means the file holds something other than the bytes -
+  " a BOM, a warning PowerShell decided to print, a partial write. Checked
+  " rather than assumed, because it would otherwise reach the dump as
+  " plausible-looking rubbish. (WriteAllText is documented as UTF-8 with no
+  " BOM, which is why there should be nothing here to find.)
+  if hex !~# '^\%(\x\x\)*$'
+    throw printf('hexpair: reading byte %d of %s gave something that is '
+          \ . 'not hex: %s', a:off + 1, a:file,
+          \ string(strpart(hex, 0, 40)))
   endif
-  return tolower(substitute(strpart(string(blob), 2), '\.', '', 'g'))
+
+  " Short when the file is not: something went wrong quietly, and a page of
+  " nothing presented as the file is what this path exists to prevent.
+  if strlen(hex) / 2 < want
+    throw printf('hexpair: reading byte %d of %s came back short - asked '
+          \ . 'for %d bytes, got %d.', a:off + 1, a:file, want,
+          \ strlen(hex) / 2)
+  endif
+  return tolower(hex)
 endfunction
 
 " Can xxd be trusted to seek to a:off on this platform?
@@ -2104,7 +2178,7 @@ function! s:FileHex(file, off, len) abort
   " than xxd per megabyte, measured, which is why it is not used for the
   " offsets xxd handles correctly.
   if !s:XxdCanSeek(a:off)
-    return s:BlobHex(a:file, a:off, a:len)
+    return s:SeekReadHex(a:file, a:off, a:len)
   endif
   try
     let out = s:Run(printf('%s -p -s %d -l %d %s', s:xxd, a:off, a:len,
