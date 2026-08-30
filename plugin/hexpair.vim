@@ -2052,6 +2052,13 @@ function! HexPairPagedFileHexForTest(file, off, len) abort
   return s:FileHex(a:file, a:off, a:len)
 endfunction
 
+" The writer, likewise. Small offsets here, so it runs where PowerShell is -
+" Windows CI - and exercises the same code a 120 GiB file would, minus the
+" 2 GiB nobody is going to generate to test with.
+function! HexPairPagedSeekWriteRawForTest(dst, off, src) abort
+  return s:SeekWriteRaw(a:dst, a:off, a:src)
+endfunction
+
 " Reading a byte range that xxd cannot seek to, on Windows.
 "
 " PowerShell does the SEEK and nothing else: .NET's FileStream.Seek takes an
@@ -2133,6 +2140,7 @@ function! s:SeekReadRaw(file, off, len) abort
           \ . '32-bit limit.', a:off + 1, a:file)
   endif
 
+  call s:Debug('powershell read: %d bytes at %d of %s', a:len, a:off, a:file)
   let raw = tempname()
   let $HEXPAIR_PS_SRC = a:file
   let $HEXPAIR_PS_OUT = raw
@@ -2171,6 +2179,69 @@ function! s:SeekReadHex(file, off, len) abort
   finally
     call delete(raw)
   endtry
+endfunction
+
+" Writing a byte range that xxd cannot seek to, on Windows.
+"
+" The mirror of s:SeekReadRaw(): .NET's FileStream.Seek takes an Int64 for
+" writing as well as for reading, so the same tool that got the bytes out
+" can put them back. FileMode.Open, not Create: the file must already exist
+" and must not be truncated - this overwrites a range inside it and changes
+" nothing else, which is the whole reason it is allowed at all.
+"
+" ONLY same-length overwrites use this. A write that changes the file's
+" length needs the tail moved or the file spliced, and those are several
+" more operations, each of which would put bytes somewhere on the strength
+" of arithmetic nobody here can test on Windows. They stay refused.
+let s:pswritescript =
+      \   '$ErrorActionPreference = ''Stop'';'
+      \ . '$src = [IO.File]::ReadAllBytes($env:HEXPAIR_PS_SRC);'
+      \ . '$fs = [IO.File]::Open($env:HEXPAIR_PS_DST, ''Open'', ''Write'');'
+      \ . 'try {'
+      \ .   '[void]$fs.Seek([int64]$env:HEXPAIR_PS_OFF, ''Begin'');'
+      \ .   '$fs.Write($src, 0, $src.Length)'
+      \ . '} finally { $fs.Close() }'
+
+" Put the bytes of a:src over a:dst starting at a:off, and then READ THEM
+" BACK and check.
+"
+" The read-back is not belt and braces, it is the point. This path cannot be
+" exercised where it is developed - it needs Windows and a file over 2 GiB -
+" and the failure it guards against is a page written at the wrong offset in
+" a file too large to notice it in. Verifying turns that into an error
+" message. It costs one more process start on a path that already pays one,
+" and g:hexpair_verify_writes turns it off for anyone who would rather have
+" the speed.
+function! s:SeekWriteRaw(dst, off, src) abort
+  if !s:HasPowerShell()
+    throw printf('hexpair: writing at byte %d of %s needs PowerShell here - '
+          \ . 'xxd seeks with a 32-bit offset on this platform - and it did '
+          \ . 'not run. Nothing was written.', a:off + 1, a:dst)
+  endif
+  call s:Debug('powershell write: %s over %s at %d', a:src, a:dst, a:off)
+  let $HEXPAIR_PS_SRC = a:src
+  let $HEXPAIR_PS_DST = a:dst
+  let $HEXPAIR_PS_OFF = a:off
+  try
+    call s:Run(printf('powershell -NoProfile -NonInteractive -Command %s',
+          \ shellescape(s:pswritescript)))
+  finally
+    let $HEXPAIR_PS_SRC = ''
+    let $HEXPAIR_PS_DST = ''
+    let $HEXPAIR_PS_OFF = ''
+  endtry
+
+  if !get(g:, 'hexpair_verify_writes', 1)
+    return
+  endif
+  let want = s:HexFromFile(a:src)
+  let got = s:SeekReadHex(a:dst, a:off, strlen(want) / 2)
+  if got !=# want
+    throw printf('hexpair: the write at byte %d of %s did not read back as '
+          \ . 'what was written - the file may now be wrong at that offset. '
+          \ . 'Check it before writing again. (g:hexpair_verify_writes = 0 '
+          \ . 'turns this check off.)', a:off + 1, a:dst)
+  endif
 endfunction
 
 " Can xxd be trusted to seek to a:off on this platform?
@@ -2302,6 +2373,14 @@ endfunction
 " never be used here. Everything outside the page keeps its bytes and the
 " file keeps its length; cost is O(page), not O(file).
 function! s:PatchInPlace(raw) abort
+  " Past what xxd can seek to, PowerShell puts the bytes back - the mirror
+  " of how they were read. No dump is involved: the raw bytes go straight
+  " over the range they came from, which is also why this is the only write
+  " allowed there (see s:Write()).
+  if !s:XxdCanSeek(b:hexpair_page_base + b:hexpair_page_len)
+    call s:SeekWriteRaw(b:hexpair_page_file, b:hexpair_page_base, a:raw)
+    return
+  endif
   let dump = tempname()
   try
     call s:CanonicalDump(a:raw, b:hexpair_page_base, dump)
@@ -2733,6 +2812,18 @@ function! s:WriteWholeTo(target) abort
   if !empty(msg)
     throw msg
   endif
+  " Copying the whole file walks it with s:CopyRange(), which reads through
+  " readblob() - and readblob() is exactly what does not work here for a
+  " large file (an empty blob and success; see s:SeekReadRaw). So this is
+  " refused past the limit even though a same-length patch is not: the
+  " patch touches one page through a path that was written for it, and this
+  " would walk gigabytes through one that was not.
+  if !s:XxdCanSeek(b:hexpair_page_total)
+    throw printf('hexpair: %s is larger than the 2 GiB this platform can '
+          \ . 'copy - readblob(), which reads the parts outside this page, '
+          \ . 'returns nothing past that here. Nothing was written.',
+          \ b:hexpair_page_file)
+  endif
   call s:CheckFresh()
 
   let raw = tempname()
@@ -2787,22 +2878,6 @@ function! s:Write() abort
     throw 'hexpair: not a paged hex buffer; nothing was written'
   endif
 
-  " Reading past 2 GiB is handled (s:FileHex falls back to readblob), but
-  " WRITING there cannot be: every write path that puts bytes at an offset
-  " goes through xxd - `xxd -r` for a patch, `xxd -r -p -s` for a tail move
-  " or an extend - and xxd's reverse path carries its offsets in the same
-  " 32-bit long as its forward one (`base_off`, `want_off`, `have_off`,
-  " fseek). Vim has no primitive to write at an offset to fall back to.
-  "
-  " So this refuses, rather than doing what it did before: patching the
-  " page's bytes in at 2 GiB, silently, over whatever was there. A refusal
-  " loses the edit; the alternative loses the file.
-  if !s:XxdCanSeek(b:hexpair_page_base + b:hexpair_page_len)
-    throw printf('hexpair: cannot write past 2 GiB on this platform - '
-          \ . 'xxd seeks with a 32-bit offset here, and this page starts at '
-          \ . 'byte %d. Reading is unaffected. Nothing was written.',
-          \ b:hexpair_page_base + 1)
-  endif
 
   let target = s:WriteTarget()
   if target !=# ''
@@ -2824,6 +2899,20 @@ function! s:Write() abort
           \ newlen, b:hexpair_page_len, off)
     if newlen == b:hexpair_page_len
       call s:PatchInPlace(raw)
+    elseif !s:XxdCanSeek(b:hexpair_page_base + b:hexpair_page_len)
+      " Same-length writes past 2 GiB work here - PowerShell seeks where
+      " xxd cannot, and s:PatchInPlace() puts the bytes straight back over
+      " the range they came from. A LENGTH-CHANGING write does not: it
+      " moves the tail or rewrites the file, several operations each
+      " putting bytes somewhere on the strength of offsets nobody can test
+      " on this platform from where this is developed, and s:CopyRange()
+      " reads with readblob(), which is itself broken here for large files.
+      " Refusing costs the edit; getting it wrong costs the file.
+      throw printf('hexpair: this page starts at byte %d, past the 2 GiB '
+            \ . 'xxd can seek to here, and only same-length writes are '
+            \ . 'possible past that. This one would change the file''s '
+            \ . 'length by %d bytes. Nothing was written.',
+            \ b:hexpair_page_base + 1, newlen - b:hexpair_page_len)
     elseif !s:ConfirmResize(newlen)
       echomsg 'hexpair: cancelled; nothing was written'
       return

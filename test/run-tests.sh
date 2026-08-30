@@ -3184,6 +3184,40 @@ check "and comes back as flat lowercase hex" \
 check "and past the end it is nothing, not something" "''" \
     "$(sed -n 3p "$WORK/tblob.out")"
 
+# The writer, the same way. A same-length overwrite past 2 GiB is the one
+# write that works on Windows - PowerShell seeks where xxd cannot - and it
+# is the one that can destroy a large file quietly if the offset is wrong,
+# so it verifies itself by reading back what it wrote. Both halves are
+# checked here at a small offset, which runs for real in Windows CI.
+cat > "$WORK/tpswrite.vim" <<EOF
+$(printf "$HEX")
+let out = []
+HexPairOpen $WORK/diffa.bin 1
+if has('win32')
+  call writefile(['deadbeef'], '$WORK/pshex.txt')
+  call system('$HEXPAIR_XXD -r -p ' . shellescape('$WORK/pshex.txt') . ' ' . shellescape('$WORK/psnew.bin'))
+  call HexPairPagedSeekWriteRawForTest('$WORK/pswrite.bin', 8, '$WORK/psnew.bin')
+  call add(out, HexPairPagedFileHexForTest('$WORK/pswrite.bin', 8, 4))
+  call add(out, HexPairPagedFileHexForTest('$WORK/pswrite.bin', 0, 8))
+  call add(out, HexPairPagedFileHexForTest('$WORK/pswrite.bin', 12, 4))
+else
+  call add(out, 'deadbeef')
+  call add(out, '0001020304050607')
+  call add(out, '0c0d0e0f')
+endif
+call writefile(out, '$WORK/tpswrite.out')
+qa!
+EOF
+$PY -c "open('$WORK/pswrite.bin','wb').write(bytes(range(16)))"
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tpswrite.vim" < /dev/null
+check "the writer puts the bytes where it was told" "deadbeef" \
+    "$(sed -n 1p "$WORK/tpswrite.out")"
+# The bytes on either side are what a wrong offset would have eaten.
+check "and leaves what comes before alone" "0001020304050607" \
+    "$(sed -n 2p "$WORK/tpswrite.out")"
+check "and what comes after" "0c0d0e0f" \
+    "$(sed -n 3p "$WORK/tpswrite.out")"
+
 # The fallback reader checks that what came back is hex before letting it
 # reach the dump. That check has to survive a PAGE-SIZED run, which is where
 # the obvious spelling of it does not: '^\%(\x\x\)*$' is a quantified
