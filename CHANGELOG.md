@@ -72,6 +72,16 @@ and this project adheres to
   message longer than one line, which is what triggers it.
 
 ### Fixed
+- **`:saveas` left the buffer modified, and the view editing the old
+  file.** The bytes were written, but Vim leaves `'modified'` to the
+  autocommand for an `acwrite` buffer and this one only cleared it on the
+  piped-input path. Worse, the view went on believing it edited the file it
+  came from, so every write after a `:saveas` was taken for "save a copy
+  elsewhere" and rewrote the whole file instead of patching a page — on a
+  large file, an expensive way to be wrong. `:saveas` now adopts the file
+  it wrote, exactly as it does everywhere else in Vim, and `:file {name}`
+  followed by `:w` does the same. `:w {file}` is unchanged: still a copy,
+  still leaving the buffer alone.
 - **A page past the end of the file being compared with showed nothing as
   differing.** Reported on a 120 GiB file compared with a much smaller one:
   every byte of such a page differs - there is nothing over there to match -

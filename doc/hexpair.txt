@@ -1384,6 +1384,25 @@ Because it copies the whole file, `:w {file}` needs readblob() -
 |hexpair-paged|'s Vim requirement - and Vim's own refusal to overwrite an
 existing file without a ! applies as usual.
 
+                                                       *hexpair-saveas*
+`:saveas {file}` is the other half of that pair, and means what it means
+everywhere else in Vim: not "save a copy over there" but "this view edits
+that file from now on".  The whole content is written to {file}, the view
+adopts it, 'modified' is cleared, and a later plain |:w| patches pages
+into {file} - while the file the view came from is left exactly as it
+was.  `:file {name}` renames without writing anything, so the view goes on
+editing its original file until the next write, which then adopts {name}
+in the same way.
+
+Inside the |BufWriteCmd| that does all of this, `:saveas` and `:w {file}`
+look identical - <amatch> is the target for both.  What separates them is
+that `:saveas` RENAMES THE BUFFER before writing it, so the buffer's own
+name says which one this is.  That, and the fact that Vim leaves
+'modified' to the autocommand for a 'buftype' of "acwrite", are what a
+`:saveas` used to get wrong: the file was written, the flag stayed set,
+and the view went on believing it edited the old file, so every write
+after it copied the whole thing again instead of patching a page.
+
 After a successful write the page is re-read from disk and the cursor
 returns to the byte it was on, even when a splice moved every byte
 behind it.  A shrinking write that empties the file entirely leaves a

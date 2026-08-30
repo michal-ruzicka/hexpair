@@ -1154,6 +1154,64 @@ check "':w' afterwards still writes the page to its own file" "[0]" \
 check "which is where the edit ended up too" \
     "00000200: de ad 02 03" "$("$HEXPAIR_XXD" -s 512 -l 4 -g 1 "$WORK/w5.bin" | cut -c1-21)"
 
+# --- ':saveas' and ':file' move the view to the new file -------------------
+# Reported: after ':saveas' the file was written but the buffer stayed
+# modified, and a ':w' after it did not help. Two things were wrong. Vim
+# does not clear 'modified' for an acwrite buffer - the BufWriteCmd has to,
+# and this one only did so on the piped-input path. And the view went on
+# believing it edited the OLD file, so every later write was taken for "save
+# a copy elsewhere" and rewrote the whole file instead of patching a page.
+#
+# ':saveas' renames the buffer BEFORE writing it and ':w {other}' does not,
+# which is the only thing telling them apart inside BufWriteCmd, where
+# <amatch> is the target either way.
+cat > "$WORK/tw5b.vim" <<EOF
+$(printf "$PAGEDW")
+let out = []
+HexPairOpen $WORK/w5b.bin 2
+" The first two byte columns, whatever they hold: w5b.bin is a copy of a
+" fixture an earlier block has already written to, so matching on a literal
+" value here would be matching on that block's leftovers.
+call setline(2, substitute(getline(2), '^\(\x\+: \)\x\x \x\x', '\1be ef', ''))
+silent saveas! $WORK/saved.bin
+call add(out, string([&l:modified, HexPairPagedSamePath(b:hexpair_page_file, '$WORK/saved.bin', has('fname_case'), exists('+shellslash'))]))
+" And a plain :w now patches a page of the file it adopted, rather than
+" copying the whole thing somewhere for a second time.
+call setline(2, substitute(getline(2), '^\(\x\+: \)\x\x \x\x', '\1ca fe', ''))
+silent w
+call add(out, string([&l:modified, getfsize('$WORK/saved.bin')]))
+" ':file' renames without writing: the view still edits its original file
+" until a write says otherwise, and that write adopts the new name.
+bwipeout!
+HexPairOpen $WORK/w5c.bin 2
+call setline(2, substitute(getline(2), '^\(\x\+: \)\x\x \x\x', '\1f0 0d', ''))
+silent file $WORK/renamed.bin
+call add(out, string([&l:modified, HexPairPagedSamePath(b:hexpair_page_file, '$WORK/w5c.bin', has('fname_case'), exists('+shellslash'))]))
+silent w
+call add(out, string([&l:modified, HexPairPagedSamePath(b:hexpair_page_file, '$WORK/renamed.bin', has('fname_case'), exists('+shellslash'))]))
+call writefile(out, '$WORK/tw5b.out')
+qa!
+EOF
+cp "$WORK/w5.bin" "$WORK/w5b.bin"
+cp "$WORK/w5.bin" "$WORK/w5c.bin"
+W5B_ORIG=$(hash_range "$WORK/w5b.bin" 0 -1)
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tw5b.vim" < /dev/null
+check "':saveas' clears 'modified' and adopts the file" "[0, 1]" \
+    "$(sed -n 1p "$WORK/tw5b.out")"
+check "and a ':w' after it patches that file, still unmodified" "[0, 5000]" \
+    "$(sed -n 2p "$WORK/tw5b.out")"
+check "with the last edit in it" \
+    "00000200: ca fe 02 03" \
+    "$("$HEXPAIR_XXD" -s 512 -l 4 -g 1 "$WORK/saved.bin" | cut -c1-21)"
+# The file it was saved AWAY from must not have been touched: 'saveas' moves
+# the view, it does not write both.
+check "and the file it came from left alone" "$W5B_ORIG" \
+    "$(hash_range "$WORK/w5b.bin" 0 -1)"
+check "':file' alone writes nothing and keeps the original file" "[1, 1]" \
+    "$(sed -n 3p "$WORK/tw5b.out")"
+check "and the ':w' after it adopts the new name" "[0, 1]" \
+    "$(sed -n 4p "$WORK/tw5b.out")"
+
 # --- Piped input can only be saved with ':w {file}' - and then adopts it ---
 # `cat x | vim -` has no file behind it. A plain :w says so; :w {file}
 # writes everything, and the view goes on editing that file.

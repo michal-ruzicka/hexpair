@@ -2099,6 +2099,24 @@ function! s:WriteTarget() abort
   return target
 endfunction
 
+" Is this write a ':saveas' (or a ':w' after ':file') rather than a
+" ':w {other}'?
+"
+" Inside BufWriteCmd <amatch> is the target either way, so it cannot tell
+" them apart - but ':saveas' RENAMES THE BUFFER BEFORE WRITING IT and
+" ':w {other}' does not, so the buffer's current name does. They mean
+" different things and must not be run the same way: ':w {other}' is "copy
+" what I am looking at over there and leave me alone", ':saveas' is "this
+" view edits that file from now on".
+"
+" bufname('%') and not b:hexpair_page_bufname: the cached one is what this
+" view was called when the page was loaded, which after a rename is exactly
+" the stale answer that made every later write take the wrong path.
+function! s:IsSaveAs(target) abort
+  let name = bufname('%')
+  return name !=# '' && s:SamePath(a:target, fnamemodify(name, ':p'))
+endfunction
+
 " Append a byte range of a:src to a:dst in bounded blocks, so memory use
 " does not follow the size of the file. a:truncate starts a:dst from
 " scratch, which is also how a shrinking file gets its new length: Vim
@@ -2465,23 +2483,33 @@ function! s:WriteWholeTo(target) abort
   endtry
 
   let total = getfsize(a:target)
-  if get(b:, 'hexpair_page_spill', '') ==# ''
-    " A file-backed view: this was a copy, so nothing about the buffer
-    " changes - exactly as Vim's own ':w {file}' leaves a buffer alone.
+  if get(b:, 'hexpair_page_spill', '') ==# '' && !s:IsSaveAs(a:target)
+    " A file-backed view being copied elsewhere by ':w {file}': nothing
+    " about the buffer changes - exactly as Vim's own ':w {file}' leaves a
+    " buffer alone. It also stays 'modified', because it is: what is on
+    " screen still differs from the file this view edits.
     echomsg printf('hexpair: "%s" %dB written; %s is unchanged',
           \ a:target, total, b:hexpair_page_file)
     return
   endif
 
-  " A view paged from piped input has just acquired a file. Adopt it, the
-  " way Vim's own ':w {file}' adopts a name for an unnamed buffer, so the
-  " next plain :w patches pages into it and the spill can go.
+  " Adopt the target. Two ways here: a view paged from piped input that has
+  " just acquired a file, and a ':saveas' - and they want the same thing,
+  " "this view edits that file from now on", so the next plain :w patches
+  " pages into it and any spill can go.
   call s:DropSpill()
-  silent execute 'file ' . fnameescape(a:target)
+  " ':saveas' has already renamed the buffer; renaming it again to the same
+  " name is pointless and would only be another chance to get it wrong.
+  if !s:SamePath(a:target, bufname('%'))
+    silent execute 'file ' . fnameescape(a:target)
+  endif
   let b:hexpair_page_file = fnamemodify(a:target, ':p')
   let b:hexpair_page_bufname = bufname('%') ==# ''
         \ ? '' : fnamemodify(bufname('%'), ':p')
   call s:LoadPageInView(b:hexpair_page_index)
+  " BufWriteCmd owns the 'modified' flag: Vim does not clear it for an
+  " acwrite buffer, the autocommand has to (:help BufWriteCmd). Missing
+  " this is what left a buffer modified after a successful ':saveas'.
   setlocal nomodified
   echomsg printf('hexpair: "%s" %dB written; this view now edits it',
         \ a:target, total)
