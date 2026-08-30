@@ -30,9 +30,19 @@ and this project adheres to
 - **`vimhex-contex-entry.add.reg` and `vimhex-contex-entry.remove.reg`**,
   ready-made versions of the registry snippets above - one import wires up
   all three context-menu entries (pointing at `gvimhex.cmd`/
-  `gvimhexdiff.cmd`), the other removes them again.
+  `gvimhexdiff.cmd`), the other removes them again. Each entry also gets an
+  `Icon` value pointing at `gvim.exe` - Explorer has nothing to show for a
+  verb whose command is a `.cmd` file otherwise.
 
 ### Fixed
+- **A failed Vim launch from the Explorer context menu closed too fast to
+  read.** `vimhex.cmd`/`vimhexdiff.cmd`/`gvimhex.cmd`/`gvimhexdiff.cmd` all
+  run through `cmd.exe /c` when launched from a context-menu verb, which
+  closes its console the instant the batch ends - too fast to read the
+  one-line error `cmd.exe` prints when `VIMHEX_VIM` (`gvim`/`vim` by
+  default) is not on `PATH`. They now check `errorlevel` right after
+  starting Vim and, only on a nonzero exit, print why and `pause` before
+  closing; a normal launch returns control almost at once and is unaffected.
 - **A `^M` at the end of every line of a page, on Windows.** `xxd` opens a
   dump in text mode there (`xxd.c`: `BIN_ASSIGN(fpo = stdout, revert)` for
   the stream, `BIN_WRITE(revert)` for a named output file), so every dump

@@ -372,20 +372,24 @@ together, not a pair on their own.
 
 Two ready-made files ship with the plugin for this: `vimhex-contex-entry.add.reg`
 adds all three entries below in one import, and `vimhex-contex-entry.remove.reg`
-takes them out again. Edit the install path near the top of
-`vimhex-contex-entry.add.reg` first — it ships with the same
-`C:\Users\you\...` placeholder used below — then double-click it, or run
-`reg import vimhex-contex-entry.add.reg`.
+takes them out again. Edit two things near the top of
+`vimhex-contex-entry.add.reg` first — the plugin's own install path (the
+same `C:\Users\you\...` placeholder used below), and separately the path to
+your `gvim.exe`, which is what supplies the entries' icon and lives under
+Vim's *own* install directory, not the plugin's — then double-click it, or
+run `reg import vimhex-contex-entry.add.reg`.
 
 What it adds, spelled out: save this as `hexpair-menu.reg`, with the path
-to `gvimhex.cmd` as you actually installed it (the doubled backslashes are
-the `.reg` format's own escaping, not a typo), and double-click it:
+to `gvimhex.cmd` as you actually installed it and the path to `gvim.exe`
+for the icon (the doubled backslashes are the `.reg` format's own
+escaping, not a typo), and double-click it:
 
 ```
 Windows Registry Editor Version 5.00
 
 [HKEY_CURRENT_USER\Software\Classes\*\shell\hexpair]
 @="Open in he&xpair"
+"Icon"="C:\\Program Files\\Vim\\vim91\\gvim.exe"
 
 [HKEY_CURRENT_USER\Software\Classes\*\shell\hexpair\command]
 @="cmd.exe /c \"\"C:\\Users\\you\\vimfiles\\pack\\plugins\\start\\hexpair\\gvimhex.cmd\" \"%1\"\""
@@ -397,7 +401,13 @@ or import `vimhex-contex-entry.remove.reg`. It calls `gvimhex.cmd`, so it
 opens the GUI without any `VIMHEX_VIM` set — a verb has no way to pass one
 in. A console window appears for as long as the `.cmd` runs, which is a
 fraction of a second — the only way to avoid it entirely is a GUI stub
-executable, which this plugin does not ship.
+executable, which this plugin does not ship. If that window appears and
+disappears again *without* gVim ever showing up, something failed too fast
+to read — `gvimhex.cmd`/`gvimhexdiff.cmd` (and `vimhex.cmd`/`vimhexdiff.cmd`)
+now pause and print why before closing whenever the launch itself fails,
+most commonly because `gvim`/`vim` is not on `PATH`; the fix that needs no
+`.reg` re-edit is setting `VIMHEX_VIM` to its full path in your user
+environment.
 
 **Two selected files is not science fiction, but it is not one click
 either.** Explorer runs a context-menu command *once per selected file*,
@@ -412,12 +422,14 @@ Windows Registry Editor Version 5.00
 
 [HKEY_CURRENT_USER\Software\Classes\*\shell\hexpair-pick]
 @="Hex diff: &select left side"
+"Icon"="C:\\Program Files\\Vim\\vim91\\gvim.exe"
 
 [HKEY_CURRENT_USER\Software\Classes\*\shell\hexpair-pick\command]
 @="cmd.exe /c \"\"C:\\Users\\you\\vimfiles\\pack\\plugins\\start\\hexpair\\gvimhexdiff.cmd\" /pick \"%1\"\""
 
 [HKEY_CURRENT_USER\Software\Classes\*\shell\hexpair-with]
 @="Hex diff: &against selected"
+"Icon"="C:\\Program Files\\Vim\\vim91\\gvim.exe"
 
 [HKEY_CURRENT_USER\Software\Classes\*\shell\hexpair-with\command]
 @="cmd.exe /c \"\"C:\\Users\\you\\vimfiles\\pack\\plugins\\start\\hexpair\\gvimhexdiff.cmd\" /with \"%1\"\""

@@ -68,6 +68,31 @@ vimhexdiff.cmd        functions in hexpair.bashrc, same names and same
                       part of a release). NOT exercised by CI: the
                       Windows job runs the Vim suite under Git Bash, so
                       the batch itself is only ever run by hand.
+                      Both `:run`/`:stdin` labels check `errorlevel 1`
+                      right after invoking `"%VIMHEX_VIM%"` and, only on
+                      failure, echo why plus `pause` before `exit /b 1`
+                      (`:launchfailed`). Reported by the maintainer:
+                      the entries the .reg files add flashed a console
+                      and closed too fast to read - `cmd.exe /c` (what
+                      Explorer's "command" value runs through) closes
+                      its console the instant the batch ends, and on
+                      SUCCESS gvim/vim return control (0) almost at
+                      once (gVim forks and returns; console Vim returns
+                      when the user quits it), so the pause never fires
+                      on a normal launch and the fast-flash UX the
+                      README documents is unchanged. Root cause NOT
+                      confirmed - the maintainer separately reported
+                      that `*vimhex*.cmd` run directly from a cmd
+                      prompt work first try, which rules out a bad
+                      $VIMHEX_VIM/$PATH in that shell and points at
+                      something specific to the Explorer-constructed
+                      "cmd.exe /c ""path" "%1""" invocation instead
+                      (its quoting was re-derived by hand against
+                      `cmd /?`'s own documented two rules and comes out
+                      correct, so that is not the leading suspect
+                      either) - but this pause is what will surface the
+                      actual message next time, which is the fix that
+                      does not depend on guessing right first.
 gvimhex.cmd           the same two commands, defaulting VIMHEX_VIM to
 gvimhexdiff.cmd       "gvim" instead of "vim" - what a context-menu verb
                       or a double-click needs, since neither has a
@@ -99,6 +124,18 @@ vimhex-contex-entry.  add.reg wires gvimhex.cmd/gvimhexdiff.cmd into the
                       command values are read literally). Bundled in the
                       release tarball; same packaging-glob mechanism as
                       the .cmd files, `*vimhex*.reg`.
+                      Each `\shell\<verb>` key also carries an "Icon"
+                      value pointing at gvim.exe - a SECOND placeholder
+                      path (Vim's own install directory, not the
+                      plugin's), because Explorer has no icon to show
+                      for a verb whose command is a .cmd file; unlike
+                      the plugin-path placeholder, this one is not
+                      derivable from anything else already in the file,
+                      so it stays a literal example
+                      (C:\Program Files\Vim\vim91\gvim.exe) the user
+                      edits by hand. .remove.reg needs no change for
+                      this - deleting the parent key removes its Icon
+                      value along with everything else under it.
 pack-release          - POSIX wrapper around pack-release.py
 pack-release.cmd      - Windows wrapper around pack-release.py
 pack-release.py       - the packaging implementation (python3, stdlib

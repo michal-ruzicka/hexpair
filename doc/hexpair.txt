@@ -1503,7 +1503,15 @@ handler; these are the two steps every diff tool on Windows solves that
 with.  The remembered path lives in %LOCALAPPDATA%\hexpair\diff-left.txt
 and is forgotten as soon as it is used.  README.md, under "Windows: vimhex
 and vimhexdiff outside Vim", has the registry entries, and
-vimhex-contex-entry.add.reg/.remove.reg ship ready-made versions of them.
+vimhex-contex-entry.add.reg/.remove.reg ship ready-made versions of them -
+including an "Icon" pointing at gvim.exe, since Explorer cannot pull one
+out of a .cmd file the way it can out of an .exe.
+
+Launched from a context-menu verb, "cmd.exe /c" closes its console the
+instant the batch finishes - too fast to read a "not on PATH" error in, if
+$VIMHEX_VIM does not resolve.  All four commands now pause and print why
+before closing on such a failure; a normal launch returns control (0) long
+before that line would run, so it stays exactly as fast as before.
 
 ==============================================================================
 9. Limitations                                           *hexpair-limitations*

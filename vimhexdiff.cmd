@@ -105,7 +105,19 @@ REM stays on the left whatever 'splitright' says.
 :run
 if not defined VIMHEX_VIM set "VIMHEX_VIM=vim"
 "%VIMHEX_VIM%" -c "autocmd VimEnter * call HexPairOpenFile($HEXPAIR_DIFF_A) | call HexPairDiffWith($HEXPAIR_DIFF_B)" -c "autocmd VimEnter * rightbelow vsplit | call HexPairOpenFile($HEXPAIR_DIFF_B) | call HexPairDiffWith($HEXPAIR_DIFF_A) | setlocal scrollbind" -c "autocmd VimEnter * wincmd t | setlocal scrollbind | HexPairDiffNext | HexPairSyncViews"
+if errorlevel 1 goto launchfailed
 goto :eof
+
+REM See vimhex.cmd for why this pauses only on failure: run from the
+REM Explorer context menu, "cmd.exe /c" closes its console the instant the
+REM batch finishes - too fast to read the one-line "not recognized" cmd.exe
+REM prints when VIMHEX_VIM is not on PATH - while a normal launch returns (0)
+REM long before this line would ever run.
+:launchfailed
+>&2 echo vimhexdiff: could not start "%VIMHEX_VIM%" - is it on PATH?
+>&2 echo vimhexdiff: set VIMHEX_VIM to its full path instead, e.g. "C:\Program Files\Vim\vim91\gvim.exe"
+pause
+exit /b 1
 
 :nopick
 >&2 echo vimhexdiff: no file remembered - run  vimhexdiff /pick FILE  first

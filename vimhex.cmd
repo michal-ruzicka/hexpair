@@ -74,6 +74,7 @@ REM read, but BEFORE standard input has.
 :run
 if "%~1"=="-" goto stdin
 "%VIMHEX_VIM%" -c "autocmd VimEnter * call HexPairOpenFile($HEXPAIR_OPEN_FILE)" -c "autocmd VimEnter * %HEXPAIR_JUMP%"
+if errorlevel 1 goto launchfailed
 goto :eof
 
 REM Reading from standard input: there is no file for :HexPairOpen to page, so
@@ -83,7 +84,21 @@ REM file there is nothing to re-read with ++bin afterwards. Save it with
 REM ':w FILE'; a plain ':w' has no file to write back to.
 :stdin
 "%VIMHEX_VIM%" -b -c "autocmd VimEnter * HexPairToggle" -c "autocmd VimEnter * %HEXPAIR_JUMP%" -
+if errorlevel 1 goto launchfailed
 goto :eof
+
+REM Run from the Explorer context menu (see vimhex-contex-entry.add.reg),
+REM this is "cmd.exe /c", which closes its console the instant the batch
+REM finishes - too fast to read the one-line "not recognized" cmd.exe prints
+REM when VIMHEX_VIM is not on PATH. Pausing ONLY on a nonzero exit leaves a
+REM normal launch exactly as fast as before: gvim/vim return control (0) as
+REM soon as they have started - console Vim on :q, gVim within a moment of
+REM forking off its own window - long before this line would ever run.
+:launchfailed
+>&2 echo vimhex: could not start "%VIMHEX_VIM%" - is it on PATH?
+>&2 echo vimhex: set VIMHEX_VIM to its full path instead, e.g. "C:\Program Files\Vim\vim91\gvim.exe"
+pause
+exit /b 1
 
 :usage
 >&2 echo usage: vimhex FILE^|- [PAGE^|@BYTE]
