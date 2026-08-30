@@ -2056,6 +2056,14 @@ endfunction
 " answer differs between a 32-bit and a 64-bit xxd. A 32-bit Unix build has
 " the same limit and is not covered here; it is recorded in CLAUDE.md rather
 " than guessed at.
+"
+" has('win32') and NOT also has('win64'): win32 is true for every Windows
+" Vim, "32 or 64 bits" in Vim's own words, and win64 is an extra feature on
+" top of it rather than an alternative to it - so asking for win64 as well
+" would be redundant, and asking for it INSTEAD would miss 32-bit builds.
+" The limit is a property of the platform's data model, not of the build:
+" Windows is LLP64, so a long stays 32 bits in a 64-bit Vim too, which is
+" why "am I on Windows" is the whole question.
 function! s:XxdCanSeek(off) abort
   return a:off <= s:xxdseekmax || !has('win32')
 endfunction
