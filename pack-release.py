@@ -55,6 +55,7 @@ FILES = [
     "hexpair/plugin/hexpair.vim",
     "hexpair/vimhex-contex-entry.add.reg",
     "hexpair/vimhex-contex-entry.remove.reg",
+    "hexpair/vimhex-launch.vbs",
     "hexpair/vimhex.cmd",
     "hexpair/vimhexdiff.cmd",
 ]

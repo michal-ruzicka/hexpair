@@ -32,6 +32,9 @@ from pathlib import Path
 # point of the exercise: a default install must import and work as-is.
 DEFAULT_ROOT = r"%USERPROFILE%\vimfiles\pack\plugins\start\hexpair"
 
+# The no-console launcher every entry goes through; see its own header.
+LAUNCHER = "vimhex-launch.vbs"
+
 HEADER_ADD = """\
 ; ===========================================================================
 ; vimhex-contex-entry.add.reg - Explorer context-menu entries for hexpair
@@ -46,17 +49,31 @@ HEADER_ADD = """\
 ; License:     Vim License - same terms as Vim itself (see LICENSE.md
 ;              or :help license); SPDX-License-Identifier: Vim
 ;
-; Adds three right-click entries under HKEY_CURRENT_USER - no administrator
-; rights needed, nobody else's account touched:
+; Adds ONE right-click folder under HKEY_CURRENT_USER - no administrator
+; rights needed, nobody else's account touched - holding three entries:
 ;
-;   Open in hexpair              gvimhex.cmd on the file you right-clicked
-;   Hex diff: select left side   gvimhexdiff.cmd /pick  on the first file
-;   Hex diff: against selected   gvimhexdiff.cmd /with  on the second file
+;   vimhex >  gvimhex this          the file you right-clicked, in hex
+;             ---------------       (a separator)
+;             gvimhexdiff left      remember this as the left-hand side
+;             gvimhexdiff right     diff it against the remembered one
 ;
-; They call gvimhex.cmd / gvimhexdiff.cmd, not vimhex.cmd / vimhexdiff.cmd -
-; a context-menu verb has no console window to run the console Vim in, and
-; gvimhex.cmd/gvimhexdiff.cmd already default to gVim for exactly that
-; reason, without needing VIMHEX_VIM set in your user environment.
+; The folder is a verb carrying "ExtendedSubCommandsKey" and no \\command of
+; its own; the key it names ({submenu}) holds the children
+; under its own \\shell. That indirection keeps all of this inside HKCU: the
+; older "SubCommands" scheme resolves verbs against HKLM's CommandStore,
+; which would need administrator rights. Children are ordered alphabetically
+; by KEY NAME, hence the 10-/20-/30- prefixes, and the separator is
+; "CommandFlags"=dword:20 (ECF_SEPARATORBEFORE) on the item under the rule.
+;
+; NOTHING FLASHES. Every entry goes through wscript.exe running
+; vimhex-launch.vbs, which is a GUI-subsystem program: no console window is
+; ever created, so there is no flash and - the reason it was done - nothing
+; steals the focus from the file manager the menu was opened in. The .cmd
+; runs hidden; if it fails, its output is shown in a message box instead of
+; a console that has already closed. See vimhex-launch.vbs's own header.
+;
+; They run gvimhex.cmd / gvimhexdiff.cmd, not vimhex.cmd / vimhexdiff.cmd:
+; those default to gVim, so no VIMHEX_VIM is needed in your environment.
 ;
 ; NOTHING TO EDIT for a default install. Just double-click this file, or
 ; run:  reg import vimhex-contex-entry.add.reg
@@ -67,13 +84,11 @@ HEADER_ADD = """\
 ; section installs it. Installed somewhere else? Re-generate rather than
 ; edit:  python3 make-context-entry-reg.py "D:\\your\\path\\hexpair"
 ;
-; vimhex-contex-entry.remove.reg undoes exactly this again. A console
-; window appears for a fraction of a second while gvimhex.cmd/
-; gvimhexdiff.cmd itself runs - see README.md for why. If it appears and
-; disappears WITHOUT gVim ever showing up, gvimhex.cmd/gvimhexdiff.cmd
-; pause on that failure instead of racing the window closed - re-run once
-; more and read what they say (most likely: gvim.exe is not on PATH; set
-; VIMHEX_VIM to its full path in your user environment).
+; vimhex-contex-entry.remove.reg undoes exactly this again.
+;
+; On Windows 11 this is a "legacy" context menu, so it appears under
+; "Show more options" (Shift+F10 goes straight there). File managers that
+; use the classic menu - Total Commander, for one - show it directly.
 ;
 ; The three .ico files are generated too, by icons/build.py - see
 ; icons/design.py. Only the .ico output ships in the release tarball.
@@ -91,34 +106,53 @@ HEADER_REMOVE = """\
 ; License:     Vim License - same terms as Vim itself (see LICENSE.md
 ;              or :help license); SPDX-License-Identifier: Vim
 ;
-; Removes the three Explorer context-menu entries vimhex-contex-entry.add.reg
-; adds - the "hexpair", "hexpair-pick" and "hexpair-with" keys, each with its
-; own "command" subkey, deleted whole with the leading "-". No path in here
-; at all; a key is removed by name, whatever its command line says, so this
-; file undoes an add.reg generated for ANY install path.
+; Removes the Explorer context-menu folder vimhex-contex-entry.add.reg adds:
+; the "vimhex" verb and the hexpair.ContextMenu key holding its children,
+; each deleted whole with the leading "-" (which takes every subkey and
+; value with it). It also removes the three top-level entries an OLDER
+; version of add.reg created, so that upgrading does not leave them orphaned
+; next to the new folder.
+;
+; No path in here at all; a key is removed by name, whatever its command
+; line says, so this file undoes an add.reg generated for ANY install path.
 ;
 ; Double-click this file, or run:  reg import vimhex-contex-entry.remove.reg
 ; ===========================================================================
 """
 
-# verb key, menu caption (& marks the accelerator), icon file, .cmd + args
-VERBS = [
-    ("hexpair", "Open in he&xpair", "hexpair-open.ico", "gvimhex.cmd", ""),
-    (
-        "hexpair-pick",
-        "Hex diff: &select left side",
-        "hexpair-pick.ico",
-        "gvimhexdiff.cmd",
-        "/pick ",
-    ),
-    (
-        "hexpair-with",
-        "Hex diff: &against selected",
-        "hexpair-with.ico",
-        "gvimhexdiff.cmd",
-        "/with ",
-    ),
+# The submenu the three entries live in. A verb carrying
+# "ExtendedSubCommandsKey" is a FOLDER rather than a command -- it must not
+# have a \command subkey of its own -- and the key it names holds the
+# children under its own \shell. That indirection is what keeps this
+# entirely inside HKEY_CURRENT_USER: the older "SubCommands" scheme resolves
+# its verbs against HKLM's CommandStore, which needs administrator rights.
+# The named key is relative to HKEY_CLASSES_ROOT, and HKCU\Software\Classes
+# is merged into that, so writing it there is enough.
+SUBMENU_KEY = "hexpair.ContextMenu"
+SUBMENU_LABEL = "vimhex"
+SUBMENU_ICON = "hexpair-open.ico"
+
+# Children are shown in ALPHABETICAL order of their key name, not in the
+# order they are written here, which is what the numeric prefixes are for.
+#
+# key, caption, icon, .cmd, args, separator-before
+ITEMS = [
+    ("10-open", "gvimhex this", "hexpair-open.ico", "gvimhex.cmd", "", False),
+    ("20-pick", "gvimhexdiff left", "hexpair-pick.ico", "gvimhexdiff.cmd",
+     "/pick", True),
+    ("30-with", "gvimhexdiff right", "hexpair-with.ico", "gvimhexdiff.cmd",
+     "/with", False),
 ]
+
+# ECF_SEPARATORBEFORE. "CommandFlags" is a DWORD on the item that is to have
+# the horizontal rule drawn above it.
+ECF_SEPARATORBEFORE = 0x20
+
+# Keys an older version of this file created at the top level of the "*"
+# context menu, before the submenu existed. .remove.reg deletes these too,
+# so that upgrading does not leave three orphaned entries behind next to the
+# new folder.
+LEGACY_KEYS = ["hexpair", "hexpair-pick", "hexpair-with"]
 
 
 def expand_sz(value, prefix=""):
@@ -146,23 +180,45 @@ def expand_sz(value, prefix=""):
 
 def build_add(root):
     lines = ["Windows Registry Editor Version 5.00", ""]
-    lines.append(HEADER_ADD.format(root=root))
+    lines.append(HEADER_ADD.format(root=root, submenu=SUBMENU_KEY))
 
-    for key, caption, icon, cmd, args in VERBS:
-        # The command: cmd.exe /c ""<path to .cmd>" [/pick |/with ]"%1""
-        # The outer pair of quotes is cmd.exe's own rule 2 (strip the outer
-        # pair, run the rest), which is what lets both the .cmd path and the
-        # file name contain spaces.
-        command = 'cmd.exe /c ""%s\\%s" %s"%%1""' % (root, cmd, args)
-        icon_path = "%s\\icons\\%s" % (root, icon)
+    # The folder itself. No \command subkey: that is what makes it a folder
+    # rather than something clickable.
+    lines.append("[HKEY_CURRENT_USER\\Software\\Classes\\*\\shell\\vimhex]")
+    lines.append('"MUIVerb"="%s"' % SUBMENU_LABEL)
+    lines.append(expand_sz("%s\\icons\\%s" % (root, SUBMENU_ICON), '"Icon"='))
+    # Plain REG_SZ on purpose: this names a registry key, not a path, so
+    # there is nothing in it for the environment to expand.
+    lines.append('"ExtendedSubCommandsKey"="%s"' % SUBMENU_KEY)
+    lines.append("")
 
-        lines.append("[HKEY_CURRENT_USER\\Software\\Classes\\*\\shell\\%s]" % key)
-        lines.append('@="%s"' % caption)
-        lines.append(expand_sz(icon_path, '"Icon"='))
-        lines.append("")
-        lines.append(
-            "[HKEY_CURRENT_USER\\Software\\Classes\\*\\shell\\%s\\command]" % key
+    for key, caption, icon, cmd, args, separator in ITEMS:
+        # wscript.exe rather than cmd.exe: wscript is a GUI-subsystem
+        # program, so no console window is ever created - no flash, and
+        # nothing takes the focus away from the file manager the menu was
+        # opened in. vimhex-launch.vbs runs the .cmd hidden and turns a
+        # failure into a message box. See its header.
+        command = '%%SystemRoot%%\\System32\\wscript.exe "%s\\%s" "%s\\%s"' % (
+            root,
+            LAUNCHER,
+            root,
+            cmd,
         )
+        if args:
+            command += ' "%s"' % args
+        command += ' "%1"'
+
+        item = "HKEY_CURRENT_USER\\Software\\Classes\\%s\\shell\\%s" % (
+            SUBMENU_KEY,
+            key,
+        )
+        lines.append("[%s]" % item)
+        lines.append('"MUIVerb"="%s"' % caption)
+        lines.append(expand_sz("%s\\icons\\%s" % (root, icon), '"Icon"='))
+        if separator:
+            lines.append('"CommandFlags"=dword:%08x' % ECF_SEPARATORBEFORE)
+        lines.append("")
+        lines.append("[%s\\command]" % item)
         lines.append(expand_sz(command, "@="))
         lines.append("")
 
@@ -172,7 +228,15 @@ def build_add(root):
 def build_remove():
     lines = ["Windows Registry Editor Version 5.00", ""]
     lines.append(HEADER_REMOVE)
-    for key, _, _, _, _ in VERBS:
+
+    lines.append("[-HKEY_CURRENT_USER\\Software\\Classes\\*\\shell\\vimhex]")
+    lines.append("")
+    lines.append("[-HKEY_CURRENT_USER\\Software\\Classes\\%s]" % SUBMENU_KEY)
+    lines.append("")
+
+    lines.append("; Entries an older version put straight in the \"*\" menu,")
+    lines.append("; removed too so an upgrade leaves nothing orphaned behind.")
+    for key in LEGACY_KEYS:
         lines.append("[-HKEY_CURRENT_USER\\Software\\Classes\\*\\shell\\%s]" % key)
         lines.append("")
     return "\n".join(lines)

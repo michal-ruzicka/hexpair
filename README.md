@@ -371,11 +371,43 @@ together, not a pair on their own.
 #### From the Explorer context menu
 
 Two ready-made files ship with the plugin for this: `vimhex-contex-entry.add.reg`
-adds all three entries in one import, and `vimhex-contex-entry.remove.reg`
-takes them out again. **For a default install there is nothing to edit** —
-double-click it, or run `reg import vimhex-contex-entry.add.reg`. The paths
-in it are written against `%USERPROFILE%\vimfiles\pack\plugins\start\hexpair`,
-the package directory the install instructions above use.
+adds one **`vimhex` submenu** in a single import, and
+`vimhex-contex-entry.remove.reg` takes it out again. **For a default install
+there is nothing to edit** — double-click it, or run
+`reg import vimhex-contex-entry.add.reg`. The paths in it are written against
+`%USERPROFILE%\vimfiles\pack\plugins\start\hexpair`, the package directory the
+install instructions above use.
+
+```
+vimhex ▸  gvimhex this          the file you right-clicked, in hex
+          ────────────────
+          gvimhexdiff left      remember this as the left-hand side
+          gvimhexdiff right     diff it against the remembered one
+```
+
+The folder is a verb carrying `ExtendedSubCommandsKey` and no `\command` of
+its own; the key it names holds the children under its own `\shell`. That
+indirection is what keeps all of it inside `HKEY_CURRENT_USER`, needing no
+administrator rights — the older `SubCommands` scheme resolves its verbs
+against `HKLM`'s CommandStore, which does. Children appear in alphabetical
+order of their *key* name, hence the `10-`/`20-`/`30-` prefixes, and the
+horizontal rule is `"CommandFlags"=dword:00000020` (`ECF_SEPARATORBEFORE`)
+on the item below it.
+
+**Nothing flashes any more.** Each entry runs `wscript.exe` on
+`vimhex-launch.vbs` rather than `cmd.exe` directly. `wscript.exe` is a
+GUI-subsystem program, so no console window is ever created — which matters
+beyond the flash itself: with a Windows Terminal window already open, the
+console a `cmd.exe` verb created would attach to it and *take the focus*,
+leaving the file manager you invoked the menu from in the background. The
+`.cmd` now runs hidden, and if it fails its output is shown in a message box
+instead of a console that has already closed. That is what you get when
+*gvimhexdiff right* is used with no left-hand file picked yet — a dialog
+telling you to pick one, rather than a flicker.
+
+On Windows 11 this is a "legacy" context menu, so it lives under *Show more
+options* (Shift+F10 opens that directly). File managers that use the classic
+menu — Total Commander among them — show it straight away.
 
 Installed somewhere else? Re-generate the pair rather than editing them:
 
@@ -383,25 +415,32 @@ Installed somewhere else? Re-generate the pair rather than editing them:
 python3 make-context-entry-reg.py "D:\your\path\hexpair"
 ```
 
-That works because the values are `REG_EXPAND_SZ`, the one registry string
-type whose `%USERPROFILE%` is expanded when the shell reads it — a plain
-`REG_SZ` would send Explorer looking for a folder literally named
-`%USERPROFILE%`. The `.reg` text format can only write that type as
+Re-generating is the supported route because the values are `REG_EXPAND_SZ`,
+the one registry string type whose `%USERPROFILE%` is expanded when the shell
+reads it — a plain `REG_SZ` would send Explorer looking for a folder literally
+named `%USERPROFILE%`. The `.reg` text format can only write that type as
 `hex(2):` followed by the string's UTF-16LE bytes, which is why these two
-files are generated and carry a "do not edit by hand" banner. What the
-first entry decodes to:
+files are generated and carry a "do not edit by hand" banner. What the first
+entry decodes to:
 
 ```
-[HKEY_CURRENT_USER\Software\Classes\*\shell\hexpair]
-@="Open in he&xpair"
-"Icon"   = %USERPROFILE%\vimfiles\pack\plugins\start\hexpair\icons\hexpair-open.ico
-(command)= cmd.exe /c ""%USERPROFILE%\vimfiles\pack\plugins\start\hexpair\gvimhex.cmd" "%1""
+[HKEY_CURRENT_USER\Software\Classes\*\shell\vimhex]
+"MUIVerb"="vimhex"
+"Icon"    = %USERPROFILE%\...\hexpair\icons\hexpair-open.ico
+"ExtendedSubCommandsKey"="hexpair.ContextMenu"
+
+[HKEY_CURRENT_USER\Software\Classes\hexpair.ContextMenu\shell\10-open]
+"MUIVerb"="gvimhex this"
+"Icon"    = %USERPROFILE%\...\hexpair\icons\hexpair-open.ico
+(command) = %SystemRoot%\System32\wscript.exe
+            "%USERPROFILE%\...\hexpair\vimhex-launch.vbs"
+            "%USERPROFILE%\...\hexpair\gvimhex.cmd" "%1"
 ```
 
-The expansion order is what makes this safe: the shell expands
-`%USERPROFILE%` when it reads the value, and only then substitutes `%1`.
-Once the variable is consumed as a pair, the single remaining `%` is the one
-in `%1`, so it cannot be mis-paired into a bogus variable name.
+The expansion order is what makes this safe: the shell expands the
+environment variables when it reads the value, and only then substitutes
+`%1`. Once every `%VAR%` is consumed as a pair, the single remaining `%` is
+the one in `%1`, so it cannot be mis-paired into a bogus variable name.
 
 Under `HKEY_CURRENT_USER` it needs no administrator rights and touches
 nobody else's account; deleting the `hexpair` key removes the entry again,
@@ -436,31 +475,43 @@ COM handler — a registered in-process server, which is a different kind of
 project from a batch file. So `vimhexdiff.cmd` (and `gvimhexdiff.cmd`) does
 what every diff tool on Windows does instead, in two clicks:
 
-The other two entries `vimhex-contex-entry.add.reg` adds, decoded the same
-way as above:
+The other two entries in the submenu are the same shape, differing only in
+the icon, the caption and the `/pick` or `/with` argument handed to
+`gvimhexdiff.cmd`:
 
 ```
-[HKEY_CURRENT_USER\Software\Classes\*\shell\hexpair-pick]
-@="Hex diff: &select left side"
-"Icon"   = %USERPROFILE%\...\hexpair\icons\hexpair-pick.ico
-(command)= cmd.exe /c ""%USERPROFILE%\...\hexpair\gvimhexdiff.cmd" /pick "%1""
+[HKEY_CURRENT_USER\Software\Classes\hexpair.ContextMenu\shell\20-pick]
+"MUIVerb"="gvimhexdiff left"
+"CommandFlags"=dword:00000020        ← the separator above this item
+(command) = … "…\gvimhexdiff.cmd" "/pick" "%1"
 
-[HKEY_CURRENT_USER\Software\Classes\*\shell\hexpair-with]
-@="Hex diff: &against selected"
-"Icon"   = %USERPROFILE%\...\hexpair\icons\hexpair-with.ico
-(command)= cmd.exe /c ""%USERPROFILE%\...\hexpair\gvimhexdiff.cmd" /with "%1""
+[HKEY_CURRENT_USER\Software\Classes\hexpair.ContextMenu\shell\30-with]
+"MUIVerb"="gvimhexdiff right"
+(command) = … "…\gvimhexdiff.cmd" "/with" "%1"
 ```
 
-Right-click the first file and *select left side*, then right-click the
-second and *against selected*. The remembered path lives in
+Right-click the first file and *gvimhexdiff left*, then right-click the
+second and *gvimhexdiff right*. The remembered path lives in
 `%LOCALAPPDATA%\hexpair\diff-left.txt` and is forgotten as soon as it is
 used, so the next comparison starts from a fresh pick rather than silently
-reusing a stale one. The same two steps work from `cmd.exe`:
+reusing a stale one. Picking succeeds silently — nothing appears, by design;
+if you then pick *right* without having picked *left*, a message box says so
+and tells you which entry to use. The same two steps work from `cmd.exe`,
+where the same messages are printed to the console and it waits for a key so
+they can be read:
 
 ```bat
 vimhexdiff /pick old.img
 vimhexdiff /with new.img
 ```
+
+**The diff opens maximized**, in gVim — two hex views side by side want the
+full width, and a narrow window was also what made Vim stop for a hit-enter
+prompt on each file it opened: a long path plus the file size makes that
+message longer than one line, which is exactly what triggers the prompt.
+`vimhexdiff` therefore sets `shortmess+=F` (which drops the message
+outright) and maximizes with the Win32 GUI's own `:simalt ~x`, guarded by
+`has('gui_running')` so console Vim is unaffected.
 
 A buffer hexpair has touched is in one of two views, and `:HexPairToggle`
 moves between them:

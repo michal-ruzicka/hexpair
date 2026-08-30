@@ -97,7 +97,11 @@ REM forking off its own window - long before this line would ever run.
 :launchfailed
 >&2 echo vimhex: could not start "%VIMHEX_VIM%" - is it on PATH?
 >&2 echo vimhex: set VIMHEX_VIM to its full path instead, e.g. "C:\Program Files\Vim\vim91\gvim.exe"
-pause
+REM Stop so the message can be read - but only when there is somebody to
+REM read it. Launched through vimhex-launch.vbs the console is hidden, so a
+REM pause would wait forever where it cannot be seen or dismissed; the
+REM launcher sets HEXPAIR_NO_PAUSE and shows this output in a message box.
+if not defined HEXPAIR_NO_PAUSE pause
 exit /b 1
 
 :usage

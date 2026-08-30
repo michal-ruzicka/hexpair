@@ -3664,19 +3664,20 @@ check "and stops at the last of them" \
 # are told to source can be added to the repo, documented, and then simply
 # not ship - which is exactly what happened to hexpair.vimrc between one
 # commit and the next. The rule is mechanical: every .md, .vim, .txt,
-# hexpair.*, *vimhex*.{cmd,reg} and .ico outside the test directory is
-# something a user gets. *vimhex*.{cmd,reg} rather than *.cmd/*.reg, because
-# pack-release.cmd is a tool for building a release and not a part of one;
-# the leading '*' catches gvimhex.cmd/gvimhexdiff.cmd alongside
-# vimhex.cmd/vimhexdiff.cmd, and vimhex-contex-entry.{add,remove}.reg. A
-# bare '*.ico' is deliberate and asymmetric with the .cmd/.reg rule: every
-# .ico under icons/ is generated output meant to ship (icons/build.py,
-# icons/*.py themselves match no pattern here and so are correctly never
-# expected in FILES - source stays out of the tarball, only what it built
-# goes in).
+# hexpair.*, *vimhex*.{cmd,reg,vbs} and .ico outside the test directory is
+# something a user gets. *vimhex*.{cmd,reg,vbs} rather than *.cmd/*.reg/*.vbs,
+# because pack-release.cmd is a tool for building a release and not a part of
+# one; the leading '*' catches gvimhex.cmd/gvimhexdiff.cmd alongside
+# vimhex.cmd/vimhexdiff.cmd, vimhex-contex-entry.{add,remove}.reg, and
+# vimhex-launch.vbs. A bare '*.ico' is deliberate and asymmetric with that
+# rule: every .ico under icons/ is generated output meant to ship
+# (icons/build.py, icons/*.py and make-context-entry-reg.py themselves match
+# no pattern here and so are correctly never expected in FILES - source stays
+# out of the tarball, only what it built goes in).
 shipped=$(cd "$ROOT" && find . -maxdepth 2 -type f \
     \( -name '*.md' -o -name '*.vim' -o -name '*.txt' -o -name 'hexpair.*' \
-       -o -name '*vimhex*.cmd' -o -name '*vimhex*.reg' -o -name '*.ico' \) \
+       -o -name '*vimhex*.cmd' -o -name '*vimhex*.reg' -o -name '*vimhex*.vbs' \
+       -o -name '*.ico' \) \
     ! -path './test/*' ! -path './.git/*' ! -path './dist/*' \
     | sed 's|^\./||' | sort | tr '\n' ' ')
 packed=$(sed -n '/^FILES/,/^]/p' "$ROOT/pack-release.py" \
@@ -3684,6 +3685,56 @@ packed=$(sed -n '/^FILES/,/^]/p' "$ROOT/pack-release.py" \
     | tr '\n' ' ')
 check "the packaging list is what the repository gives a user" \
     "$shipped" "$packed"
+
+# --- The generated .reg says what it is supposed to say ---------------------
+# vimhex-contex-entry.add.reg carries its paths as REG_EXPAND_SZ, written as
+# hex(2): plus UTF-16LE bytes, which no reviewer is going to read. Decode it
+# back and hold it to the two things that would silently break it:
+#
+#  - every value round-trips to the intended string, NUL-terminated;
+#  - after every complete %VAR% pair is consumed the way the shell consumes
+#    them, exactly ONE lone % is left in each command - the one in %1. That
+#    is what stops %1 being swallowed into a bogus variable name, and it is
+#    the check to re-run whenever a command grows another variable (it has
+#    grown two since: %SystemRoot% for wscript.exe, and a second
+#    %USERPROFILE% for the launcher's own path).
+"$PY" - "$ROOT/vimhex-contex-entry.add.reg" > "$WORK/regcheck.out" <<'REGCHECK'
+import re, sys
+
+raw = open(sys.argv[1], "rb").read().decode("ascii")
+flat = re.sub(r"\\\r\n\s*", "", raw).replace("\r\n", "\n")
+
+values = []
+for m in re.finditer(r'^(@|"Icon")=hex\(2\):([0-9a-f,]+)$', flat, re.M):
+    data = bytes(int(b, 16) for b in m.group(2).split(","))
+    if not data.endswith(b"\x00\x00"):
+        print("NOT NUL-TERMINATED")
+        raise SystemExit
+    values.append((m.group(1), data[:-2].decode("utf-16-le")))
+
+commands = [v for name, v in values if name == "@"]
+icons = [v for name, v in values if name == '"Icon"']
+
+lone = {len(re.sub(r"%[A-Za-z_][A-Za-z0-9_()]*%", "", c).split("%")) - 1
+        for c in commands}
+
+print("values %d" % len(values))
+print("commands %d" % len(commands))
+print("icons %d" % len(icons))
+print("lone-percent %s" % sorted(lone))
+print("all-wscript %s" % all("wscript.exe" in c for c in commands))
+print("all-launcher %s" % all("vimhex-launch.vbs" in c for c in commands))
+print("all-icons-ico %s" % all(i.endswith(".ico") for i in icons))
+REGCHECK
+check "every registry value decodes back to the string it should be" \
+    "values 7 commands 3 icons 4" \
+    "$(sed -n '1,3p' "$WORK/regcheck.out" | tr '\n' ' ' | sed 's/ $//')"
+check "and %1 is the only bare percent left after the variables expand" \
+    "lone-percent [1]" \
+    "$(sed -n 4p "$WORK/regcheck.out")"
+check "every entry goes through the no-console launcher" \
+    "all-wscript True all-launcher True all-icons-ico True" \
+    "$(sed -n '5,7p' "$WORK/regcheck.out" | tr '\n' ' ' | sed 's/ $//')"
 
 # --- The mappings file the plugin ships ------------------------------------
 # hexpair.vimrc is the maintainer's own set of mappings, kept in the repo so

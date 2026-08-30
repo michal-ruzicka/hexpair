@@ -110,16 +110,69 @@ gvimhexdiff.cmd       "gvim" instead of "vim" - what a context-menu verb
                       packaging test's glob is `*vimhex*.cmd` (leading
                       `*`) so it catches these without a separate rule.
 vimhex-contex-entry.  add.reg wires gvimhex.cmd/gvimhexdiff.cmd into the
-  add.reg / .remove.reg  Explorer context menu (open, and the diff
-                      /pick+/with pair) under HKEY_CURRENT_USER;
-                      .remove.reg deletes the same three keys by name (so
-                      it undoes an add.reg generated for ANY path, and
-                      needs no path of its own). Each `\shell\<verb>` key
-                      also carries an "Icon", pointing into icons/.
+  add.reg / .remove.reg  Explorer context menu under HKEY_CURRENT_USER, as
+                      ONE `vimhex` submenu holding three items (open, a
+                      separator, then the diff /pick+/with pair);
+                      .remove.reg deletes the folder and its child key by
+                      name, plus the three TOP-LEVEL keys an older version
+                      created, so an upgrade leaves nothing orphaned - and
+                      needs no path of its own, so it undoes an add.reg
+                      generated for ANY path. Each item carries an "Icon"
+                      pointing into icons/.
+                      Submenu mechanics, all three of which are load-
+                      bearing: the folder is a verb with
+                      "ExtendedSubCommandsKey" and NO \command subkey (a
+                      \command would make it clickable instead of a
+                      folder); the key it names is relative to HKCR, and
+                      HKCU\Software\Classes merges into HKCR, which is
+                      what keeps this out of HKLM - the older
+                      "SubCommands" scheme resolves against HKLM's
+                      CommandStore and needs admin; children sort
+                      ALPHABETICALLY BY KEY NAME, not by write order,
+                      hence the 10-/20-/30- prefixes, and the separator is
+                      "CommandFlags"=dword:20 (ECF_SEPARATORBEFORE) on the
+                      item BELOW the rule.
+                      Each command runs wscript.exe on vimhex-launch.vbs
+                      rather than cmd.exe - see that file.
                       BOTH ARE GENERATED - see make-context-entry-reg.py;
                       do not hand-edit them. Bundled in the release
                       tarball; same packaging-glob mechanism as the .cmd
                       files, `*vimhex*.reg`.
+                      NOTE for Windows 11: this is a "legacy" context
+                      menu, so it sits under "Show more options". Total
+                      Commander (what the maintainer actually uses) shows
+                      the classic menu directly, so it is not a problem
+                      there.
+vimhex-launch.vbs     the no-console launcher every context-menu entry
+                      goes through: `wscript.exe vimhex-launch.vbs
+                      <.cmd> [args]`. Exists because a "cmd.exe /c" verb
+                      creates a console window, and the REPORTED problem
+                      was not the flash itself but the FOCUS: with a
+                      Windows Terminal window already open, the new
+                      console attaches to it and takes focus, dropping
+                      the file manager the menu was used from into the
+                      background. wscript.exe is GUI-subsystem, so no
+                      console is ever allocated; the .cmd runs with
+                      window style 0 and a nonzero exit is reported in a
+                      MsgBox built from the .cmd's redirected output.
+                      Two things here are deliberate and easy to undo by
+                      accident: output goes through a LOG FILE rather
+                      than .Exec(), because .Exec() is exactly what would
+                      create the console this avoids; and it sets
+                      HEXPAIR_NO_PAUSE for the child, because a `pause`
+                      behind a hidden console waits forever where nobody
+                      can see or dismiss it (the .cmd files check that
+                      variable - see :holdopen in vimhexdiff.cmd).
+                      Bundled in the release tarball, CRLF, and caught by
+                      the packaging glob as `*vimhex*.vbs`.
+                      Accepted risk, recorded rather than ignored:
+                      VBScript is deprecated on Windows (a Feature on
+                      Demand from 11 24H2, with removal announced for
+                      later). If it goes, the replacement is a small
+                      GUI-subsystem stub .exe - which the README has
+                      always said is the only other way to avoid the
+                      console - and that means shipping a compiled
+                      binary, which this project so far does not.
 make-context-entry-   generates the two .reg files above. Exists because
   reg.py              the maintainer's requirement is that a DEFAULT
                       install import and work with nothing edited, and
@@ -138,9 +191,13 @@ make-context-entry-   generates the two .reg files above. Exists because
                       it builds the command line. Once %USERPROFILE% is
                       consumed as a pair, the only % left in the string
                       is %1's own - a lone %, so it cannot be mis-paired
-                      into a bogus variable name. Adding a second
-                      %VAR% to a command value would need re-checking
-                      against that. Writes CRLF itself (the files are
+                      into a bogus variable name. That was re-checked when
+                      the commands grew a SECOND and THIRD variable
+                      (%SystemRoot% for wscript.exe, %USERPROFILE% twice
+                      over): still fine, because each is a complete pair,
+                      so the count of leftover lone % stays exactly one.
+                      A generator test decodes every hex(2) value back to
+                      UTF-16 and asserts that count. Writes CRLF itself (the files are
                       generated, so .gitattributes' *.reg rule is a
                       backstop, not the mechanism), and is deterministic
                       - verified by hashing two consecutive runs.

@@ -98,13 +98,22 @@ REM is not decoration: 'scrollbind' syncs movement made from the moment a
 REM window was bound, and all of this happens inside VimEnter - before the
 REM loop that would have done the syncing has run even once.
 REM
-REM Three -c options rather than eight: Vim takes at most ten, and an
+REM Four -c options rather than nine: Vim takes at most ten, and an
 REM :autocmd swallows the bars after it, so each step is one autocommand made
 REM of several commands. The split is "rightbelow" so that the left-hand file
 REM stays on the left whatever 'splitright' says.
+REM
+REM The first one is about the WINDOW rather than the files. Two views side
+REM by side want the full width, and a narrow window is also what made Vim
+REM stop for a hit-enter prompt on every file it opened: a long path plus
+REM the size makes the file message longer than one line, which is exactly
+REM what triggers the prompt. 'shortmess+=F' drops that message outright and
+REM "simalt ~x" is the Win32 GUI's own maximize. Both are guarded rather
+REM than assumed: :simalt exists only in the GUI build, and it has to run
+REM once the GUI is actually up, hence VimEnter rather than a plain -c.
 :run
 if not defined VIMHEX_VIM set "VIMHEX_VIM=vim"
-"%VIMHEX_VIM%" -c "autocmd VimEnter * call HexPairOpenFile($HEXPAIR_DIFF_A) | call HexPairDiffWith($HEXPAIR_DIFF_B)" -c "autocmd VimEnter * rightbelow vsplit | call HexPairOpenFile($HEXPAIR_DIFF_B) | call HexPairDiffWith($HEXPAIR_DIFF_A) | setlocal scrollbind" -c "autocmd VimEnter * wincmd t | setlocal scrollbind | HexPairDiffNext | HexPairSyncViews"
+"%VIMHEX_VIM%" -c "autocmd VimEnter * set shortmess+=F | if has('gui_running') | simalt ~x | endif" -c "autocmd VimEnter * call HexPairOpenFile($HEXPAIR_DIFF_A) | call HexPairDiffWith($HEXPAIR_DIFF_B)" -c "autocmd VimEnter * rightbelow vsplit | call HexPairOpenFile($HEXPAIR_DIFF_B) | call HexPairDiffWith($HEXPAIR_DIFF_A) | setlocal scrollbind" -c "autocmd VimEnter * wincmd t | setlocal scrollbind | HexPairDiffNext | HexPairSyncViews"
 if errorlevel 1 goto launchfailed
 goto :eof
 
@@ -116,16 +125,39 @@ REM long before this line would ever run.
 :launchfailed
 >&2 echo vimhexdiff: could not start "%VIMHEX_VIM%" - is it on PATH?
 >&2 echo vimhexdiff: set VIMHEX_VIM to its full path instead, e.g. "C:\Program Files\Vim\vim91\gvim.exe"
-pause
+call :holdopen
 exit /b 1
 
 :nopick
->&2 echo vimhexdiff: no file remembered - run  vimhexdiff /pick FILE  first
+>&2 echo vimhexdiff: there is no left-hand file to compare against yet.
+>&2 echo.
+>&2 echo Pick one first: right-click the LEFT file and choose
+>&2 echo     vimhex  ^>  gvimhexdiff left
+>&2 echo then right-click the other one and choose
+>&2 echo     vimhex  ^>  gvimhexdiff right
+>&2 echo.
+>&2 echo From a command prompt the same two steps are
+>&2 echo     vimhexdiff /pick FILE
+>&2 echo     vimhexdiff /with FILE
+call :holdopen
 exit /b 1
 
 :gone
->&2 echo vimhexdiff: the remembered file is no longer there: "%HEXPAIR_DIFF_A%"
+>&2 echo vimhexdiff: the file picked as the left-hand side is no longer there:
+>&2 echo     "%HEXPAIR_DIFF_A%"
+>&2 echo.
+>&2 echo It was moved, renamed or deleted since it was picked. Pick it again.
+call :holdopen
 exit /b 1
+
+REM Stop so the message above can be read - but ONLY when there is somebody
+REM to read it. Launched through vimhex-launch.vbs the console is hidden, so
+REM a pause would wait forever where it cannot be seen or dismissed; the
+REM launcher sets HEXPAIR_NO_PAUSE and puts this output in a message box
+REM instead. Run from a real console, nothing sets it and the pause happens.
+:holdopen
+if not defined HEXPAIR_NO_PAUSE pause
+goto :eof
 
 :usage
 >&2 echo usage: vimhexdiff FILE1 FILE2
