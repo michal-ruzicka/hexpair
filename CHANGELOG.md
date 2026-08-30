@@ -21,6 +21,16 @@ and this project adheres to
   file and there is no `%2` without a COM handler - so `vimhexdiff.cmd`
   grew `/pick FILE` and `/with FILE`, the same "select left side, then
   compare against it" every diff tool on Windows uses.
+- **`gvimhex.cmd` and `gvimhexdiff.cmd`**, and `gvimhex`/`gvimhexdiff` in
+  `hexpair.bashrc`, opening gVim instead of console Vim by default - what a
+  double-click or a context-menu verb needs, since neither has a console
+  for `vim` to run in or a way to pass `VIMHEX_VIM`. Each delegates to its
+  `vimhex`/`vimhexdiff` counterpart rather than duplicating the argument
+  grammar.
+- **`vimhex-contex-entry.add.reg` and `vimhex-contex-entry.remove.reg`**,
+  ready-made versions of the registry snippets above - one import wires up
+  all three context-menu entries (pointing at `gvimhex.cmd`/
+  `gvimhexdiff.cmd`), the other removes them again.
 
 ### Fixed
 - **A `^M` at the end of every line of a page, on Windows.** `xxd` opens a

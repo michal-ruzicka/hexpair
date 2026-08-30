@@ -45,9 +45,13 @@ FILES = [
     "hexpair/README.md",
     "hexpair/doc/hexpair.txt",
     "hexpair/ftplugin/xxd.vim",
+    "hexpair/gvimhex.cmd",
+    "hexpair/gvimhexdiff.cmd",
     "hexpair/hexpair.bashrc",
     "hexpair/hexpair.vimrc",
     "hexpair/plugin/hexpair.vim",
+    "hexpair/vimhex-contex-entry.add.reg",
+    "hexpair/vimhex-contex-entry.remove.reg",
     "hexpair/vimhex.cmd",
     "hexpair/vimhexdiff.cmd",
 ]

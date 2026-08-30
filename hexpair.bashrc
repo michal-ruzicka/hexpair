@@ -56,6 +56,11 @@
 #
 # Only the page on screen is read, so the size of the file does not matter.
 # Set VIMHEX_VIM to use a particular Vim, e.g. VIMHEX_VIM=/usr/bin/vim.
+#
+# gvimhex and gvimhexdiff are the same two commands, taking the same
+# arguments, but opening gVim instead - VIMHEX_VIM defaults to "gvim"
+# rather than "vim" there; a VIMHEX_VIM already set in the environment is
+# left alone.
 
 vimhex()
 {
@@ -136,4 +141,20 @@ vimhexdiff()
             -c 'autocmd VimEnter * call HexPairOpenFile($HEXPAIR_DIFF_A) | call HexPairDiffWith($HEXPAIR_DIFF_B)' \
             -c 'autocmd VimEnter * rightbelow vsplit | call HexPairOpenFile($HEXPAIR_DIFF_B) | call HexPairDiffWith($HEXPAIR_DIFF_A) | setlocal scrollbind' \
             -c 'autocmd VimEnter * wincmd t | setlocal scrollbind | HexPairDiffNext | HexPairSyncViews'
+}
+
+# gvimhex and gvimhexdiff delegate to vimhex and vimhexdiff above rather
+# than duplicating them - the argument grammar and the pick/with state
+# handling both stay defined in ONE place. ":-" leaves an already-set
+# VIMHEX_VIM (a full gvim path, say) alone and only supplies "gvim" as the
+# default vimhex/vimhexdiff would otherwise fall back to "vim" for.
+
+gvimhex()
+{
+    VIMHEX_VIM="${VIMHEX_VIM:-gvim}" vimhex "$@"
+}
+
+gvimhexdiff()
+{
+    VIMHEX_VIM="${VIMHEX_VIM:-gvim}" vimhexdiff "$@"
 }

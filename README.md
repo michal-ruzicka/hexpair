@@ -339,6 +339,14 @@ They default to the console `vim`. Set `VIMHEX_VIM` for another one —
 `gvim` for the GUI, or a full path such as
 `C:\Program Files\Vim\vim91\gvim.exe`.
 
+`gvimhex.cmd` and `gvimhexdiff.cmd` are the same two commands again,
+defaulting to `gvim` instead — for double-clicking a file, or wiring into
+the Explorer context menu below, where there is no console for `vim` to run
+in and no way to pass `VIMHEX_VIM` in anyway. They delegate to
+`vimhex.cmd`/`vimhexdiff.cmd` rather than duplicating their argument
+parsing, so keep all four files together; a `VIMHEX_VIM` already set in
+your environment overrides `gvim` there too.
+
 **Where to put them.** They only need to be on `PATH`, and the plugin's own
 directory is the tidiest place to point at, because then updating the plugin
 updates the commands:
@@ -354,14 +362,23 @@ editing **Path** under *User variables*. Do not do it with
 joined together, so that writes the whole lot into your user `Path` and
 truncates it at 1024 characters.
 
-Copying the two files into a directory you already have on `PATH` works just
-as well — they are self-contained, and they find Vim through `PATH` or
-`VIMHEX_VIM` rather than through where they sit themselves.
+Copying the four files into a directory you already have on `PATH` works
+just as well — they find Vim through `PATH` or `VIMHEX_VIM` rather than
+through where they sit themselves. `gvimhex.cmd`/`gvimhexdiff.cmd` do
+depend on where `vimhex.cmd`/`vimhexdiff.cmd` sit, though: copy all four
+together, not a pair on their own.
 
 #### From the Explorer context menu
 
-One file is straightforward. Save this as `hexpair-menu.reg`, with the path
-to `vimhex.cmd` as you actually installed it (the doubled backslashes are
+Two ready-made files ship with the plugin for this: `vimhex-contex-entry.add.reg`
+adds all three entries below in one import, and `vimhex-contex-entry.remove.reg`
+takes them out again. Edit the install path near the top of
+`vimhex-contex-entry.add.reg` first — it ships with the same
+`C:\Users\you\...` placeholder used below — then double-click it, or run
+`reg import vimhex-contex-entry.add.reg`.
+
+What it adds, spelled out: save this as `hexpair-menu.reg`, with the path
+to `gvimhex.cmd` as you actually installed it (the doubled backslashes are
 the `.reg` format's own escaping, not a typo), and double-click it:
 
 ```
@@ -371,23 +388,24 @@ Windows Registry Editor Version 5.00
 @="Open in he&xpair"
 
 [HKEY_CURRENT_USER\Software\Classes\*\shell\hexpair\command]
-@="cmd.exe /c \"\"C:\\Users\\you\\vimfiles\\pack\\plugins\\start\\hexpair\\vimhex.cmd\" \"%1\"\""
+@="cmd.exe /c \"\"C:\\Users\\you\\vimfiles\\pack\\plugins\\start\\hexpair\\gvimhex.cmd\" \"%1\"\""
 ```
 
 Under `HKEY_CURRENT_USER` it needs no administrator rights and touches
-nobody else's account; deleting the `hexpair` key removes the entry again.
-Set `VIMHEX_VIM=gvim` in your user environment if you want the GUI, since a
-verb has no way to pass one in. A console window appears for as long as the
-`.cmd` runs, which is a fraction of a second — the only way to avoid it
-entirely is a GUI stub executable, which this plugin does not ship.
+nobody else's account; deleting the `hexpair` key removes the entry again,
+or import `vimhex-contex-entry.remove.reg`. It calls `gvimhex.cmd`, so it
+opens the GUI without any `VIMHEX_VIM` set — a verb has no way to pass one
+in. A console window appears for as long as the `.cmd` runs, which is a
+fraction of a second — the only way to avoid it entirely is a GUI stub
+executable, which this plugin does not ship.
 
 **Two selected files is not science fiction, but it is not one click
 either.** Explorer runs a context-menu command *once per selected file*,
 each invocation getting its own `%1`; there is no `%2`. Getting all of a
 selection into a single invocation needs a `DropTarget` or `ExplorerCommand`
 COM handler — a registered in-process server, which is a different kind of
-project from a batch file. So `vimhexdiff.cmd` does what every diff tool on
-Windows does instead, in two clicks:
+project from a batch file. So `vimhexdiff.cmd` (and `gvimhexdiff.cmd`) does
+what every diff tool on Windows does instead, in two clicks:
 
 ```
 Windows Registry Editor Version 5.00
@@ -396,13 +414,13 @@ Windows Registry Editor Version 5.00
 @="Hex diff: &select left side"
 
 [HKEY_CURRENT_USER\Software\Classes\*\shell\hexpair-pick\command]
-@="cmd.exe /c \"\"C:\\Users\\you\\vimfiles\\pack\\plugins\\start\\hexpair\\vimhexdiff.cmd\" /pick \"%1\"\""
+@="cmd.exe /c \"\"C:\\Users\\you\\vimfiles\\pack\\plugins\\start\\hexpair\\gvimhexdiff.cmd\" /pick \"%1\"\""
 
 [HKEY_CURRENT_USER\Software\Classes\*\shell\hexpair-with]
 @="Hex diff: &against selected"
 
 [HKEY_CURRENT_USER\Software\Classes\*\shell\hexpair-with\command]
-@="cmd.exe /c \"\"C:\\Users\\you\\vimfiles\\pack\\plugins\\start\\hexpair\\vimhexdiff.cmd\" /with \"%1\"\""
+@="cmd.exe /c \"\"C:\\Users\\you\\vimfiles\\pack\\plugins\\start\\hexpair\\gvimhexdiff.cmd\" /with \"%1\"\""
 ```
 
 Right-click the first file and *select left side*, then right-click the

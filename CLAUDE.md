@@ -68,6 +68,37 @@ vimhexdiff.cmd        functions in hexpair.bashrc, same names and same
                       part of a release). NOT exercised by CI: the
                       Windows job runs the Vim suite under Git Bash, so
                       the batch itself is only ever run by hand.
+gvimhex.cmd           the same two commands, defaulting VIMHEX_VIM to
+gvimhexdiff.cmd       "gvim" instead of "vim" - what a context-menu verb
+                      or a double-click needs, since neither has a
+                      console to run the console Vim in or a way to pass
+                      VIMHEX_VIM. Each `call`s its vimhex.cmd/
+                      vimhexdiff.cmd counterpart via `%~dp0` (this
+                      directory) rather than reimplementing the argument
+                      parsing and, for the diff pair, the /pick-/with
+                      state file - one source of truth for that grammar.
+                      Consequence: unlike vimhex.cmd/vimhexdiff.cmd
+                      themselves, these two are NOT independently
+                      relocatable - they must stay next to the
+                      vimhex*.cmd they call. Same CRLF and packaging
+                      treatment as vimhex.cmd/vimhexdiff.cmd; the
+                      packaging test's glob is `*vimhex*.cmd` (leading
+                      `*`) so it catches these without a separate rule.
+vimhex-contex-entry.  add.reg wires gvimhex.cmd/gvimhexdiff.cmd into the
+  add.reg / .remove.reg  Explorer context menu (open, and the diff
+                      /pick+/with pair) under HKEY_CURRENT_USER, as one
+                      importable file rather than the hand-copied
+                      snippets README.md also spells out inline; .remove.reg
+                      deletes the same three keys by name. Ships with the
+                      same C:\Users\you\... placeholder path as the
+                      README snippets - editing it before import is on
+                      the user, there is no way to know the install path
+                      from inside a .reg file. Plain ASCII, CRLF (same
+                      .gitattributes rule, widened to *.reg), no
+                      %ENVVAR% expansion available (Explorer's shell
+                      command values are read literally). Bundled in the
+                      release tarball; same packaging-glob mechanism as
+                      the .cmd files, `*vimhex*.reg`.
 pack-release          - POSIX wrapper around pack-release.py
 pack-release.cmd      - Windows wrapper around pack-release.py
 pack-release.py       - the packaging implementation (python3, stdlib

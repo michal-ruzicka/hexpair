@@ -1,0 +1,53 @@
+Windows Registry Editor Version 5.00
+
+; ===========================================================================
+; vimhex-contex-entry.add.reg - Explorer context-menu entries for hexpair
+;
+; Maintainer:  Michal Ruzicka <ruzicka.mich@gmail.com>
+; URL:         https://github.com/michal-ruzicka/hexpair
+; License:     Vim License - same terms as Vim itself (see LICENSE.md
+;              or :help license); SPDX-License-Identifier: Vim
+;
+; Adds three right-click entries under HKEY_CURRENT_USER - no administrator
+; rights needed, nobody else's account touched:
+;
+;   Open in hexpair              gvimhex.cmd on the file you right-clicked
+;   Hex diff: select left side   gvimhexdiff.cmd /pick  on the first file
+;   Hex diff: against selected   gvimhexdiff.cmd /with  on the second file
+;
+; They call gvimhex.cmd / gvimhexdiff.cmd, not vimhex.cmd / vimhexdiff.cmd -
+; a context-menu verb has no console window to run the console Vim in, and
+; gvimhex.cmd/gvimhexdiff.cmd already default to gVim for exactly that
+; reason, without needing VIMHEX_VIM set in your user environment.
+;
+; BEFORE IMPORTING: edit the path below on all three "command" lines to
+; where you actually installed the plugin (the doubled backslashes are the
+; .reg format's own escaping, not a typo). The path shown,
+; C:\Users\you\vimfiles\pack\plugins\start\hexpair, is the Vim-8-package
+; location README.md's "Windows: vimhex and vimhexdiff outside Vim" section
+; walks through; change it if you installed elsewhere.
+;
+; Then double-click this file, or run:  reg import vimhex-contex-entry.add.reg
+;
+; vimhex-contex-entry.remove.reg undoes exactly this again. A console
+; window appears for a fraction of a second while gvimhex.cmd/
+; gvimhexdiff.cmd itself runs - see README.md for why.
+; ===========================================================================
+
+[HKEY_CURRENT_USER\Software\Classes\*\shell\hexpair]
+@="Open in he&xpair"
+
+[HKEY_CURRENT_USER\Software\Classes\*\shell\hexpair\command]
+@="cmd.exe /c \"\"C:\\Users\\you\\vimfiles\\pack\\plugins\\start\\hexpair\\gvimhex.cmd\" \"%1\"\""
+
+[HKEY_CURRENT_USER\Software\Classes\*\shell\hexpair-pick]
+@="Hex diff: &select left side"
+
+[HKEY_CURRENT_USER\Software\Classes\*\shell\hexpair-pick\command]
+@="cmd.exe /c \"\"C:\\Users\\you\\vimfiles\\pack\\plugins\\start\\hexpair\\gvimhexdiff.cmd\" /pick \"%1\"\""
+
+[HKEY_CURRENT_USER\Software\Classes\*\shell\hexpair-with]
+@="Hex diff: &against selected"
+
+[HKEY_CURRENT_USER\Software\Classes\*\shell\hexpair-with\command]
+@="cmd.exe /c \"\"C:\\Users\\you\\vimfiles\\pack\\plugins\\start\\hexpair\\gvimhexdiff.cmd\" /with \"%1\"\""

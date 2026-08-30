@@ -1485,7 +1485,14 @@ Path and truncates the result at 1024 characters.
 They default to the console `vim`; set $VIMHEX_VIM to `gvim`, or to a full
 path, for another one.
 
-vimhexdiff.cmd takes two more forms, for the Explorer context menu: >
+gvimhex.cmd and gvimhexdiff.cmd are the same two commands again, defaulting
+$VIMHEX_VIM to `gvim` instead - for a double-click or a context-menu verb,
+where there is no console for `vim` to run in and no way to pass
+$VIMHEX_VIM.  They call vimhex.cmd/vimhexdiff.cmd rather than duplicating
+their parsing, so keep all four files together.
+
+vimhexdiff.cmd (and gvimhexdiff.cmd) takes two more forms, for the Explorer
+context menu: >
 
     vimhexdiff /pick FILE    remember FILE as the left-hand side
     vimhexdiff /with FILE    diff it against the remembered one
@@ -1495,7 +1502,8 @@ own %1, so a verb cannot be handed two of them at once without a COM
 handler; these are the two steps every diff tool on Windows solves that
 with.  The remembered path lives in %LOCALAPPDATA%\hexpair\diff-left.txt
 and is forgotten as soon as it is used.  README.md, under "Windows: vimhex
-and vimhexdiff outside Vim", has the registry entries.
+and vimhexdiff outside Vim", has the registry entries, and
+vimhex-contex-entry.add.reg/.remove.reg ship ready-made versions of them.
 
 ==============================================================================
 9. Limitations                                           *hexpair-limitations*

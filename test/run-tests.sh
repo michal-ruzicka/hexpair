@@ -3664,12 +3664,14 @@ check "and stops at the last of them" \
 # are told to source can be added to the repo, documented, and then simply
 # not ship - which is exactly what happened to hexpair.vimrc between one
 # commit and the next. The rule is mechanical: every .md, .vim, .txt,
-# hexpair.* and vimhex*.cmd outside the test directory is something a user
-# gets. vimhex*.cmd rather than *.cmd, because pack-release.cmd is a tool for
-# building a release and not a part of one.
+# hexpair.* and *vimhex*.{cmd,reg} outside the test directory is something a
+# user gets. *vimhex*.{cmd,reg} rather than *.cmd/*.reg, because
+# pack-release.cmd is a tool for building a release and not a part of one;
+# the leading '*' catches gvimhex.cmd/gvimhexdiff.cmd alongside
+# vimhex.cmd/vimhexdiff.cmd, and vimhex-contex-entry.{add,remove}.reg.
 shipped=$(cd "$ROOT" && find . -maxdepth 2 -type f \
     \( -name '*.md' -o -name '*.vim' -o -name '*.txt' -o -name 'hexpair.*' \
-       -o -name 'vimhex*.cmd' \) \
+       -o -name '*vimhex*.cmd' -o -name '*vimhex*.reg' \) \
     ! -path './test/*' ! -path './.git/*' ! -path './dist/*' \
     | sed 's|^\./||' | sort | tr '\n' ' ')
 packed=$(sed -n '/^FILES/,/^]/p' "$ROOT/pack-release.py" \
