@@ -3664,14 +3664,19 @@ check "and stops at the last of them" \
 # are told to source can be added to the repo, documented, and then simply
 # not ship - which is exactly what happened to hexpair.vimrc between one
 # commit and the next. The rule is mechanical: every .md, .vim, .txt,
-# hexpair.* and *vimhex*.{cmd,reg} outside the test directory is something a
-# user gets. *vimhex*.{cmd,reg} rather than *.cmd/*.reg, because
+# hexpair.*, *vimhex*.{cmd,reg} and .ico outside the test directory is
+# something a user gets. *vimhex*.{cmd,reg} rather than *.cmd/*.reg, because
 # pack-release.cmd is a tool for building a release and not a part of one;
 # the leading '*' catches gvimhex.cmd/gvimhexdiff.cmd alongside
-# vimhex.cmd/vimhexdiff.cmd, and vimhex-contex-entry.{add,remove}.reg.
+# vimhex.cmd/vimhexdiff.cmd, and vimhex-contex-entry.{add,remove}.reg. A
+# bare '*.ico' is deliberate and asymmetric with the .cmd/.reg rule: every
+# .ico under icons/ is generated output meant to ship (icons/build.py,
+# icons/*.py themselves match no pattern here and so are correctly never
+# expected in FILES - source stays out of the tarball, only what it built
+# goes in).
 shipped=$(cd "$ROOT" && find . -maxdepth 2 -type f \
     \( -name '*.md' -o -name '*.vim' -o -name '*.txt' -o -name 'hexpair.*' \
-       -o -name '*vimhex*.cmd' -o -name '*vimhex*.reg' \) \
+       -o -name '*vimhex*.cmd' -o -name '*vimhex*.reg' -o -name '*.ico' \) \
     ! -path './test/*' ! -path './.git/*' ! -path './dist/*' \
     | sed 's|^\./||' | sort | tr '\n' ' ')
 packed=$(sed -n '/^FILES/,/^]/p' "$ROOT/pack-release.py" \

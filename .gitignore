@@ -1,6 +1,9 @@
 # Released tarballs
 dist/
 
+# Python bytecode cache (icons/build.py and friends)
+__pycache__/
+
 # VS Code (keep workspace-level config out of the repo unless intentionally shared)
 .vscode/
 

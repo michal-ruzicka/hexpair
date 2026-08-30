@@ -125,17 +125,61 @@ vimhex-contex-entry.  add.reg wires gvimhex.cmd/gvimhexdiff.cmd into the
                       release tarball; same packaging-glob mechanism as
                       the .cmd files, `*vimhex*.reg`.
                       Each `\shell\<verb>` key also carries an "Icon"
-                      value pointing at gvim.exe - a SECOND placeholder
-                      path (Vim's own install directory, not the
-                      plugin's), because Explorer has no icon to show
-                      for a verb whose command is a .cmd file; unlike
-                      the plugin-path placeholder, this one is not
-                      derivable from anything else already in the file,
-                      so it stays a literal example
-                      (C:\Program Files\Vim\vim91\gvim.exe) the user
-                      edits by hand. .remove.reg needs no change for
-                      this - deleting the parent key removes its Icon
-                      value along with everything else under it.
+                      value, pointing at icons/hexpair-open.ico,
+                      -pick.ico or -with.ico under the SAME
+                      already-editable plugin-path placeholder (an
+                      earlier version pointed Icon at gvim.exe instead -
+                      Vim's own install directory, a SECOND unrelated
+                      placeholder the user had to fill in separately;
+                      shipping real icons removed that). .remove.reg
+                      needs no change for this - deleting the parent key
+                      removes its Icon value along with everything else
+                      under it.
+icons/                three custom icons for the entries above, and
+                      what generates them:
+                      - rasticon.py: a from-scratch vector rasterizer
+                        plus PNG/ICO encoder, stdlib only (no Pillow/
+                        ImageMagick on the box this was built on, and
+                        the plugin's own no-incidental-tooling rule
+                        fit anyway). Draw calls run in 0..1 unit-square
+                        coordinates against a Canvas rendered at 4x
+                        supersample and box-downsampled, so one shape
+                        spec produces every target size cleanly. PNG
+                        write path is the minimum valid subset (IHDR/
+                        IDAT/IEND, filter type 0, zlib); ICO write path
+                        packs PNG-format entries per the Vista+ scheme
+                        (a 0 width/height byte in an ICONDIRENTRY means
+                        256, since the field is one byte).
+                      - design.py: the three icon specs. A V mark
+                        (ORIGINAL - not extracted from a real gvim.exe,
+                        there being no Windows box handy to pull one off
+                        of - in Vim's own green) plus a "0x" badge
+                        (bottom-right, smaller, the blocky 5x7 font) on
+                        all three, and on the diff pair a bigger
+                        bottom-left badge of two window panes (echoing
+                        vimhexdiff's own actual `vsplit`) - blue left /
+                        orange right, the side THIS icon represents at
+                        full colour and the other dimmed toward the
+                        badge's dark frame.
+                        SUPERSEDED first design, kept here for why:
+                        top-right diff mark plus top-left L/R letter (or
+                        a left/right arrow) - all discarded once actually
+                        compared at 16px, where neither text nor an arrow
+                        stayed legible; colour-coding one badge does.
+                      - build.py: renders icons/*.ico (sizes 16/24/32/
+                        48/256) from design.py. Deterministic (no
+                        timestamps, no randomness) - confirmed by hash,
+                        re-running it after an unrelated change must not
+                        touch the .ico files.
+                      Only the three .ico files are bundled in the
+                      release tarball (pack-release.py's FILES) - the
+                      packaging test's glob gained a bare `*.ico`
+                      (asymmetric with the `*vimhex*.{cmd,reg}` rule
+                      on purpose: every .ico ships, but rasticon.py/
+                      design.py/build.py themselves match no pattern
+                      there and so are correctly never expected in
+                      FILES - source stays out of the tarball, only
+                      what it built goes in).
 pack-release          - POSIX wrapper around pack-release.py
 pack-release.cmd      - Windows wrapper around pack-release.py
 pack-release.py       - the packaging implementation (python3, stdlib

@@ -20,19 +20,15 @@ Windows Registry Editor Version 5.00
 ; gvimhex.cmd/gvimhexdiff.cmd already default to gVim for exactly that
 ; reason, without needing VIMHEX_VIM set in your user environment.
 ;
-; BEFORE IMPORTING: edit two things, each appearing three times below.
-;
-; 1. The path on every "command" line, to where you actually installed the
-;    plugin (the doubled backslashes are the .reg format's own escaping,
-;    not a typo). The path shown, C:\Users\you\vimfiles\pack\plugins\start\
-;    hexpair, is the Vim-8-package location README.md's "Windows: vimhex
-;    and vimhexdiff outside Vim" section walks through; change it if you
-;    installed elsewhere.
-; 2. The path on every "Icon" line, to the gvim.exe you actually have -
-;    this is Vim's OWN install directory, not the plugin's, so it is a
-;    different path from (1). The context menu has no icon without this;
-;    Explorer cannot pull one out of a .cmd file the way it can out of an
-;    .exe, so the icon has to be pointed at gvim.exe explicitly.
+; BEFORE IMPORTING: edit the path below - it appears six times, once per
+; "command" line and once per "Icon" line - to where you actually installed
+; the plugin (the doubled backslashes are the .reg format's own escaping,
+; not a typo). The path shown, C:\Users\you\vimfiles\pack\plugins\start\
+; hexpair, is the Vim-8-package location README.md's "Windows: vimhex and
+; vimhexdiff outside Vim" section walks through; change it if you installed
+; elsewhere. One placeholder covers both this time: the icons ship inside
+; the plugin's own icons\ directory, so "Icon" needs no separate path of
+; its own the way pointing it at gvim.exe would have.
 ;
 ; Then double-click this file, or run:  reg import vimhex-contex-entry.add.reg
 ;
@@ -44,25 +40,32 @@ Windows Registry Editor Version 5.00
 ; more and read what they say (most likely: gvim.exe is not on PATH; set
 ; VIMHEX_VIM to its full path in your user environment as a fix that does
 ; not need editing this file again).
+;
+; The three .ico files (icons/hexpair-open.ico, -pick.ico, -with.ico) are
+; generated, not hand-drawn - icons/build.py (icons/design.py, rasticon.py)
+; renders them from vector shapes with a from-scratch PNG/ICO encoder, no
+; image library involved. Re-run it after changing the design; only the
+; .ico output ships in the release tarball, the generator stays a
+; development file.
 ; ===========================================================================
 
 [HKEY_CURRENT_USER\Software\Classes\*\shell\hexpair]
 @="Open in he&xpair"
-"Icon"="C:\\Program Files\\Vim\\vim91\\gvim.exe"
+"Icon"="C:\\Users\\you\\vimfiles\\pack\\plugins\\start\\hexpair\\icons\\hexpair-open.ico"
 
 [HKEY_CURRENT_USER\Software\Classes\*\shell\hexpair\command]
 @="cmd.exe /c \"\"C:\\Users\\you\\vimfiles\\pack\\plugins\\start\\hexpair\\gvimhex.cmd\" \"%1\"\""
 
 [HKEY_CURRENT_USER\Software\Classes\*\shell\hexpair-pick]
 @="Hex diff: &select left side"
-"Icon"="C:\\Program Files\\Vim\\vim91\\gvim.exe"
+"Icon"="C:\\Users\\you\\vimfiles\\pack\\plugins\\start\\hexpair\\icons\\hexpair-pick.ico"
 
 [HKEY_CURRENT_USER\Software\Classes\*\shell\hexpair-pick\command]
 @="cmd.exe /c \"\"C:\\Users\\you\\vimfiles\\pack\\plugins\\start\\hexpair\\gvimhexdiff.cmd\" /pick \"%1\"\""
 
 [HKEY_CURRENT_USER\Software\Classes\*\shell\hexpair-with]
 @="Hex diff: &against selected"
-"Icon"="C:\\Program Files\\Vim\\vim91\\gvim.exe"
+"Icon"="C:\\Users\\you\\vimfiles\\pack\\plugins\\start\\hexpair\\icons\\hexpair-with.ico"
 
 [HKEY_CURRENT_USER\Software\Classes\*\shell\hexpair-with\command]
 @="cmd.exe /c \"\"C:\\Users\\you\\vimfiles\\pack\\plugins\\start\\hexpair\\gvimhexdiff.cmd\" /with \"%1\"\""

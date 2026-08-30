@@ -372,24 +372,23 @@ together, not a pair on their own.
 
 Two ready-made files ship with the plugin for this: `vimhex-contex-entry.add.reg`
 adds all three entries below in one import, and `vimhex-contex-entry.remove.reg`
-takes them out again. Edit two things near the top of
-`vimhex-contex-entry.add.reg` first — the plugin's own install path (the
-same `C:\Users\you\...` placeholder used below), and separately the path to
-your `gvim.exe`, which is what supplies the entries' icon and lives under
-Vim's *own* install directory, not the plugin's — then double-click it, or
-run `reg import vimhex-contex-entry.add.reg`.
+takes them out again. Edit the plugin's own install path near the top of
+`vimhex-contex-entry.add.reg` first — the same `C:\Users\you\...` placeholder
+used below, six times: once per `command` line and once per `Icon` line,
+since the icons ship inside the plugin's own `icons\` directory too — then
+double-click it, or run `reg import vimhex-contex-entry.add.reg`.
 
 What it adds, spelled out: save this as `hexpair-menu.reg`, with the path
-to `gvimhex.cmd` as you actually installed it and the path to `gvim.exe`
-for the icon (the doubled backslashes are the `.reg` format's own
-escaping, not a typo), and double-click it:
+to `gvimhex.cmd` and to `icons\hexpair-open.ico` as you actually installed
+them (the doubled backslashes are the `.reg` format's own escaping, not a
+typo), and double-click it:
 
 ```
 Windows Registry Editor Version 5.00
 
 [HKEY_CURRENT_USER\Software\Classes\*\shell\hexpair]
 @="Open in he&xpair"
-"Icon"="C:\\Program Files\\Vim\\vim91\\gvim.exe"
+"Icon"="C:\\Users\\you\\vimfiles\\pack\\plugins\\start\\hexpair\\icons\\hexpair-open.ico"
 
 [HKEY_CURRENT_USER\Software\Classes\*\shell\hexpair\command]
 @="cmd.exe /c \"\"C:\\Users\\you\\vimfiles\\pack\\plugins\\start\\hexpair\\gvimhex.cmd\" \"%1\"\""
@@ -409,6 +408,17 @@ most commonly because `gvim`/`vim` is not on `PATH`; the fix that needs no
 `.reg` re-edit is setting `VIMHEX_VIM` to its full path in your user
 environment.
 
+The three `.ico` files are generated, not hand-drawn — a small V mark in
+Vim's own green, plus a `0x` badge (bottom-right) marking these as
+hexpair's, and on the diff pair a bigger badge (bottom-left) of two window
+panes, echoing `vimhexdiff`'s own actual `vsplit`: blue on the left, orange
+on the right, the side that entry represents shown at full colour and the
+other dimmed, since at 16px neither text nor an arrow reads reliably but
+colour still does. `icons/build.py` renders them (`icons/design.py`,
+`icons/rasticon.py` — a from-scratch PNG/ICO encoder, no image library);
+only the `.ico` output ships in the release tarball, the generator stays a
+development file.
+
 **Two selected files is not science fiction, but it is not one click
 either.** Explorer runs a context-menu command *once per selected file*,
 each invocation getting its own `%1`; there is no `%2`. Getting all of a
@@ -422,14 +432,14 @@ Windows Registry Editor Version 5.00
 
 [HKEY_CURRENT_USER\Software\Classes\*\shell\hexpair-pick]
 @="Hex diff: &select left side"
-"Icon"="C:\\Program Files\\Vim\\vim91\\gvim.exe"
+"Icon"="C:\\Users\\you\\vimfiles\\pack\\plugins\\start\\hexpair\\icons\\hexpair-pick.ico"
 
 [HKEY_CURRENT_USER\Software\Classes\*\shell\hexpair-pick\command]
 @="cmd.exe /c \"\"C:\\Users\\you\\vimfiles\\pack\\plugins\\start\\hexpair\\gvimhexdiff.cmd\" /pick \"%1\"\""
 
 [HKEY_CURRENT_USER\Software\Classes\*\shell\hexpair-with]
 @="Hex diff: &against selected"
-"Icon"="C:\\Program Files\\Vim\\vim91\\gvim.exe"
+"Icon"="C:\\Users\\you\\vimfiles\\pack\\plugins\\start\\hexpair\\icons\\hexpair-with.ico"
 
 [HKEY_CURRENT_USER\Software\Classes\*\shell\hexpair-with\command]
 @="cmd.exe /c \"\"C:\\Users\\you\\vimfiles\\pack\\plugins\\start\\hexpair\\gvimhexdiff.cmd\" /with \"%1\"\""
