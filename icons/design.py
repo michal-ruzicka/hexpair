@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """hexpair's three Explorer context-menu icons.
 
 A gVim-ish base mark - a white V on Vim's own green, original rather than

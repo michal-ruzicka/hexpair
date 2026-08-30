@@ -24,7 +24,7 @@ differences marked](demo/hexpair-demo.gif)
 
 **It is not the best hex editor in the world**, and does not try to be. **But it
 is always a _single command_ away wherever you already
-have in Vim** — no system install, no package manager, nothing to get approved.
+have Vim** — no system install, no package manager, nothing to get approved.
 Everything runs on `xxd`, which ships with Vim itself, and portable
 VimScript: no `sed`, `tr`, `dd` or anything else, so it behaves the same
 on Linux, on native Windows (where `xxd.exe` is found inside the Vim
