@@ -499,8 +499,13 @@ Right-click one file and *select as left*, the other and *select as right* —
 whichever completes the pair opens the comparison and clears both, so the
 next diff starts from a clean slate rather than silently reusing a stale
 selection. Selecting the same side twice overwrites it — changing your mind
-about one half says nothing about the other. The same two steps work from
-`cmd.exe`:
+about one half says nothing about the other.
+
+If the file selected as the *other* side has been moved or deleted in the
+meantime, only *that* selection is cleared and the one you just made is
+kept — nothing is wrong with it, so you are not asked to pick it again.
+Selecting a new partner for it runs the comparison straight away. The same
+two steps work from `cmd.exe`:
 
 ```bat
 vimhexdiff /left old.img

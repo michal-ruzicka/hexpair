@@ -41,6 +41,12 @@ REM Selecting the same side twice just overwrites it - changing your mind
 REM about one half of a comparison is not a failure, and says nothing about
 REM whether the other half is selected.
 REM
+REM A selection is only ever forgotten for a reason that applies to IT: both
+REM go when a comparison actually opens, and a side whose file has since been
+REM moved or deleted goes on its own, leaving the other one selected. The
+REM general rule is that nothing makes the user redo work that nothing went
+REM wrong with.
+REM
 REM The two names are kept in %LOCALAPPDATA%\hexpair\diff-left.txt and
 REM diff-right.txt - a path each and nothing else.
 REM
@@ -101,9 +107,16 @@ set /p HEXPAIR_OTHER_FILE=<"%HEXPAIR_OTHER_STATE%"
 if not defined HEXPAIR_OTHER_FILE goto :eof
 set "HEXPAIR_OTHER_FILE=%HEXPAIR_OTHER_FILE:~1,-1%"
 
-REM Both sides are in. Forget them before doing anything that can fail: a
-REM selection left lying about is one a later pick would silently compare
-REM against, long after the file it names has moved or gone.
+REM Check the other side before forgetting anything, so that a stale
+REM selection costs only itself. Nothing is wrong with the side just
+REM selected, and clearing it too would make the user re-select a file that
+REM is sitting right there.
+if not exist "%HEXPAIR_OTHER_FILE%" goto gone
+
+REM Both sides are in and both files are there. Forget both now, before
+REM handing over to Vim: a selection left lying about is one a later
+REM selection would silently compare against, long after the file it names
+REM has moved or gone.
 del "%HEXPAIR_STATE_DIR%\diff-left.txt" 2>nul
 del "%HEXPAIR_STATE_DIR%\diff-right.txt" 2>nul
 
@@ -112,7 +125,6 @@ if "%HEXPAIR_THIS%"=="left" set "HEXPAIR_DIFF_B=%HEXPAIR_OTHER_FILE%"
 if "%HEXPAIR_THIS%"=="right" set "HEXPAIR_DIFF_A=%HEXPAIR_OTHER_FILE%"
 if "%HEXPAIR_THIS%"=="right" set "HEXPAIR_DIFF_B=%~f2"
 
-if not exist "%HEXPAIR_OTHER_FILE%" goto gone
 goto run
 
 REM Everything runs from VimEnter - a plain -c would run before hexpair has
@@ -154,15 +166,17 @@ REM long before this line would ever run.
 call :holdopen
 exit /b 1
 
-REM The other side named a file that is not there any more. Both selections
-REM have already been cleared above, so saying "select it again" is honest:
-REM there is nothing stale left to trip over on the next attempt.
+REM The other side named a file that is not there any more. Forget ONLY that
+REM one: the side just selected is fine, and asking for it again would be
+REM asking the user to redo work that nothing went wrong with.
 :gone
+del "%HEXPAIR_OTHER_STATE%" 2>nul
 >&2 echo vimhexdiff: the file selected as the %HEXPAIR_OTHER% side is no longer there:
 >&2 echo     "%HEXPAIR_OTHER_FILE%"
 >&2 echo.
->&2 echo It was moved, renamed or deleted since it was selected.
->&2 echo Both selections have been cleared - select the two files again.
+>&2 echo It was moved, renamed or deleted since it was selected, and that
+>&2 echo selection has been cleared. The %HEXPAIR_THIS% side is still selected -
+>&2 echo just select a new %HEXPAIR_OTHER% side to compare it against.
 call :holdopen
 exit /b 1
 

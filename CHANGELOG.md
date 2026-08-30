@@ -22,7 +22,9 @@ and this project adheres to
   `vimhexdiff.cmd` grew `/left FILE` and `/right FILE`. They are
   **symmetric**: either may be used first, each records its side and stops,
   and whichever completes the pair opens the comparison and clears both
-  selections. Selecting the same side twice just overwrites it.
+  selections. Selecting the same side twice just overwrites it, and if the
+  other side's file has been moved or deleted since, only that selection is
+  cleared — the one just made is kept, so nothing has to be re-selected.
 - **`gvimhex.cmd` and `gvimhexdiff.cmd`**, and `gvimhex`/`gvimhexdiff` in
   `hexpair.bashrc`, opening gVim instead of console Vim by default - what a
   double-click or a context-menu verb needs, since neither has a console
