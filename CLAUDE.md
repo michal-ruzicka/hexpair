@@ -649,6 +649,22 @@ serves is the one already stated above: **assert against the value the code will
 actually use** — here, by having the fixture's own Vim script write out
 `fnamemodify(path, ':~:.')` and comparing against that.
 
+**The Windows CI job hangs in the 4 GiB straddle block, and that block is
+skipped there** (`$IS_WIN`, set by asking the Vim under test rather than
+the shell - Git Bash says MSYS whichever Vim is being tested). Past 2 GiB a
+Windows Vim reaches a file through PowerShell rather than xxd, so the block
+stops testing what it exists for (xxd's own offset-column widening) and
+becomes the first place in the suite that starts PowerShell at all. The job
+then times out at fifteen minutes. **The cause is not known**: the same
+reads and writes work on a real Windows machine on a 120 GiB file, at about
+a second a page, so it is something about that runner - PowerShell absent,
+shimmed, or blocked - and not about the code path. Skipping is a way to see
+the rest of the suite, not a fix; a run of
+`powershell -NoProfile -NonInteractive -Command "exit 0"` timed in that job
+is the thing that would settle it. Nothing is lost meanwhile: the widening
+is checked without a 4 GiB file by "and the column widens past eight
+digits", and the PowerShell paths by the checks that call them directly.
+
 **Read the check COUNT, not just the last line.** The suite is one long
 sequence of blocks, and an edit that replaces a span of it can swallow
 whole blocks that happen to live inside that span - which the suite then
