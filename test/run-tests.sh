@@ -3174,6 +3174,42 @@ check "and comes back as flat lowercase hex, dots and all removed" \
 check "and past the end it is nothing, not something" "''" \
     "$(sed -n 3p "$WORK/tblob.out")"
 
+# The page a user LOOKS at is a second xxd call, with the same -s and so the
+# same 2 GiB clamp: every page past it showed the bytes at 2 GiB, which is
+# why paging back from the end of a 120 GiB file showed one page over and
+# over. Past the limit the dump is built here instead - it cannot be handed
+# to xxd with -o either, since that display offset is an unsigned long too
+# and the column would wrap at 4 GiB.
+#
+# So the formatting has to be xxd's exactly. Held against real xxd output
+# rather than against a description of it: full lines, a short last line,
+# and two different bytes-per-line, since the padding of a short line is
+# what a hand-rolled formatter gets wrong.
+cat > "$WORK/tdump.vim" <<EOF
+$(printf "$HEX")
+let out = []
+for [f, n] in [['$WORK/diffa.bin', 16], ['$WORK/diffa.bin', 23], ['$WORK/char1.bin', 16]]
+  let want = systemlist(printf('$HEXPAIR_XXD -g 1 -c %d %s', n, shellescape(f)))
+  let hex = tolower(substitute(strpart(string(readblob(f)), 2), '\\.', '', 'g'))
+  call add(out, want ==# HexPairPagedDumpLines(hex, 0, n) ? 'match' : 'DIFFER')
+endfor
+" And at a large base, where the offset column is wider than eight digits -
+" the case xxd's own -o could not have produced correctly on Windows.
+call add(out, HexPairPagedDumpLines('00ff41', 0x1234567890, 16)[0])
+call writefile(out, '$WORK/tdump.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tdump.vim" < /dev/null
+check "the dump built here is the dump xxd prints" "match" \
+    "$(sed -n 1p "$WORK/tdump.out")"
+check "including a short last line, at another width" "match" \
+    "$(sed -n 2p "$WORK/tdump.out")"
+check "and a page shorter than one line" "match" \
+    "$(sed -n 3p "$WORK/tdump.out")"
+check "an offset past 32 bits widens the column and stays exact" \
+    "1234567890: 00 ff 41                                         ..A" \
+    "$(sed -n 4p "$WORK/tdump.out")"
+
 # --- :HexPairDiffShow - what the other file has here ----------------------
 # The marking says WHICH bytes differ and no more; past the end of the other
 # file every byte is marked and the reason is invisible. This says what is

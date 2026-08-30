@@ -86,7 +86,13 @@ and this project adheres to
   wholly past the shorter file's end - both files were being read at 2 GiB,
   where the shorter one does have data - while the identical hexpair on the
   identical files was right under WSL, where a `long` is 64 bits. Reads past
-  that limit now go through `readblob()`, which takes a 64-bit offset.
+  that limit now go through `readblob()`, which takes a 64-bit offset —
+  including the page you actually look at, which is a second `xxd` call with
+  the same clamp: every page past 2 GiB showed the bytes at 2 GiB, so paging
+  back from the end of a 120 GiB file showed one page over and over. That
+  dump is built in VimScript there, since handing xxd the bytes with `-o`
+  would not help either — its display offset is an `unsigned long`, so the
+  offset column would wrap at 4 GiB even given the right bytes.
 - **Writing past 2 GiB on Windows is refused rather than misplaced.** The
   same limit applies to `xxd -r`, which is how every write puts bytes at an
   offset, and Vim has no primitive to write at an offset to fall back to. It

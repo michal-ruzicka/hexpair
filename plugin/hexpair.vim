@@ -1547,15 +1547,29 @@ function! s:LoadPage(pageidx) abort
   " drops a CR before a NL whatever the options say - which is why the
   " same dump built by s:ToHexView() never showed one, and why every
   " other xxd call in this file already goes through a file.
-  let dumpfile = tempname()
-  try
-    call s:Run(printf('%s -s %d -l %d -g 1 -c %d %s %s', s:xxd,
-          \ base, len, n, shellescape(b:hexpair_page_file),
-          \ shellescape(dumpfile)))
-    let dump = readfile(dumpfile)
-  finally
-    call delete(dumpfile)
-  endtry
+  " Past what xxd can seek to, build the dump here instead - see
+  " s:XxdCanSeek(). This is the page the user actually LOOKS at, so getting
+  " it from a clamped seek is not a subtle wrongness: every page past 2 GiB
+  " showed the bytes at 2 GiB, so paging backwards from the end of a 120 GiB
+  " file showed the same page over and over.
+  "
+  " It cannot be done by handing xxd the bytes with -o either: the display
+  " offset is an unsigned long in xxd too, so the offset column would wrap
+  " at 4 GiB even when the bytes were right.
+  if !s:XxdCanSeek(base + len)
+    let dump = HexPairPagedDumpLines(s:BlobHex(b:hexpair_page_file, base, len),
+          \ base, n)
+  else
+    let dumpfile = tempname()
+    try
+      call s:Run(printf('%s -s %d -l %d -g 1 -c %d %s %s', s:xxd,
+            \ base, len, n, shellescape(b:hexpair_page_file),
+            \ shellescape(dumpfile)))
+      let dump = readfile(dumpfile)
+    finally
+      call delete(dumpfile)
+    endtry
+  endif
 
   " xxd runs through the shell, which can fail for reasons Vim never
   " reports - leaving an empty or short dump presented as the page, and
@@ -1966,6 +1980,47 @@ let s:xxdseekmax = 2147483647
 " Needs readblob()'s offset and size arguments (patch 8.2.4906), the same
 " Vim the splice already asks for. Without it there is no way to read here
 " at all, and saying so is far better than xxd's silent wrong answer.
+" A run of flat hex as the dump lines `xxd -g 1 -c a:n` would have printed
+" for it, starting at absolute offset a:base.
+"
+" Exists because xxd cannot be asked for these pages at all on Windows
+" (s:XxdCanSeek), and cannot be handed the bytes with -o either: its display
+" offset is an unsigned long, so the column would wrap at 4 GiB even given
+" the right bytes.
+"
+" The format is xxd's, exactly, and the suite holds it against real xxd
+" output rather than trusting this comment: offset in lowercase hex padded
+" to at least eight digits and widening past that on its own, ': ', the
+" bytes as %02x separated by single spaces, the hex column padded out to
+" full width when the last line is short, two spaces, then the text column
+" with anything outside printable ASCII as '.'.
+"
+" Global and pure, so it is testable without a 2 GiB file - which is the
+" only way this gets tested at all.
+function! HexPairPagedDumpLines(hex, base, n) abort
+  let out = []
+  let bytes = strlen(a:hex) / 2
+  let width = a:n * 3 - 1
+  let at = 0
+  while at < bytes
+    let span = a:n < bytes - at ? a:n : bytes - at
+    let cols = []
+    let text = ''
+    let i = 0
+    while i < span
+      let pair = strpart(a:hex, (at + i) * 2, 2)
+      call add(cols, pair)
+      let byte = str2nr(pair, 16)
+      let text .= (byte >= 32 && byte <= 126) ? nr2char(byte) : '.'
+      let i += 1
+    endwhile
+    call add(out, printf('%08x: %-*s  %s', a:base + at, width,
+          \ join(cols, ' '), text))
+    let at += span
+  endwhile
+  return out
+endfunction
+
 " The suite's way in to both readers. The offsets that pick the blob one in
 " earnest are past 2 GiB, which is not a fixture anybody wants to generate,
 " so the test asks for the same small range both ways and holds them against
@@ -3855,7 +3910,10 @@ function! s:GotoOffsetPrompt(force) abort
   if !s:RequirePaged()
     return
   endif
-  let text = input(printf('hexpair: goto byte (1-%d, or +N/-N from here): ',
+  " Worded to match s:PageGotoPrompt()'s, which sits under the neighbouring
+  " key: both take +N/-N and $, and a prompt that lists one and not the
+  " other is a prompt that teaches the wrong thing about its neighbour.
+  let text = input(printf('hexpair: goto byte (1-%d, +N/-N, $): ',
         \ b:hexpair_page_total))
   redraw
   if !empty(text)
