@@ -25,9 +25,14 @@ reports and patches are welcome via the project's
 | `plugin/hexpair.vim` | The base plugin (whole-buffer toggle); its header carries `Version:` and `Date:` — the single source of truth parsed by the packaging scripts |
 | `ftplugin/xxd.vim` | Dump-editing defaults for `filetype=xxd`, bundled with the plugin |
 | `doc/hexpair.txt` | Vim help documentation (`:help hexpair`) |
-| `docs/` | The animation at the top of `README.md` and what records it (see *The README demo*); not part of a release tarball |
-| `hexpair.bashrc` | The `vimhex` shell wrapper, to be sourced from `~/.bashrc`; bundled in every release tarball |
+| `demo/` | The animation at the top of `README.md` and what records it (see *The README demo*); not part of a release tarball |
+| `hexpair.bashrc` | The `vimhex`/`vimhexdiff` shell wrappers, and the `gvimhex`/`gvimhexdiff` GUI variants, to be sourced from `~/.bashrc`; bundled in every release tarball |
 | `hexpair.vimrc` | The ready-made mappings, to be sourced from the user's vimrc; bundled in every release tarball |
+| `vimhex.cmd`, `vimhexdiff.cmd` | The `cmd.exe` counterparts of the two shell functions, same names and arguments; CRLF, bundled in every release tarball |
+| `gvimhex.cmd`, `gvimhexdiff.cmd` | The same two, defaulting `VIMHEX_VIM` to `gvim` — what a context-menu verb needs. They `call` the `vimhex*.cmd` beside them, so keep all four together |
+| `vimhex-contex-entry.add.reg`, `.remove.reg` | Explorer context-menu submenu, added and removed. **Generated** — see `make-context-entry-reg.py`; bundled in every release tarball |
+| `make-context-entry-reg.py` | Generates the two `.reg` files above (they carry `REG_EXPAND_SZ` values, which `.reg` can only write as `hex(2):` plus UTF-16LE bytes). Takes an optional install path. Development-only, not in the tarball |
+| `icons/` | The three context-menu icons and what draws them: `build.py` renders `hexpair-{open,pick,with}.ico` from `design.py` via `rasticon.py`, a from-scratch PNG/ICO encoder. Only the `.ico` files are bundled in a release tarball; the generators are development-only |
 | `test/` | Headless regression tests (`run-tests.sh`, see *Testing*) |
 | `.gitattributes` | Line-ending normalization rules |
 | `.gitignore` | Excludes `build/`, `dist/` and the demo MP4 from version control |
@@ -57,24 +62,24 @@ identically on a developer machine and in CI.
 
 ## The README demo
 
-`README.md` opens with `docs/hexpair-demo.gif`, about seven minutes of the
+`README.md` opens with `demo/hexpair-demo.gif`, about seven minutes of the
 plugin at work, narrated step by step. It is recorded, not hand-made, so it can be
 re-recorded whenever what it shows stops being true:
 
 ```sh
-docs/hexpair-demo.sh                 # writes docs/hexpair-demo.{gif,mp4}
-docs/hexpair-demo.sh /tmp/try.gif    # or somewhere else, to look first
+demo/hexpair-demo.sh                 # writes demo/hexpair-demo.{gif,mp4}
+demo/hexpair-demo.sh /tmp/try.gif    # or somewhere else, to look first
 ```
 
 Four files, and one of them is the picture:
 
 | Path | Description |
 |---|---|
-| `docs/hexpair-demo.tape` | The script, for [vhs](https://github.com/charmbracelet/vhs) — what is typed, and how long each thing stays on the screen |
-| `docs/hexpair-demo.vimrc` | The Vim the recording uses: the plugin out of *this* working tree, and nothing of whoever is recording |
-| `docs/hexpair-demo.sh` | The runner — records the tape and turns the MP4 into the GIF |
-| `docs/hexpair-demo.gif` | The result, committed because `README.md` points at it |
-| `docs/hexpair-demo.mp4` | The same recording before the palette, a third of the size — a better thing to link from a blog post, and what another GIF can be made from without recording again. **Gitignored**: only one of the two belongs in a repository, and the one `README.md` points at is the GIF |
+| `demo/hexpair-demo.tape` | The script, for [vhs](https://github.com/charmbracelet/vhs) — what is typed, and how long each thing stays on the screen |
+| `demo/hexpair-demo.vimrc` | The Vim the recording uses: the plugin out of *this* working tree, and nothing of whoever is recording |
+| `demo/hexpair-demo.sh` | The runner — records the tape and turns the MP4 into the GIF |
+| `demo/hexpair-demo.gif` | The result, committed because `README.md` points at it |
+| `demo/hexpair-demo.mp4` | The same recording before the palette, a third of the size — a better thing to link from a blog post, and what another GIF can be made from without recording again. **Gitignored**: only one of the two belongs in a repository, and the one `README.md` points at is the GIF |
 
 Needs `vhs` (which needs `ttyd` and `ffmpeg`), `vim`, `curl` and a network
 connection. Linux only, deliberately — vhs is.

@@ -126,7 +126,7 @@ and this project adheres to
   any other name is handed to `iconv()`, checked by converting it back,
   and refused if this Vim does not know it. `<Plug>(HexPairInsertChar)`
   asks for the text (`<Leader>I` in `hexpair.vimrc`).
-- **`docs/`: the animation at the top of `README.md`, and what records
+- **`demo/`: the animation at the top of `README.md`, and what records
   it.** The plugin at work on **its own v2.1.0 release tarball**, fetched
   live: a reproducible build, so the bytes on screen are the bytes anybody
   else gets, and the same 480 KiB can be fetched and followed along offset
@@ -141,7 +141,7 @@ and this project adheres to
   made only of typed commands reads as if the plugin had no keys, and with
   every line left on the screen long enough to be read before it is sent.
   It is recorded rather than drawn
-  (`docs/hexpair-demo.sh`), from this repository's own working tree, so
+  (`demo/hexpair-demo.sh`), from this repository's own working tree, so
   it can be made again whenever what it shows stops being true.
 
 ### Changed

@@ -144,8 +144,9 @@ vimhexdiff()
 }
 
 # gvimhex and gvimhexdiff delegate to vimhex and vimhexdiff above rather
-# than duplicating them - the argument grammar and the pick/with state
-# handling both stay defined in ONE place. ":-" leaves an already-set
+# than duplicating them, so the argument grammar stays defined in ONE
+# place. (The Windows .cmd counterparts additionally share the /left and
+# /right side-selection state that way.) ":-" leaves an already-set
 # VIMHEX_VIM (a full gvim path, say) alone and only supplies "gvim" as the
 # default vimhex/vimhexdiff would otherwise fall back to "vim" for.
 

@@ -397,7 +397,9 @@ The hex view shows which byte it was.
                                                        *<Plug>(HexPairRefresh)*
                             *<Plug>(HexPairGoOffset)* *<Plug>(HexPairGoOffsetForce)*
                                                           *<Plug>(HexPairPages)*
-                       *<Plug>(HexPairInspect)* *<Plug>(HexPairSelection)*
+                                                     *<Plug>(HexPairSyncViews)*
+                    *<Plug>(HexPairInspect)* *<Plug>(HexPairInsertChar)*
+                                                      *<Plug>(HexPairSelection)*
                      *<Plug>(HexPairMark)* *<Plug>(HexPairMarkDelete)*
              *<Plug>(HexPairGoMark)* *<Plug>(HexPairGoMarkForce)*
                              *<Plug>(HexPairFind)* *<Plug>(HexPairFindText)*
@@ -425,9 +427,13 @@ and so do the three that need a name typed - they ask for it: >
     nmap <Leader>g <Plug>(HexPairPageGoto)
     nmap <Leader>b <Plug>(HexPairGoOffset)
     nmap <Leader>? <Plug>(HexPairPages)
+    " Bring the other scroll-bound view onto the byte this one is on
+    nmap <Leader>= <Plug>(HexPairSyncViews)
 
     " Reading the bytes
     nmap <Leader>i <Plug>(HexPairInspect)
+    " ... and the same the other way round: a character, written in as bytes
+    nmap <Leader>I <Plug>(HexPairInsertChar)
     nmap <Leader>s <Plug>(HexPairSelection)
     xmap <Leader>s <Plug>(HexPairSelection)
     " Marks - all four under one prefix, because single letters run out
@@ -459,7 +465,7 @@ and so do the three that need a name typed - they ask for it: >
     " commands do; handy for reading through a file rather than editing it
     nnoremap <silent> <Leader>J :HexPairPageNext!<CR>
     nnoremap <silent> <Leader>K :HexPairPagePrev!<CR>
-    nmap <Leader>P <Plug>(HexPairPageGotoForce)
+    nmap <Leader>G <Plug>(HexPairPageGotoForce)
     nmap <Leader>B <Plug>(HexPairGoOffsetForce)
 <
 |:HexPairOpen| takes a file name, so it has no <Plug> target - it is for

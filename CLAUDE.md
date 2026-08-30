@@ -268,7 +268,7 @@ plugin/hexpair.vim    - the whole plugin, one script scope; header
 ftplugin/xxd.vim      - dump-editing defaults (guarded by b:did_ftplugin,
                         reverted via b:undo_ftplugin)
 doc/hexpair.txt       - Vim help (:help hexpair)
-docs/                 - the animation at the top of README.md and what
+demo/                 - the animation at the top of README.md and what
                         records it: hexpair-demo.tape (the vhs script),
                         hexpair-demo.vimrc (the Vim it uses - the plugin
                         out of the working tree, nothing of the person
@@ -554,12 +554,21 @@ one and point the suite at it:
 ```sh
 curl -sSLO https://github.com/vim/vim/archive/refs/tags/v8.0.0000.tar.gz
 tar xzf v8.0.0000.tar.gz && cd vim-8.0.0000
-CFLAGS="-O1 -w -Wno-error=implicit-function-declaration \
--Wno-error=int-conversion -Wno-error=incompatible-pointer-types" \
+# -std=gnu89 is NOT optional on a current compiler (checked on GCC 16.2):
+# configure's own "uint32_t is 32 bits" probe is a K&R `main()` calling
+# exit() with no <stdlib.h>, which a modern default standard rejects
+# outright, and configure reports that as "WRONG! uint32_t not defined
+# correctly" rather than as a compiler error. The -Wno-error=* flags the
+# recipe used to carry do not help, because this is the language standard
+# and not a warning.
+CFLAGS="-O1 -w -std=gnu89" \
     ./configure --with-features=normal --disable-gui --without-x \
                 --disable-nls --with-tlib=ncurses
-make -j4 vim     # `make` alone stops at xxd/xxd.c, whose K&R prototypes
-                 # no modern GCC compiles - use the system xxd instead
+cd src && make -j4 vim   # from src/, not the top level: 8.0's top-level
+                 # Makefile has no `vim` target. `make` alone stops at
+                 # xxd/xxd.c, whose K&R prototypes no modern GCC
+                 # compiles - use the system xxd instead
+cd ..
 HEXPAIR_VIM=$PWD/src/vim VIMRUNTIME=$PWD/runtime test/run-tests.sh
 ```
  The expected result
@@ -571,6 +580,14 @@ failing there is a regression in the baseline; the count itself moves
 whenever a test is added to one of those scripts, so read the names, not
 the number. The suite itself must stay 8.0-clean
 too: no `trim()`, no Blob literal, no `count()` over a string.
+
+Last run before v2.3.0: 447 ok, 33 failures, all of them those — and no
+`E...` from Vim anywhere in the output, which is the other half of what
+"refused cleanly" means. A refusal shows up in the log as the file being
+*unchanged* (`expected: 4984 / actual: 5000`), not as an error; the gate
+message itself is not in the output because nothing echoes it there, so
+do not go looking for it as the sign the gate fired — the three
+`gate message ...` checks near the top are what pin its wording.
 
 **Linting is worth doing by hand, and is not worth automating** (the
 maintainer's call, and the numbers back it): `vint` over the two
