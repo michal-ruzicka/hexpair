@@ -1508,10 +1508,13 @@ the same side twice overwrites it, which is not an error - and because
 neither side has to come first, there is no "no left-hand file selected"
 failure to report at all.
 
-If the file selected as the OTHER side has been moved or deleted since,
-only that selection is cleared: the one just made is kept, because nothing
-is wrong with it and re-selecting it would be redoing work.  Naming a new
-partner for it opens the comparison straight away.
+Both files are checked before the comparison opens - the one just clicked
+as well as the one already remembered, since a file manager showing a
+listing it has not refreshed will hand the entry a path that is no longer
+there.  If one is missing the message names it by SIDE, left or right, and
+clears only that selection; the other is kept, so nothing that is still
+fine has to be selected again, and naming a new partner for it opens the
+comparison straight away.
 
 README.md, under "Windows: vimhex
 and vimhexdiff outside Vim", has the registry entries, and

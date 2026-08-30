@@ -501,11 +501,15 @@ next diff starts from a clean slate rather than silently reusing a stale
 selection. Selecting the same side twice overwrites it — changing your mind
 about one half says nothing about the other.
 
-If the file selected as the *other* side has been moved or deleted in the
-meantime, only *that* selection is cleared and the one you just made is
-kept — nothing is wrong with it, so you are not asked to pick it again.
-Selecting a new partner for it runs the comparison straight away. The same
-two steps work from `cmd.exe`:
+Both files are checked before the comparison opens, and if one of them has
+been moved or deleted in the meantime the message names it by *side* — left
+or right — and clears only *that* selection. The other one is kept, whether
+it is the selection you just made or the one already remembered, so you are
+never asked to re-pick a file nothing went wrong with; selecting a new
+partner for it runs the comparison straight away. The file you just clicked
+is checked too, since a file manager showing a listing it has not refreshed
+will hand the entry a path that is no longer there. The same two steps work
+from `cmd.exe`:
 
 ```bat
 vimhexdiff /left old.img

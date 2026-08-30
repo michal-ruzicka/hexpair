@@ -107,11 +107,25 @@ set /p HEXPAIR_OTHER_FILE=<"%HEXPAIR_OTHER_STATE%"
 if not defined HEXPAIR_OTHER_FILE goto :eof
 set "HEXPAIR_OTHER_FILE=%HEXPAIR_OTHER_FILE:~1,-1%"
 
-REM Check the other side before forgetting anything, so that a stale
-REM selection costs only itself. Nothing is wrong with the side just
-REM selected, and clearing it too would make the user re-select a file that
-REM is sitting right there.
-if not exist "%HEXPAIR_OTHER_FILE%" goto gone
+REM Name both sides NOW, and stop talking about "this" and "other". Past
+REM this point nothing depends on which of the two was clicked, only on
+REM which side each file is - and that is what makes everything below
+REM symmetric by construction instead of by inspection. Doing it the other
+REM way is what made a missing right-hand file go unreported while a
+REM missing left-hand one was caught.
+if "%HEXPAIR_THIS%"=="left" set "HEXPAIR_LEFT_FILE=%~f2"
+if "%HEXPAIR_THIS%"=="left" set "HEXPAIR_RIGHT_FILE=%HEXPAIR_OTHER_FILE%"
+if "%HEXPAIR_THIS%"=="right" set "HEXPAIR_LEFT_FILE=%HEXPAIR_OTHER_FILE%"
+if "%HEXPAIR_THIS%"=="right" set "HEXPAIR_RIGHT_FILE=%~f2"
+
+REM Check BOTH of them, each by its own name, before forgetting anything -
+REM so a stale selection costs only itself and the message can only name
+REM the side it is really about. The side just selected is checked too: a
+REM file manager showing a listing it has not refreshed will hand a verb
+REM the path of a file that is no longer there, and that deserves the same
+REM answer as a selection that went stale while it was remembered.
+if not exist "%HEXPAIR_LEFT_FILE%" goto goneleft
+if not exist "%HEXPAIR_RIGHT_FILE%" goto goneright
 
 REM Both sides are in and both files are there. Forget both now, before
 REM handing over to Vim: a selection left lying about is one a later
@@ -120,10 +134,8 @@ REM has moved or gone.
 del "%HEXPAIR_STATE_DIR%\diff-left.txt" 2>nul
 del "%HEXPAIR_STATE_DIR%\diff-right.txt" 2>nul
 
-if "%HEXPAIR_THIS%"=="left" set "HEXPAIR_DIFF_A=%~f2"
-if "%HEXPAIR_THIS%"=="left" set "HEXPAIR_DIFF_B=%HEXPAIR_OTHER_FILE%"
-if "%HEXPAIR_THIS%"=="right" set "HEXPAIR_DIFF_A=%HEXPAIR_OTHER_FILE%"
-if "%HEXPAIR_THIS%"=="right" set "HEXPAIR_DIFF_B=%~f2"
+set "HEXPAIR_DIFF_A=%HEXPAIR_LEFT_FILE%"
+set "HEXPAIR_DIFF_B=%HEXPAIR_RIGHT_FILE%"
 
 goto run
 
@@ -166,17 +178,33 @@ REM long before this line would ever run.
 call :holdopen
 exit /b 1
 
-REM The other side named a file that is not there any more. Forget ONLY that
-REM one: the side just selected is fine, and asking for it again would be
-REM asking the user to redo work that nothing went wrong with.
+REM One side names a file that is not there any more. These two say WHICH,
+REM in the file's own terms rather than in terms of which one was clicked,
+REM and hand :gone a single consistent set of names to report.
+:goneleft
+set "HEXPAIR_GONE=left"
+set "HEXPAIR_KEPT=right"
+set "HEXPAIR_GONE_FILE=%HEXPAIR_LEFT_FILE%"
+goto gone
+
+:goneright
+set "HEXPAIR_GONE=right"
+set "HEXPAIR_KEPT=left"
+set "HEXPAIR_GONE_FILE=%HEXPAIR_RIGHT_FILE%"
+goto gone
+
+REM Forget ONLY the side that went. The other one is fine - whether it is
+REM the selection just made or the one that was already remembered - and
+REM asking for it again would be asking the user to redo work that nothing
+REM went wrong with.
 :gone
-del "%HEXPAIR_OTHER_STATE%" 2>nul
->&2 echo vimhexdiff: the file selected as the %HEXPAIR_OTHER% side is no longer there:
->&2 echo     "%HEXPAIR_OTHER_FILE%"
+del "%HEXPAIR_STATE_DIR%\diff-%HEXPAIR_GONE%.txt" 2>nul
+>&2 echo vimhexdiff: the file selected as the %HEXPAIR_GONE% side is no longer there:
+>&2 echo     "%HEXPAIR_GONE_FILE%"
 >&2 echo.
 >&2 echo It was moved, renamed or deleted since it was selected, and that
->&2 echo selection has been cleared. The %HEXPAIR_THIS% side is still selected -
->&2 echo just select a new %HEXPAIR_OTHER% side to compare it against.
+>&2 echo selection has been cleared. The %HEXPAIR_KEPT% side is still selected -
+>&2 echo just select a new %HEXPAIR_GONE% side to compare it against.
 call :holdopen
 exit /b 1
 
