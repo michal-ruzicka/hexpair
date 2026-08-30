@@ -32,9 +32,6 @@ from pathlib import Path
 # point of the exercise: a default install must import and work as-is.
 DEFAULT_ROOT = r"%USERPROFILE%\vimfiles\pack\plugins\start\hexpair"
 
-# The no-console launcher every entry goes through; see its own header.
-LAUNCHER = "vimhex-launch.vbs"
-
 HEADER_ADD = """\
 ; ===========================================================================
 ; vimhex-contex-entry.add.reg - Explorer context-menu entries for hexpair
@@ -52,10 +49,10 @@ HEADER_ADD = """\
 ; Adds ONE right-click folder under HKEY_CURRENT_USER - no administrator
 ; rights needed, nobody else's account touched - holding three entries:
 ;
-;   vimhex >  gvimhex this          the file you right-clicked, in hex
-;             ---------------       (a separator)
-;             gvimhexdiff left      remember this as the left-hand side
-;             gvimhexdiff right     diff it against the remembered one
+;   vimhex >  gvimhex this                  the file you right-clicked
+;             ------------------------      (a separator)
+;             gvimhexdiff select as left    this is the left-hand side
+;             gvimhexdiff select as right   this is the right-hand side
 ;
 ; The folder is a verb carrying "ExtendedSubCommandsKey" and no \\command of
 ; its own; the key it names ({submenu}) holds the children
@@ -65,12 +62,16 @@ HEADER_ADD = """\
 ; by KEY NAME, hence the 10-/20-/30- prefixes, and the separator is
 ; "CommandFlags"=dword:20 (ECF_SEPARATORBEFORE) on the item under the rule.
 ;
-; NOTHING FLASHES. Every entry goes through wscript.exe running
-; vimhex-launch.vbs, which is a GUI-subsystem program: no console window is
-; ever created, so there is no flash and - the reason it was done - nothing
-; steals the focus from the file manager the menu was opened in. The .cmd
-; runs hidden; if it fails, its output is shown in a message box instead of
-; a console that has already closed. See vimhex-launch.vbs's own header.
+; The two diff entries are SYMMETRIC: select either side first. Each records
+; its side and stops; whichever completes the pair opens the comparison and
+; clears both selections, so the next one starts clean. Selecting the same
+; side twice just overwrites it.
+;
+; A console window appears for the moment the .cmd runs. That is accepted
+; rather than worked around: hiding it needs either the Windows Script Host
+; (whose "run hidden" pattern antivirus heuristics flag, and which Microsoft
+; is removing from Windows) or an unsigned stub .exe (usually worse for
+; antivirus, not better).
 ;
 ; They run gvimhex.cmd / gvimhexdiff.cmd, not vimhex.cmd / vimhexdiff.cmd:
 ; those default to gVim, so no VIMHEX_VIM is needed in your environment.
@@ -135,13 +136,16 @@ SUBMENU_ICON = "hexpair-open.ico"
 # Children are shown in ALPHABETICAL order of their key name, not in the
 # order they are written here, which is what the numeric prefixes are for.
 #
+# /left and /right may be used in either order: each records its side, and
+# whichever completes the pair opens the comparison and clears both.
+#
 # key, caption, icon, .cmd, args, separator-before
 ITEMS = [
     ("10-open", "gvimhex this", "hexpair-open.ico", "gvimhex.cmd", "", False),
-    ("20-pick", "gvimhexdiff left", "hexpair-pick.ico", "gvimhexdiff.cmd",
-     "/pick", True),
-    ("30-with", "gvimhexdiff right", "hexpair-with.ico", "gvimhexdiff.cmd",
-     "/with", False),
+    ("20-left", "gvimhexdiff select as left", "hexpair-pick.ico",
+     "gvimhexdiff.cmd", "/left", True),
+    ("30-right", "gvimhexdiff select as right", "hexpair-with.ico",
+     "gvimhexdiff.cmd", "/right", False),
 ]
 
 # ECF_SEPARATORBEFORE. "CommandFlags" is a DWORD on the item that is to have
@@ -193,20 +197,23 @@ def build_add(root):
     lines.append("")
 
     for key, caption, icon, cmd, args, separator in ITEMS:
-        # wscript.exe rather than cmd.exe: wscript is a GUI-subsystem
-        # program, so no console window is ever created - no flash, and
-        # nothing takes the focus away from the file manager the menu was
-        # opened in. vimhex-launch.vbs runs the .cmd hidden and turns a
-        # failure into a message box. See its header.
-        command = '%%SystemRoot%%\\System32\\wscript.exe "%s\\%s" "%s\\%s"' % (
-            root,
-            LAUNCHER,
-            root,
-            cmd,
-        )
+        # cmd.exe, and the console window it briefly creates, is accepted
+        # rather than worked around. A wscript.exe/.vbs launcher did hide it,
+        # but "run a command with a hidden window" through the Windows Script
+        # Host is one of the shapes antivirus heuristics look for, and
+        # VBScript is on its way out of Windows (Feature on Demand since
+        # 11 24H2, removal announced). The other way out is a GUI-subsystem
+        # stub .exe, which means shipping an unsigned binary - usually WORSE
+        # for antivirus, not better. The maintainer's call, after weighing
+        # all three: take the flash.
+        #
+        # The outer pair of quotes is cmd.exe's own rule 2 (strip the outer
+        # pair, run the rest), which is what lets the .cmd path and the file
+        # name each contain spaces.
+        command = 'cmd.exe /c ""%s\\%s"' % (root, cmd)
         if args:
             command += ' "%s"' % args
-        command += ' "%1"'
+        command += ' "%1""'
 
         item = "HKEY_CURRENT_USER\\Software\\Classes\\%s\\shell\\%s" % (
             SUBMENU_KEY,

@@ -16,10 +16,10 @@ Windows Registry Editor Version 5.00
 ; Adds ONE right-click folder under HKEY_CURRENT_USER - no administrator
 ; rights needed, nobody else's account touched - holding three entries:
 ;
-;   vimhex >  gvimhex this          the file you right-clicked, in hex
-;             ---------------       (a separator)
-;             gvimhexdiff left      remember this as the left-hand side
-;             gvimhexdiff right     diff it against the remembered one
+;   vimhex >  gvimhex this                  the file you right-clicked
+;             ------------------------      (a separator)
+;             gvimhexdiff select as left    this is the left-hand side
+;             gvimhexdiff select as right   this is the right-hand side
 ;
 ; The folder is a verb carrying "ExtendedSubCommandsKey" and no \command of
 ; its own; the key it names (hexpair.ContextMenu) holds the children
@@ -29,12 +29,16 @@ Windows Registry Editor Version 5.00
 ; by KEY NAME, hence the 10-/20-/30- prefixes, and the separator is
 ; "CommandFlags"=dword:20 (ECF_SEPARATORBEFORE) on the item under the rule.
 ;
-; NOTHING FLASHES. Every entry goes through wscript.exe running
-; vimhex-launch.vbs, which is a GUI-subsystem program: no console window is
-; ever created, so there is no flash and - the reason it was done - nothing
-; steals the focus from the file manager the menu was opened in. The .cmd
-; runs hidden; if it fails, its output is shown in a message box instead of
-; a console that has already closed. See vimhex-launch.vbs's own header.
+; The two diff entries are SYMMETRIC: select either side first. Each records
+; its side and stops; whichever completes the pair opens the comparison and
+; clears both selections, so the next one starts clean. Selecting the same
+; side twice just overwrites it.
+;
+; A console window appears for the moment the .cmd runs. That is accepted
+; rather than worked around: hiding it needs either the Windows Script Host
+; (whose "run hidden" pattern antivirus heuristics flag, and which Microsoft
+; is removing from Windows) or an unsigned stub .exe (usually worse for
+; antivirus, not better).
 ;
 ; They run gvimhex.cmd / gvimhexdiff.cmd, not vimhex.cmd / vimhexdiff.cmd:
 ; those default to gVim, so no VIMHEX_VIM is needed in your environment.
@@ -80,24 +84,16 @@ Windows Registry Editor Version 5.00
   63,00,6f,00,00,00
 
 [HKEY_CURRENT_USER\Software\Classes\hexpair.ContextMenu\shell\10-open\command]
-@=hex(2):25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,\
-  25,00,5c,00,53,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,77,00,\
-  73,00,63,00,72,00,69,00,70,00,74,00,2e,00,65,00,78,00,65,00,20,00,22,00,\
-  25,00,55,00,53,00,45,00,52,00,50,00,52,00,4f,00,46,00,49,00,4c,00,45,00,\
-  25,00,5c,00,76,00,69,00,6d,00,66,00,69,00,6c,00,65,00,73,00,5c,00,70,00,\
-  61,00,63,00,6b,00,5c,00,70,00,6c,00,75,00,67,00,69,00,6e,00,73,00,5c,00,\
-  73,00,74,00,61,00,72,00,74,00,5c,00,68,00,65,00,78,00,70,00,61,00,69,00,\
-  72,00,5c,00,76,00,69,00,6d,00,68,00,65,00,78,00,2d,00,6c,00,61,00,75,00,\
-  6e,00,63,00,68,00,2e,00,76,00,62,00,73,00,22,00,20,00,22,00,25,00,55,00,\
-  53,00,45,00,52,00,50,00,52,00,4f,00,46,00,49,00,4c,00,45,00,25,00,5c,00,\
-  76,00,69,00,6d,00,66,00,69,00,6c,00,65,00,73,00,5c,00,70,00,61,00,63,00,\
-  6b,00,5c,00,70,00,6c,00,75,00,67,00,69,00,6e,00,73,00,5c,00,73,00,74,00,\
-  61,00,72,00,74,00,5c,00,68,00,65,00,78,00,70,00,61,00,69,00,72,00,5c,00,\
-  67,00,76,00,69,00,6d,00,68,00,65,00,78,00,2e,00,63,00,6d,00,64,00,22,00,\
-  20,00,22,00,25,00,31,00,22,00,00,00
+@=hex(2):63,00,6d,00,64,00,2e,00,65,00,78,00,65,00,20,00,2f,00,63,00,20,00,\
+  22,00,22,00,25,00,55,00,53,00,45,00,52,00,50,00,52,00,4f,00,46,00,49,00,\
+  4c,00,45,00,25,00,5c,00,76,00,69,00,6d,00,66,00,69,00,6c,00,65,00,73,00,\
+  5c,00,70,00,61,00,63,00,6b,00,5c,00,70,00,6c,00,75,00,67,00,69,00,6e,00,\
+  73,00,5c,00,73,00,74,00,61,00,72,00,74,00,5c,00,68,00,65,00,78,00,70,00,\
+  61,00,69,00,72,00,5c,00,67,00,76,00,69,00,6d,00,68,00,65,00,78,00,2e,00,\
+  63,00,6d,00,64,00,22,00,20,00,22,00,25,00,31,00,22,00,22,00,00,00
 
-[HKEY_CURRENT_USER\Software\Classes\hexpair.ContextMenu\shell\20-pick]
-"MUIVerb"="gvimhexdiff left"
+[HKEY_CURRENT_USER\Software\Classes\hexpair.ContextMenu\shell\20-left]
+"MUIVerb"="gvimhexdiff select as left"
 "Icon"=hex(2):25,00,55,00,53,00,45,00,52,00,50,00,52,00,4f,00,46,00,49,00,\
   4c,00,45,00,25,00,5c,00,76,00,69,00,6d,00,66,00,69,00,6c,00,65,00,73,00,\
   5c,00,70,00,61,00,63,00,6b,00,5c,00,70,00,6c,00,75,00,67,00,69,00,6e,00,\
@@ -107,26 +103,18 @@ Windows Registry Editor Version 5.00
   63,00,6f,00,00,00
 "CommandFlags"=dword:00000020
 
-[HKEY_CURRENT_USER\Software\Classes\hexpair.ContextMenu\shell\20-pick\command]
-@=hex(2):25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,\
-  25,00,5c,00,53,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,77,00,\
-  73,00,63,00,72,00,69,00,70,00,74,00,2e,00,65,00,78,00,65,00,20,00,22,00,\
-  25,00,55,00,53,00,45,00,52,00,50,00,52,00,4f,00,46,00,49,00,4c,00,45,00,\
-  25,00,5c,00,76,00,69,00,6d,00,66,00,69,00,6c,00,65,00,73,00,5c,00,70,00,\
-  61,00,63,00,6b,00,5c,00,70,00,6c,00,75,00,67,00,69,00,6e,00,73,00,5c,00,\
-  73,00,74,00,61,00,72,00,74,00,5c,00,68,00,65,00,78,00,70,00,61,00,69,00,\
-  72,00,5c,00,76,00,69,00,6d,00,68,00,65,00,78,00,2d,00,6c,00,61,00,75,00,\
-  6e,00,63,00,68,00,2e,00,76,00,62,00,73,00,22,00,20,00,22,00,25,00,55,00,\
-  53,00,45,00,52,00,50,00,52,00,4f,00,46,00,49,00,4c,00,45,00,25,00,5c,00,\
-  76,00,69,00,6d,00,66,00,69,00,6c,00,65,00,73,00,5c,00,70,00,61,00,63,00,\
-  6b,00,5c,00,70,00,6c,00,75,00,67,00,69,00,6e,00,73,00,5c,00,73,00,74,00,\
-  61,00,72,00,74,00,5c,00,68,00,65,00,78,00,70,00,61,00,69,00,72,00,5c,00,\
-  67,00,76,00,69,00,6d,00,68,00,65,00,78,00,64,00,69,00,66,00,66,00,2e,00,\
-  63,00,6d,00,64,00,22,00,20,00,22,00,2f,00,70,00,69,00,63,00,6b,00,22,00,\
-  20,00,22,00,25,00,31,00,22,00,00,00
+[HKEY_CURRENT_USER\Software\Classes\hexpair.ContextMenu\shell\20-left\command]
+@=hex(2):63,00,6d,00,64,00,2e,00,65,00,78,00,65,00,20,00,2f,00,63,00,20,00,\
+  22,00,22,00,25,00,55,00,53,00,45,00,52,00,50,00,52,00,4f,00,46,00,49,00,\
+  4c,00,45,00,25,00,5c,00,76,00,69,00,6d,00,66,00,69,00,6c,00,65,00,73,00,\
+  5c,00,70,00,61,00,63,00,6b,00,5c,00,70,00,6c,00,75,00,67,00,69,00,6e,00,\
+  73,00,5c,00,73,00,74,00,61,00,72,00,74,00,5c,00,68,00,65,00,78,00,70,00,\
+  61,00,69,00,72,00,5c,00,67,00,76,00,69,00,6d,00,68,00,65,00,78,00,64,00,\
+  69,00,66,00,66,00,2e,00,63,00,6d,00,64,00,22,00,20,00,22,00,2f,00,6c,00,\
+  65,00,66,00,74,00,22,00,20,00,22,00,25,00,31,00,22,00,22,00,00,00
 
-[HKEY_CURRENT_USER\Software\Classes\hexpair.ContextMenu\shell\30-with]
-"MUIVerb"="gvimhexdiff right"
+[HKEY_CURRENT_USER\Software\Classes\hexpair.ContextMenu\shell\30-right]
+"MUIVerb"="gvimhexdiff select as right"
 "Icon"=hex(2):25,00,55,00,53,00,45,00,52,00,50,00,52,00,4f,00,46,00,49,00,\
   4c,00,45,00,25,00,5c,00,76,00,69,00,6d,00,66,00,69,00,6c,00,65,00,73,00,\
   5c,00,70,00,61,00,63,00,6b,00,5c,00,70,00,6c,00,75,00,67,00,69,00,6e,00,\
@@ -135,20 +123,12 @@ Windows Registry Editor Version 5.00
   78,00,70,00,61,00,69,00,72,00,2d,00,77,00,69,00,74,00,68,00,2e,00,69,00,\
   63,00,6f,00,00,00
 
-[HKEY_CURRENT_USER\Software\Classes\hexpair.ContextMenu\shell\30-with\command]
-@=hex(2):25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,74,00,\
-  25,00,5c,00,53,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,77,00,\
-  73,00,63,00,72,00,69,00,70,00,74,00,2e,00,65,00,78,00,65,00,20,00,22,00,\
-  25,00,55,00,53,00,45,00,52,00,50,00,52,00,4f,00,46,00,49,00,4c,00,45,00,\
-  25,00,5c,00,76,00,69,00,6d,00,66,00,69,00,6c,00,65,00,73,00,5c,00,70,00,\
-  61,00,63,00,6b,00,5c,00,70,00,6c,00,75,00,67,00,69,00,6e,00,73,00,5c,00,\
-  73,00,74,00,61,00,72,00,74,00,5c,00,68,00,65,00,78,00,70,00,61,00,69,00,\
-  72,00,5c,00,76,00,69,00,6d,00,68,00,65,00,78,00,2d,00,6c,00,61,00,75,00,\
-  6e,00,63,00,68,00,2e,00,76,00,62,00,73,00,22,00,20,00,22,00,25,00,55,00,\
-  53,00,45,00,52,00,50,00,52,00,4f,00,46,00,49,00,4c,00,45,00,25,00,5c,00,\
-  76,00,69,00,6d,00,66,00,69,00,6c,00,65,00,73,00,5c,00,70,00,61,00,63,00,\
-  6b,00,5c,00,70,00,6c,00,75,00,67,00,69,00,6e,00,73,00,5c,00,73,00,74,00,\
-  61,00,72,00,74,00,5c,00,68,00,65,00,78,00,70,00,61,00,69,00,72,00,5c,00,\
-  67,00,76,00,69,00,6d,00,68,00,65,00,78,00,64,00,69,00,66,00,66,00,2e,00,\
-  63,00,6d,00,64,00,22,00,20,00,22,00,2f,00,77,00,69,00,74,00,68,00,22,00,\
-  20,00,22,00,25,00,31,00,22,00,00,00
+[HKEY_CURRENT_USER\Software\Classes\hexpair.ContextMenu\shell\30-right\command]
+@=hex(2):63,00,6d,00,64,00,2e,00,65,00,78,00,65,00,20,00,2f,00,63,00,20,00,\
+  22,00,22,00,25,00,55,00,53,00,45,00,52,00,50,00,52,00,4f,00,46,00,49,00,\
+  4c,00,45,00,25,00,5c,00,76,00,69,00,6d,00,66,00,69,00,6c,00,65,00,73,00,\
+  5c,00,70,00,61,00,63,00,6b,00,5c,00,70,00,6c,00,75,00,67,00,69,00,6e,00,\
+  73,00,5c,00,73,00,74,00,61,00,72,00,74,00,5c,00,68,00,65,00,78,00,70,00,\
+  61,00,69,00,72,00,5c,00,67,00,76,00,69,00,6d,00,68,00,65,00,78,00,64,00,\
+  69,00,66,00,66,00,2e,00,63,00,6d,00,64,00,22,00,20,00,22,00,2f,00,72,00,\
+  69,00,67,00,68,00,74,00,22,00,20,00,22,00,25,00,31,00,22,00,22,00,00,00

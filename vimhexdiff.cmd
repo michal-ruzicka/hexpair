@@ -26,14 +26,23 @@ REM Two files, one at a time
 REM ------------------------
 REM Explorer runs a context-menu command once per selected file, each with
 REM its own path, so a verb cannot be handed two of them at once without a
-REM COM handler. The same two steps every diff tool solves this with:
+REM COM handler. Each side is therefore selected on its own:
 REM
-REM     vimhexdiff /pick FILE    remember FILE as the left-hand side
-REM     vimhexdiff /with FILE    diff it against the remembered one
+REM     vimhexdiff /left FILE    select FILE as the left-hand side
+REM     vimhexdiff /right FILE   select FILE as the right-hand side
 REM
-REM /with forgets the remembered file afterwards, so the next /with needs a
-REM new /pick rather than silently reusing a stale one. The name is kept in
-REM %LOCALAPPDATA%\hexpair\diff-left.txt - a path and nothing else.
+REM THE ORDER DOES NOT MATTER. Each one records its side and stops there;
+REM whichever of the two completes the pair opens the comparison and forgets
+REM both selections again, so the next diff starts from a clean slate. That
+REM symmetry is the point: there is no "you have to pick the left one first"
+REM rule to get wrong, and therefore no error to report for breaking it.
+REM
+REM Selecting the same side twice just overwrites it - changing your mind
+REM about one half of a comparison is not a failure, and says nothing about
+REM whether the other half is selected.
+REM
+REM The two names are kept in %LOCALAPPDATA%\hexpair\diff-left.txt and
+REM diff-right.txt - a path each and nothing else.
 REM
 REM Set VIMHEX_VIM to use a particular Vim - "gvim" for the GUI, or a full
 REM path such as "C:\Program Files\Vim\vim91\gvim.exe". The default is the
@@ -46,10 +55,9 @@ REM ===========================================================================
 setlocal
 
 if defined LOCALAPPDATA (set "HEXPAIR_STATE_DIR=%LOCALAPPDATA%\hexpair") else (set "HEXPAIR_STATE_DIR=%TEMP%\hexpair")
-set "HEXPAIR_STATE=%HEXPAIR_STATE_DIR%\diff-left.txt"
 
-if /i "%~1"=="/pick" goto pick
-if /i "%~1"=="/with" goto with
+if /i "%~1"=="/left" goto side
+if /i "%~1"=="/right" goto side
 if "%~1"=="" goto usage
 if "%~2"=="" goto usage
 if not "%~3"=="" goto usage
@@ -62,31 +70,49 @@ set "HEXPAIR_DIFF_A=%~1"
 set "HEXPAIR_DIFF_B=%~2"
 goto run
 
-REM Remember the left-hand side. Written QUOTED, so that a name holding an &
-REM comes back out of the file intact; /with takes the quotes off again.
-:pick
+REM One side of a comparison. Symmetric: this records the side it was given
+REM and, if that completes the pair, runs the diff. Which side arrived first
+REM is never asked.
+:side
 if "%~2"=="" goto usage
 if not "%~3"=="" goto usage
-if not exist "%HEXPAIR_STATE_DIR%" mkdir "%HEXPAIR_STATE_DIR%"
-> "%HEXPAIR_STATE%" echo "%~f2"
-echo vimhexdiff: left side remembered: "%~f2"
-echo vimhexdiff: now pick the other file with  vimhexdiff /with FILE
-goto :eof
 
-:with
-if "%~2"=="" goto usage
-if not "%~3"=="" goto usage
-if not exist "%HEXPAIR_STATE%" goto nopick
-set "HEXPAIR_DIFF_A="
-set /p HEXPAIR_DIFF_A=<"%HEXPAIR_STATE%"
-if not defined HEXPAIR_DIFF_A goto nopick
-set "HEXPAIR_DIFF_A=%HEXPAIR_DIFF_A:~1,-1%"
-set "HEXPAIR_DIFF_B=%~f2"
-REM Forgotten as soon as it is used: a remembered path left lying about is
-REM one a later /with would silently diff against, long after the file it
-REM names has moved or gone.
-del "%HEXPAIR_STATE%"
-if not exist "%HEXPAIR_DIFF_A%" goto gone
+REM Plain "if" lines rather than a parenthesised if/else: a set inside
+REM parentheses is expanded when the whole block is PARSED, so a name
+REM holding a ) or a & would be read as syntax rather than as text.
+set "HEXPAIR_THIS=right"
+set "HEXPAIR_OTHER=left"
+if /i "%~1"=="/left" set "HEXPAIR_THIS=left"
+if /i "%~1"=="/left" set "HEXPAIR_OTHER=right"
+
+REM Written QUOTED, so that a name holding an & comes back out of the file
+REM intact; the read below takes the quotes off again. Overwrites whatever
+REM this side held before - changing your mind is not an error.
+if not exist "%HEXPAIR_STATE_DIR%" mkdir "%HEXPAIR_STATE_DIR%"
+> "%HEXPAIR_STATE_DIR%\diff-%HEXPAIR_THIS%.txt" echo "%~f2"
+
+REM Nothing on the other side yet: this selection is all there is to do.
+REM Silence is deliberate - selecting a side is half of one gesture, and the
+REM comparison opening IS the acknowledgement that both halves arrived.
+set "HEXPAIR_OTHER_STATE=%HEXPAIR_STATE_DIR%\diff-%HEXPAIR_OTHER%.txt"
+if not exist "%HEXPAIR_OTHER_STATE%" goto :eof
+set "HEXPAIR_OTHER_FILE="
+set /p HEXPAIR_OTHER_FILE=<"%HEXPAIR_OTHER_STATE%"
+if not defined HEXPAIR_OTHER_FILE goto :eof
+set "HEXPAIR_OTHER_FILE=%HEXPAIR_OTHER_FILE:~1,-1%"
+
+REM Both sides are in. Forget them before doing anything that can fail: a
+REM selection left lying about is one a later pick would silently compare
+REM against, long after the file it names has moved or gone.
+del "%HEXPAIR_STATE_DIR%\diff-left.txt" 2>nul
+del "%HEXPAIR_STATE_DIR%\diff-right.txt" 2>nul
+
+if "%HEXPAIR_THIS%"=="left" set "HEXPAIR_DIFF_A=%~f2"
+if "%HEXPAIR_THIS%"=="left" set "HEXPAIR_DIFF_B=%HEXPAIR_OTHER_FILE%"
+if "%HEXPAIR_THIS%"=="right" set "HEXPAIR_DIFF_A=%HEXPAIR_OTHER_FILE%"
+if "%HEXPAIR_THIS%"=="right" set "HEXPAIR_DIFF_B=%~f2"
+
+if not exist "%HEXPAIR_OTHER_FILE%" goto gone
 goto run
 
 REM Everything runs from VimEnter - a plain -c would run before hexpair has
@@ -128,39 +154,32 @@ REM long before this line would ever run.
 call :holdopen
 exit /b 1
 
-:nopick
->&2 echo vimhexdiff: there is no left-hand file to compare against yet.
->&2 echo.
->&2 echo Pick one first: right-click the LEFT file and choose
->&2 echo     vimhex  ^>  gvimhexdiff left
->&2 echo then right-click the other one and choose
->&2 echo     vimhex  ^>  gvimhexdiff right
->&2 echo.
->&2 echo From a command prompt the same two steps are
->&2 echo     vimhexdiff /pick FILE
->&2 echo     vimhexdiff /with FILE
-call :holdopen
-exit /b 1
-
+REM The other side named a file that is not there any more. Both selections
+REM have already been cleared above, so saying "select it again" is honest:
+REM there is nothing stale left to trip over on the next attempt.
 :gone
->&2 echo vimhexdiff: the file picked as the left-hand side is no longer there:
->&2 echo     "%HEXPAIR_DIFF_A%"
+>&2 echo vimhexdiff: the file selected as the %HEXPAIR_OTHER% side is no longer there:
+>&2 echo     "%HEXPAIR_OTHER_FILE%"
 >&2 echo.
->&2 echo It was moved, renamed or deleted since it was picked. Pick it again.
+>&2 echo It was moved, renamed or deleted since it was selected.
+>&2 echo Both selections have been cleared - select the two files again.
 call :holdopen
 exit /b 1
 
-REM Stop so the message above can be read - but ONLY when there is somebody
-REM to read it. Launched through vimhex-launch.vbs the console is hidden, so
-REM a pause would wait forever where it cannot be seen or dismissed; the
-REM launcher sets HEXPAIR_NO_PAUSE and puts this output in a message box
-REM instead. Run from a real console, nothing sets it and the pause happens.
+REM Stop so the message above can be read: run from a context-menu verb,
+REM "cmd.exe /c" closes its console the instant the batch ends, which is far
+REM too fast. HEXPAIR_NO_PAUSE skips the pause, for a caller that shows the
+REM message its own way - nothing sets it by default.
 :holdopen
 if not defined HEXPAIR_NO_PAUSE pause
 goto :eof
 
 :usage
 >&2 echo usage: vimhexdiff FILE1 FILE2
->&2 echo        vimhexdiff /pick FILE   remember FILE as the left-hand side
->&2 echo        vimhexdiff /with FILE   diff it against the remembered one
+>&2 echo        vimhexdiff /left FILE    select FILE as the left-hand side
+>&2 echo        vimhexdiff /right FILE   select FILE as the right-hand side
+>&2 echo.
+>&2 echo /left and /right may be given in either order. Whichever completes
+>&2 echo the pair opens the comparison and clears both selections.
+call :holdopen
 exit /b 1

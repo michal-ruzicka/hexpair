@@ -379,10 +379,10 @@ there is nothing to edit** — double-click it, or run
 install instructions above use.
 
 ```
-vimhex ▸  gvimhex this          the file you right-clicked, in hex
-          ────────────────
-          gvimhexdiff left      remember this as the left-hand side
-          gvimhexdiff right     diff it against the remembered one
+vimhex ▸  gvimhex this                  the file you right-clicked, in hex
+          ──────────────────────────
+          gvimhexdiff select as left    this is the left-hand side
+          gvimhexdiff select as right   this is the right-hand side
 ```
 
 The folder is a verb carrying `ExtendedSubCommandsKey` and no `\command` of
@@ -394,16 +394,21 @@ order of their *key* name, hence the `10-`/`20-`/`30-` prefixes, and the
 horizontal rule is `"CommandFlags"=dword:00000020` (`ECF_SEPARATORBEFORE`)
 on the item below it.
 
-**Nothing flashes any more.** Each entry runs `wscript.exe` on
-`vimhex-launch.vbs` rather than `cmd.exe` directly. `wscript.exe` is a
-GUI-subsystem program, so no console window is ever created — which matters
-beyond the flash itself: with a Windows Terminal window already open, the
-console a `cmd.exe` verb created would attach to it and *take the focus*,
-leaving the file manager you invoked the menu from in the background. The
-`.cmd` now runs hidden, and if it fails its output is shown in a message box
-instead of a console that has already closed. That is what you get when
-*gvimhexdiff right* is used with no left-hand file picked yet — a dialog
-telling you to pick one, rather than a flicker.
+**The two diff entries are symmetric — select either side first.** Each one
+records its side and stops there; whichever completes the pair opens the
+comparison and clears both selections, so the next diff starts clean.
+Selecting the same side twice just overwrites it. There is no order to get
+wrong, which is also why there is no "you have not picked a left file yet"
+error to run into.
+
+**A console window flashes while the `.cmd` runs**, and with a Windows
+Terminal window already open it can take the focus from the file manager you
+invoked the menu in. That is accepted rather than worked around, deliberately:
+hiding it needs either the Windows Script Host — whose "run this command with
+a hidden window" pattern is one of the shapes antivirus heuristics look for,
+and which Microsoft is removing from Windows — or an unsigned stub `.exe`,
+which is usually worse for antivirus rather than better. The trade was
+weighed and the flash won.
 
 On Windows 11 this is a "legacy" context menu, so it lives under *Show more
 options* (Shift+F10 opens that directly). File managers that use the classic
@@ -432,9 +437,7 @@ entry decodes to:
 [HKEY_CURRENT_USER\Software\Classes\hexpair.ContextMenu\shell\10-open]
 "MUIVerb"="gvimhex this"
 "Icon"    = %USERPROFILE%\...\hexpair\icons\hexpair-open.ico
-(command) = %SystemRoot%\System32\wscript.exe
-            "%USERPROFILE%\...\hexpair\vimhex-launch.vbs"
-            "%USERPROFILE%\...\hexpair\gvimhex.cmd" "%1"
+(command) = cmd.exe /c ""%USERPROFILE%\...\hexpair\gvimhex.cmd" "%1""
 ```
 
 The expansion order is what makes this safe: the shell expands the
@@ -476,33 +479,32 @@ project from a batch file. So `vimhexdiff.cmd` (and `gvimhexdiff.cmd`) does
 what every diff tool on Windows does instead, in two clicks:
 
 The other two entries in the submenu are the same shape, differing only in
-the icon, the caption and the `/pick` or `/with` argument handed to
+the icon, the caption and the `/left` or `/right` argument handed to
 `gvimhexdiff.cmd`:
 
 ```
-[HKEY_CURRENT_USER\Software\Classes\hexpair.ContextMenu\shell\20-pick]
-"MUIVerb"="gvimhexdiff left"
+[HKEY_CURRENT_USER\Software\Classes\hexpair.ContextMenu\shell\20-left]
+"MUIVerb"="gvimhexdiff select as left"
 "CommandFlags"=dword:00000020        ← the separator above this item
-(command) = … "…\gvimhexdiff.cmd" "/pick" "%1"
+(command) = … "…\gvimhexdiff.cmd" "/left" "%1"
 
-[HKEY_CURRENT_USER\Software\Classes\hexpair.ContextMenu\shell\30-with]
-"MUIVerb"="gvimhexdiff right"
-(command) = … "…\gvimhexdiff.cmd" "/with" "%1"
+[HKEY_CURRENT_USER\Software\Classes\hexpair.ContextMenu\shell\30-right]
+"MUIVerb"="gvimhexdiff select as right"
+(command) = … "…\gvimhexdiff.cmd" "/right" "%1"
 ```
 
-Right-click the first file and *gvimhexdiff left*, then right-click the
-second and *gvimhexdiff right*. The remembered path lives in
-`%LOCALAPPDATA%\hexpair\diff-left.txt` and is forgotten as soon as it is
-used, so the next comparison starts from a fresh pick rather than silently
-reusing a stale one. Picking succeeds silently — nothing appears, by design;
-if you then pick *right* without having picked *left*, a message box says so
-and tells you which entry to use. The same two steps work from `cmd.exe`,
-where the same messages are printed to the console and it waits for a key so
-they can be read:
+Right-click one file and *select as left*, the other and *select as right* —
+**in whichever order suits you**. Each records its side in
+`%LOCALAPPDATA%\hexpair\diff-left.txt` or `diff-right.txt` and stops there;
+whichever completes the pair opens the comparison and clears both, so the
+next diff starts from a clean slate rather than silently reusing a stale
+selection. Selecting the same side twice overwrites it — changing your mind
+about one half says nothing about the other. The same two steps work from
+`cmd.exe`:
 
 ```bat
-vimhexdiff /pick old.img
-vimhexdiff /with new.img
+vimhexdiff /left old.img
+vimhexdiff /right new.img
 ```
 
 **The diff opens maximized**, in gVim — two hex views side by side want the

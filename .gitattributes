@@ -5,8 +5,6 @@
 # Registry Editor is more forgiving about line endings than cmd.exe's
 # "goto", but a .reg file is Windows-only regardless - keep it CRLF too.
 *.reg text eol=crlf
-# Same for the no-console launcher wscript.exe runs.
-*.vbs text eol=crlf
 # The recording at the top of README.md is bytes, whatever text=auto's
 # heuristic makes of it.
 *.gif binary

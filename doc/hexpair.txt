@@ -1494,14 +1494,19 @@ their parsing, so keep all four files together.
 vimhexdiff.cmd (and gvimhexdiff.cmd) takes two more forms, for the Explorer
 context menu: >
 
-    vimhexdiff /pick FILE    remember FILE as the left-hand side
-    vimhexdiff /with FILE    diff it against the remembered one
+    vimhexdiff /left FILE    select FILE as the left-hand side
+    vimhexdiff /right FILE   select FILE as the right-hand side
 <
 Explorer runs a context-menu command once per selected file, each with its
 own %1, so a verb cannot be handed two of them at once without a COM
 handler; these are the two steps every diff tool on Windows solves that
-with.  The remembered path lives in %LOCALAPPDATA%\hexpair\diff-left.txt
-and is forgotten as soon as it is used.  README.md, under "Windows: vimhex
+with.  THE ORDER DOES NOT MATTER: each records its side in
+%LOCALAPPDATA%\hexpair\diff-left.txt or diff-right.txt and stops there, and
+whichever completes the pair opens the comparison and clears both, so the
+next diff starts clean rather than reusing a stale selection.  Selecting
+the same side twice overwrites it, which is not an error - and because
+neither side has to come first, there is no "no left-hand file selected"
+failure to report at all.  README.md, under "Windows: vimhex
 and vimhexdiff outside Vim", has the registry entries, and
 vimhex-contex-entry.add.reg/.remove.reg ship ready-made versions of them,
 with nothing to edit for a default install: the paths are written against
@@ -1522,9 +1527,9 @@ is consumed as a pair the only % left is %1's own.
 The three entries live in ONE submenu rather than at the top level: >
 
     vimhex >  gvimhex this
-              ---------------
-              gvimhexdiff left
-              gvimhexdiff right
+              --------------------------
+              gvimhexdiff select as left
+              gvimhexdiff select as right
 <
 The folder is a verb carrying "ExtendedSubCommandsKey" and no \command of
 its own, naming a key whose own \shell holds the children - the indirection
@@ -1543,20 +1548,20 @@ arrow stopped reading reliably.  Only the .ico files ship in the release
 tarball.
 
                                                     *hexpair-vimhex-noconsole*
-No console window appears for any of them.  Each entry runs wscript.exe on
-vimhex-launch.vbs, a GUI-subsystem program, so none is ever created: the
-.cmd runs hidden and a failure is reported in a message box instead of a
-console that has already closed.  That is not only about the flash - with a
-Windows Terminal window already open, the console a "cmd.exe /c" verb
-created would attach to it and TAKE THE FOCUS, leaving the file manager the
-menu was invoked from in the background.
+A console window flashes while the .cmd runs, and with a Windows Terminal
+window already open it can attach to it and TAKE THE FOCUS from the file
+manager the menu was invoked in.  That is accepted rather than worked
+around, and the reasoning is worth keeping because the obvious fixes are
+both worse: hiding the console needs either the Windows Script Host - whose
+"run this command with a hidden window" is one of the shapes antivirus
+heuristics look for, and which Microsoft is removing from Windows - or an
+unsigned GUI stub .exe, which is usually worse for antivirus rather than
+better.  A wscript.exe/.vbs launcher was built and then withdrawn for
+exactly that reason.
 
-Because the console is hidden, a "pause" would wait forever where nobody
-can see it, so the launcher sets $HEXPAIR_NO_PAUSE and the .cmd files check
-it: hidden runs report through the message box, a run from a real console
-still pauses so the message can be read there.  This is what turns "no
-left-hand file picked yet" from a flicker into a dialog that says which
-entry to use.
+Errors are still reported: the .cmd files check the exit status and print
+what went wrong, then pause so it can be read.  $HEXPAIR_NO_PAUSE skips
+that pause, for a caller that has its own way of showing the message.
 
 vimhexdiff opens MAXIMIZED in gVim.  Two hex views side by side want the
 full width, and a narrow window was also what made Vim stop for a hit-enter

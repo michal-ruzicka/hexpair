@@ -59,7 +59,7 @@ vimhexdiff.cmd        functions in hexpair.bashrc, same names and same
                       expression, for hexpair.bashrc's reason, and that
                       is also what makes them safe to call from an
                       Explorer verb. vimhexdiff.cmd additionally has
-                      /pick and /with: a context-menu verb is run once
+                      /left and /right: a context-menu verb is run once
                       per selected file and there is no %2, so two files
                       take two clicks unless one writes a COM handler.
                       Bundled in the release tarball, and the packaging
@@ -100,7 +100,7 @@ gvimhexdiff.cmd       "gvim" instead of "vim" - what a context-menu verb
                       VIMHEX_VIM. Each `call`s its vimhex.cmd/
                       vimhexdiff.cmd counterpart via `%~dp0` (this
                       directory) rather than reimplementing the argument
-                      parsing and, for the diff pair, the /pick-/with
+                      parsing and, for the diff pair, the /left-/right
                       state file - one source of truth for that grammar.
                       Consequence: unlike vimhex.cmd/vimhexdiff.cmd
                       themselves, these two are NOT independently
@@ -112,7 +112,7 @@ gvimhexdiff.cmd       "gvim" instead of "vim" - what a context-menu verb
 vimhex-contex-entry.  add.reg wires gvimhex.cmd/gvimhexdiff.cmd into the
   add.reg / .remove.reg  Explorer context menu under HKEY_CURRENT_USER, as
                       ONE `vimhex` submenu holding three items (open, a
-                      separator, then the diff /pick+/with pair);
+                      separator, then the diff /left+/right pair);
                       .remove.reg deletes the folder and its child key by
                       name, plus the three TOP-LEVEL keys an older version
                       created, so an upgrade leaves nothing orphaned - and
@@ -132,8 +132,8 @@ vimhex-contex-entry.  add.reg wires gvimhex.cmd/gvimhexdiff.cmd into the
                       hence the 10-/20-/30- prefixes, and the separator is
                       "CommandFlags"=dword:20 (ECF_SEPARATORBEFORE) on the
                       item BELOW the rule.
-                      Each command runs wscript.exe on vimhex-launch.vbs
-                      rather than cmd.exe - see that file.
+                      The two diff items are SYMMETRIC (/left and /right,
+                      either order) - see vimhexdiff.cmd's :side.
                       BOTH ARE GENERATED - see make-context-entry-reg.py;
                       do not hand-edit them. Bundled in the release
                       tarball; same packaging-glob mechanism as the .cmd
@@ -143,36 +143,38 @@ vimhex-contex-entry.  add.reg wires gvimhex.cmd/gvimhexdiff.cmd into the
                       Commander (what the maintainer actually uses) shows
                       the classic menu directly, so it is not a problem
                       there.
-vimhex-launch.vbs     the no-console launcher every context-menu entry
-                      goes through: `wscript.exe vimhex-launch.vbs
-                      <.cmd> [args]`. Exists because a "cmd.exe /c" verb
-                      creates a console window, and the REPORTED problem
-                      was not the flash itself but the FOCUS: with a
-                      Windows Terminal window already open, the new
-                      console attaches to it and takes focus, dropping
-                      the file manager the menu was used from into the
-                      background. wscript.exe is GUI-subsystem, so no
-                      console is ever allocated; the .cmd runs with
-                      window style 0 and a nonzero exit is reported in a
-                      MsgBox built from the .cmd's redirected output.
-                      Two things here are deliberate and easy to undo by
-                      accident: output goes through a LOG FILE rather
-                      than .Exec(), because .Exec() is exactly what would
-                      create the console this avoids; and it sets
-                      HEXPAIR_NO_PAUSE for the child, because a `pause`
-                      behind a hidden console waits forever where nobody
-                      can see or dismiss it (the .cmd files check that
-                      variable - see :holdopen in vimhexdiff.cmd).
-                      Bundled in the release tarball, CRLF, and caught by
-                      the packaging glob as `*vimhex*.vbs`.
-                      Accepted risk, recorded rather than ignored:
-                      VBScript is deprecated on Windows (a Feature on
-                      Demand from 11 24H2, with removal announced for
-                      later). If it goes, the replacement is a small
-                      GUI-subsystem stub .exe - which the README has
-                      always said is the only other way to avoid the
-                      console - and that means shipping a compiled
-                      binary, which this project so far does not.
+The console flash        DECIDED, do not re-litigate without new
+  from a context-menu    information. A "cmd.exe /c" verb creates a
+  verb                   console window; the reported problem was not the
+                      flash itself but the FOCUS - with a Windows Terminal
+                      window already open, the new console attaches to it
+                      and takes focus, dropping the file manager the menu
+                      was used from (Total Commander) into the background.
+                      A wscript.exe + vimhex-launch.vbs launcher WAS built
+                      and did fix it (GUI-subsystem host, .cmd run with
+                      window style 0, failures reported in a MsgBox), then
+                      was WITHDRAWN at the maintainer's call. Why, so the
+                      next person does not rebuild it: "run this command
+                      with a hidden window" through the Windows Script
+                      Host is one of the shapes antivirus heuristics look
+                      for, and VBScript is being removed from Windows
+                      (Feature on Demand since 11 24H2). The only other
+                      way to lose the console is a GUI-subsystem stub
+                      .exe, and an UNSIGNED binary is usually worse for
+                      antivirus than the script, besides being the first
+                      compiled artefact this project would ship.
+                      So the flash is accepted. What survived from that
+                      attempt and is still worth keeping: the exit-status
+                      check in each .cmd, and HEXPAIR_NO_PAUSE (:holdopen
+                      in vimhexdiff.cmd) so a caller that shows the
+                      message its own way can skip the pause.
+                      If it is ever revisited, the untried idea with the
+                      best shape is to have the registry call gvim.exe
+                      DIRECTLY (a GUI program, so no console exists to
+                      begin with) and move the side-selection state into
+                      the plugin - the obstacle being that recording a
+                      side must not open a window, which is exactly what
+                      launching gVim does.
 make-context-entry-   generates the two .reg files above. Exists because
   reg.py              the maintainer's requirement is that a DEFAULT
                       install import and work with nothing edited, and
@@ -191,13 +193,14 @@ make-context-entry-   generates the two .reg files above. Exists because
                       it builds the command line. Once %USERPROFILE% is
                       consumed as a pair, the only % left in the string
                       is %1's own - a lone %, so it cannot be mis-paired
-                      into a bogus variable name. That was re-checked when
-                      the commands grew a SECOND and THIRD variable
-                      (%SystemRoot% for wscript.exe, %USERPROFILE% twice
-                      over): still fine, because each is a complete pair,
-                      so the count of leftover lone % stays exactly one.
-                      A generator test decodes every hex(2) value back to
-                      UTF-16 and asserts that count. Writes CRLF itself (the files are
+                      into a bogus variable name. Re-check it whenever a
+                      command grows another variable: the rule that has to
+                      hold is that each one is a COMPLETE %VAR% pair, so
+                      the count of leftover lone % stays exactly one.
+                      test/run-tests.sh does this for real - it decodes
+                      every hex(2) value back to UTF-16, asserts the
+                      round trip, and asserts that count.
+                      Writes CRLF itself (the files are
                       generated, so .gitattributes' *.reg rule is a
                       backstop, not the mechanism), and is deterministic
                       - verified by hashing two consecutive runs.

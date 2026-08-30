@@ -15,12 +15,14 @@ and this project adheres to
   a hex view is opened the same way whichever shell you are standing in.
   Put the plugin's own directory on `PATH` and updating the plugin updates
   the commands; `VIMHEX_VIM` picks the Vim, `gvim` included.
-- **Explorer context-menu entries**, as registry snippets in `README.md`
-  under "Windows: `vimhex` and `vimhexdiff` outside Vim". One file is one
-  click. Two files are two, because Explorer runs a verb once per selected
-  file and there is no `%2` without a COM handler - so `vimhexdiff.cmd`
-  grew `/pick FILE` and `/with FILE`, the same "select left side, then
-  compare against it" every diff tool on Windows uses.
+- **Explorer context-menu entries**, as a `vimhex` submenu holding
+  *gvimhex this*, a separator, and *gvimhexdiff select as left* / *select as
+  right*. Two files take two clicks because Explorer runs a verb once per
+  selected file and there is no `%2` without a COM handler - so
+  `vimhexdiff.cmd` grew `/left FILE` and `/right FILE`. They are
+  **symmetric**: either may be used first, each records its side and stops,
+  and whichever completes the pair opens the comparison and clears both
+  selections. Selecting the same side twice just overwrites it.
 - **`gvimhex.cmd` and `gvimhexdiff.cmd`**, and `gvimhex`/`gvimhexdiff` in
   `hexpair.bashrc`, opening gVim instead of console Vim by default - what a
   double-click or a context-menu verb needs, since neither has a console
@@ -52,12 +54,6 @@ and this project adheres to
   tarball, the generator is a development-only file.
 
 ### Changed
-- **The three context-menu entries are now one `vimhex` submenu** —
-  *gvimhex this*, a separator, *gvimhexdiff left* and *gvimhexdiff right* —
-  instead of three items at the top level of every file's right-click menu.
-  Built with `ExtendedSubCommandsKey`, which keeps the whole thing in
-  `HKEY_CURRENT_USER`; the older `SubCommands` scheme would have needed
-  `HKLM` and administrator rights.
 - **`vimhexdiff` opens maximized** (`:simalt ~x`, guarded by
   `has('gui_running')`) and sets `shortmess+=F`. Two hex views side by side
   want the width anyway, and a narrow window was what made Vim stop for a
@@ -65,20 +61,6 @@ and this project adheres to
   message longer than one line, which is what triggers it.
 
 ### Fixed
-- **The context menu no longer flashes a console, or steals the focus.**
-  Every entry now runs `wscript.exe` on the new `vimhex-launch.vbs` rather
-  than `cmd.exe` directly. `wscript.exe` is a GUI-subsystem program, so no
-  console is ever created. The flash was the visible half of the problem;
-  the reported half was that with a Windows Terminal window already open,
-  the new console attached to it and *took the focus*, dropping the file
-  manager the menu was used from into the background.
-- **"No left-hand file picked yet" is a message box now, not a flicker.**
-  The launcher runs the `.cmd` hidden and, on a nonzero exit, shows its
-  output in a dialog — so that case, and a missing or moved picked file,
-  explain themselves and say which entry to use instead. Since a hidden
-  console cannot show a `pause`, the launcher sets `HEXPAIR_NO_PAUSE` and
-  the `.cmd` files check it: hidden runs report through the dialog, runs
-  from a real console still pause so the text can be read there.
 - **A failed Vim launch from the Explorer context menu closed too fast to
   read.** `vimhex.cmd`/`vimhexdiff.cmd`/`gvimhex.cmd`/`gvimhexdiff.cmd` all
   run through `cmd.exe /c` when launched from a context-menu verb, which
