@@ -3962,10 +3962,21 @@ endfunction
 " The Unicode blocks, sorted and disjoint. GENERATED - run
 " make-unicode-blocks.py rather than editing between the markers; the
 " Unicode version and the digest it is checked against are in that script.
+" It is a DEVELOPMENT tool, run by hand when the Unicode version is bumped:
+" its output is committed here, nothing generates anything at package time
+" and nothing does on a user's machine.
 "
-" Built on first use and not at load: a list literal inside a function body
-" is stored as text until the function runs, so a Vim that never inspects a
-" character never pays for this.
+" Derived from Blocks.txt of the Unicode Character Database 16.0.0, which is
+" under the Unicode License V3. That permits this on the condition that its
+" copyright and permission notice travels with the copies or appears in the
+" documentation; NOTICE.md carries it in full and ships in every release.
+" SPDX-License-Identifier: Unicode-3.0 (this table only - the plugin itself
+" is under the Vim License, see LICENSE.md).
+"
+" EVALUATED on first use, not at load - which is about Vim and not about
+" generation. A function body is stored as text until the function runs, so
+" the list literal below costs a Vim that never inspects a character
+" nothing at all.
 function! s:Blocks() abort
   if exists('s:blocks')
     return s:blocks

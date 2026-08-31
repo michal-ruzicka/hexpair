@@ -212,6 +212,19 @@ make-context-entry-   generates the two .reg files above. Exists because
                       Development-only, like icons/*.py: it matches no
                       pattern in the packaging test's shipped-files glob,
                       so it is correctly never expected in FILES.
+NOTICE.md             third-party notices, and the reason there is a file
+                      for them at all: the block table is DERIVED from the
+                      Unicode Character Database, whose Unicode License V3
+                      permits that on the condition its copyright and
+                      permission notice appears with the copies or in the
+                      documentation. Reproduced verbatim there, with the
+                      source URL, the digest and the SPDX identifier
+                      (Unicode-3.0). **Any future third-party data goes
+                      through the same door**: check the license before
+                      deriving, record the provenance, ship the notice.
+                      In pack-release.py's FILES, and the packaging test
+                      keeps it there for free - every .md outside test/
+                      must be listed.
 make-unicode-blocks.py - regenerates the Unicode block table inside
                       plugin/hexpair.vim, between two markers, from
                       Blocks.txt. Pinned by version in the URL and by
@@ -221,7 +234,11 @@ make-unicode-blocks.py - regenerates the Unicode block table inside
                       knows three coarse classes and there is no name
                       lookup, so the block is the most the inspector can
                       honestly say about an arbitrary code point.
-                      Development-only, like the other generators here.
+                      Development-only, like the other generators here:
+                      run BY HAND when the Unicode version is bumped, never
+                      at package time and never on a user's machine. Its
+                      output is committed. Bumping the version means
+                      updating NOTICE.md's URL, digest and version too.
                       **The markers are `"\ ` comment continuations, not
                       plain `"` comments** - they sit INSIDE a continued
                       list literal, where a plain comment line ends the
@@ -480,9 +497,11 @@ Key function map:
   characters by hand (C0, C1, DEL, NBSP, the zero-width joiners, the bidi
   marks - the set someone actually reaches for the inspector about), and
   the 338 Unicode blocks generated into `s:Blocks()`. That list is built on
-  FIRST USE and not at load: a literal inside a function body is stored as
-  text until the function runs, so a Vim that never inspects a character
-  pays nothing for 14 KB of ranges. The rows describe the UTF-8 reading
+  FIRST USE and not at load - which is about how Vim stores a function body
+  and not about anything being generated: the literal is text until the
+  function runs, so a Vim that never inspects a character pays nothing for
+  14 KB of ranges. The table is DERIVED DATA and carries a licence notice;
+  see NOTICE.md. The rows describe the UTF-8 reading
   only, which is the one with no byte order to choose; `bom` is the single
   exception, because `ff fe` is not UTF-8 and is exactly what someone
   opening a file at offset 0 wants named. **No full character names**: that

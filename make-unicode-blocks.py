@@ -23,9 +23,18 @@ and there is no name lookup at all. The block is what the data inspector can
 honestly say about an arbitrary code point, and 338 ranges is what saying it
 costs.
 
-Development-only, like make-context-entry-reg.py and icons/*.py: it matches
-no pattern in the packaging test's shipped-files glob, so it is correctly
-never expected in pack-release.py's FILES.
+LICENSING, which is the part not to skip. Blocks.txt is under the Unicode
+License V3 (SPDX: Unicode-3.0), which permits deriving from it and
+distributing the result on the condition that its copyright and permission
+notice appears with the copies OR in the associated documentation. NOTICE.md
+carries that notice in full, names this file as what did the deriving, and
+ships in every release tarball. Bumping UNICODE_VERSION here means updating
+the version, URL and digest recorded there too.
+
+Development-only, like make-context-entry-reg.py and icons/*.py: run by hand
+when the Unicode version is bumped, never at package time and never on a
+user's machine. It matches no pattern in the packaging test's shipped-files
+glob, so it is correctly never expected in pack-release.py's FILES.
 """
 
 import hashlib

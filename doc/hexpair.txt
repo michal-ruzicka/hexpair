@@ -222,7 +222,10 @@ last byte, and on a short last line on its last existing byte.
                         hundred and fifty thousand characters, which is a
                         different order of thing from a table of ranges
                         and does not belong inside a Vim plugin.  The
-                        block table is Unicode 16.0.0.
+                        block table is Unicode 16.0.0, derived from the
+                        Unicode Character Database under the Unicode
+                        License V3; see NOTICE.md, which ships with the
+                        plugin and carries that license in full.
 
                                                 *hexpair-inspect-anywhere*
                         This command works in an ORDINARY buffer too, with
