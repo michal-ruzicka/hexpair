@@ -105,7 +105,12 @@ call s:Map('n', '<Leader>=', '<Plug>(HexPairSyncViews)')
 " --- Reading the bytes ---------------------------------------------------
 " The bytes at the cursor as the numbers they could be - 8/16/32/64-bit,
 " signed and unsigned, both endiannesses, both IEEE 754 floats - and as
-" text: UTF-8, UTF-16, UTF-32.
+" text: UTF-8, UTF-16, UTF-32, with the character's name and Unicode block.
+"
+" Mapped globally on purpose. It works in an ORDINARY buffer as well as in a
+" hex view - what is this character, is that a NBSP, does this file start
+" with a BOM - and there it says so when the bytes it is showing are Vim's
+" rather than the file's. See |hexpair-inspect-anywhere|.
 call s:Map('n', '<Leader>i', '<Plug>(HexPairInspect)')
 " ... and the same reading the other way round: ask for a character and put
 " its bytes in, in g:hexpair_insert_encoding (utf-8 unless you say

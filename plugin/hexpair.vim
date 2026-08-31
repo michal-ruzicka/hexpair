@@ -3728,9 +3728,12 @@ function! s:InspectBytes(count) abort
     return out
   endif
 
-  " Text view: cut the lines the bytes fall on out of the buffer, write
-  " just those, and let xxd say what they are.
-  let [first, last] = s:TextBodyRange()
+  " Text view, or an ordinary buffer that hexpair has never touched: cut
+  " the lines the bytes fall on out of the buffer, write just those, and
+  " let xxd say what they are. The only difference between the two is which
+  " lines are content - all of them, where there is no banner.
+  let [first, last] = get(b:, 'hexpair_page_active', 0)
+        \ ? s:TextBodyRange() : [1, line('$')]
   let lnum = line('.') < first ? first : (line('.') > last ? last : line('.'))
   let lines = [strpart(getline(lnum), col('.') - 1)]
   " A line break is a byte too, so each further line adds one plus its
@@ -4425,7 +4428,11 @@ endfunction
 
 " The whole report, as lines. Pure: it is handed the bytes and where they
 " are, so every conversion in it is testable without a buffer.
-function! HexPairPagedInspectLines(bytes, at, total) abort
+" a:1 says where the bytes ran out, as a whole phrase and not a noun to be
+" slotted in: this reports on an ordinary buffer too, where there is no page
+" to be at the end of - and 'on this buffer' is not English.
+function! HexPairPagedInspectLines(bytes, at, total, ...) abort
+  let where = a:0 > 0 ? a:1 : 'on this page'
   if empty(a:bytes)
     return ['hexpair: no byte here to read']
   endif
@@ -4448,8 +4455,8 @@ function! HexPairPagedInspectLines(bytes, at, total) abort
     let name = printf('%d-bit', w * 8)
     if len(a:bytes) < w
       call add(out, printf('  %-8s %-26s  %s', name,
-            \ printf('(only %d byte%s left on this page)', len(a:bytes),
-            \        len(a:bytes) == 1 ? '' : 's'), ''))
+            \ printf('(only %d byte%s left %s)', len(a:bytes),
+            \        len(a:bytes) == 1 ? '' : 's', where), ''))
       continue
     endif
     let be = a:bytes[0 : w - 1]
@@ -4611,9 +4618,62 @@ function! s:InspectForget() abort
   endif
 endfunction
 
-function! s:Inspect(clear) abort
-  if !s:RequirePaged()
+" The inspector outside hexpair: an ordinary buffer of ordinary text.
+" Reading the bytes under the cursor is worth as much there as it is here -
+" what is this character, is that a NBSP, is there a BOM at the top of the
+" file - and everything it needs already exists, since the text view's
+" reader works on any buffer once it is not told to skip a banner.
+"
+" What it must SAY is different, though, and this is the part that has to be
+" got right. In a paged view the buffer holds the FILE's bytes, because
+" hexpair opened it ++bin. In an ordinary buffer it holds VIM's: a file read
+" as latin1 into a utf-8 Vim is latin1 on disk and utf-8 in memory, and a
+" 'fileformat' of dos has CRLF on disk and no CR at all in the buffer. So a
+" note says which is on screen, whenever the two can differ - anything else
+" would be a hex editor quietly showing bytes that are not in the file.
+function! s:PlainNotes() abort
+  let out = []
+  if &l:binary
+    return out
+  endif
+  if &l:fileencoding !=# '' && &l:fileencoding !=# &encoding
+    call add(out, printf("Vim's bytes, not the file's: 'fileencoding' is %s, "
+          \ . 'this Vim holds %s', &l:fileencoding, &encoding))
+  endif
+  if &l:fileformat !=# 'unix'
+    call add(out, printf("a line break reads 0a here; 'fileformat' is %s, so "
+          \ . 'the file has %s', &l:fileformat,
+          \ &l:fileformat ==# 'dos' ? '0d 0a' : '0d'))
+  endif
+  return out
+endfunction
+
+function! s:InspectPlain(clear) abort
+  if a:clear
+    " Nothing is marked outside a hex view - the marking lives on the
+    " highlighting a paged buffer has and an ordinary one does not - so
+    " there is nothing for the bang to take off.
+    echo 'hexpair: nothing was marked to clear (this is not a hexpair view)'
     return
+  endif
+  let total = line2byte(line('$') + 1) - 1
+  if total <= 0
+    echo 'hexpair: this buffer holds no bytes'
+    return
+  endif
+  let bytes = s:InspectBytes(8)
+  let at = empty(bytes) ? 0 : s:BufOffset() + 1
+  for line in HexPairPagedInspectLines(bytes, at, total, 'in this buffer')
+    echo line
+  endfor
+  for note in s:PlainNotes()
+    echo printf('  %-8s %s', 'note', note)
+  endfor
+endfunction
+
+function! s:Inspect(clear) abort
+  if !get(b:, 'hexpair_page_active', 0)
+    return s:InspectPlain(a:clear)
   endif
   if a:clear
     call s:InspectForget()

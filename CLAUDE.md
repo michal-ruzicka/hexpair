@@ -463,6 +463,18 @@ Key function map:
   then may `b:undo_ftplugin` revert them), and when the restored
   filetype is empty no `FileType` event fires, so the plugin executes
   `b:undo_ftplugin` and clears `b:did_ftplugin` itself.
+- **The inspector runs outside hexpair too** (`s:InspectPlain()`), on an
+  ordinary buffer with no page and no banner - `s:InspectBytes()`'s text
+  branch already worked on any buffer once `s:TextBodyRange()` stopped being
+  assumed. The part that needed care is what it SAYS: a paged view holds the
+  FILE's bytes (`++bin`), an ordinary buffer holds VIM's, and they part
+  company the moment `'fileencoding'` or `'fileformat'` does. `s:PlainNotes()`
+  says which is on screen, and only when the two can differ. No marking
+  there - that is drawn by highlighting a paged buffer has and an ordinary
+  one does not, and the bang says so rather than pretending to clear
+  something. `HexPairPagedInspectLines()` takes the "ran out of bytes"
+  phrase as an argument for the same reason: "on this page" is a lie in a
+  buffer.
 - **Naming a code point** - `HexPairPagedCharNotes()`, and
   `HexPairPagedBomText()` beside it. Two tables: the controls and format
   characters by hand (C0, C1, DEL, NBSP, the zero-width joiners, the bidi

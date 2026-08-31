@@ -18,6 +18,11 @@ and this project adheres to
   UTF-8 rows cannot say because `ff fe` is not UTF-8. No full character
   names: that needs `UnicodeData.txt`, which is a different order of thing
   from a table of ranges. See `:help hexpair-inspect-naming`.
+- **`:HexPairInspect` works in an ordinary buffer**, with no hex view
+  anywhere near it - what is this character, is that a NBSP, does this file
+  start with a BOM. It says when the bytes it is showing are Vim's rather
+  than the file's, which is the moment `'fileencoding'` or `'fileformat'`
+  differs. See `:help hexpair-inspect-anywhere`.
 - **`vimhex.cmd` and `vimhexdiff.cmd`**, the `cmd.exe` counterparts of the
   two shell functions in `hexpair.bashrc` - same names, same arguments, so
   a hex view is opened the same way whichever shell you are standing in.

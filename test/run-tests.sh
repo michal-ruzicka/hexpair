@@ -2679,6 +2679,65 @@ check "a gap between blocks is a gap, not the block before it" \
     "no block - unassigned here" "$(sed -n 15p "$WORK/tname.out")"
 check "and the very last code point resolves" \
     "Supplementary Private Use Area-B" "$(sed -n 16p "$WORK/tname.out")"
+# --- The inspector outside hexpair ------------------------------------------
+# <Leader>i is worth as much in an ordinary buffer as in a hex view, and
+# everything it needed was already there - the text view's byte reader works
+# on any buffer once it is not told to skip a banner. What had to be got
+# right is what it SAYS: a paged view holds the FILE's bytes, because hexpair
+# opened it ++bin, and an ordinary buffer holds VIM's. The two part company
+# the moment 'fileencoding' or 'fileformat' does, and a hex editor quietly
+# showing bytes that are not in the file would be worse than not showing any.
+"$PY" -c "
+import sys
+open(sys.argv[1], 'wb').write(b'ab\xc3\xa9\x1b cd\n')
+open(sys.argv[2], 'wb').write(b'ab\xe9 cd\r\n')
+" "$WORK/plain.txt" "$WORK/dos.txt"
+cat > "$WORK/tplain.vim" <<EOF
+$(printf "$HEX")
+set encoding=utf-8
+let out = []
+edit $WORK/plain.txt
+call cursor(1, 3)
+redir => m1
+silent HexPairInspect
+redir END
+call extend(out, filter(split(m1, "\n"), 'v:val !~# "^\$"'))
+edit ++enc=latin1 ++ff=dos $WORK/dos.txt
+call cursor(1, 3)
+redir => m2
+silent HexPairInspect
+redir END
+call add(out, '--')
+call extend(out, filter(split(m2, "\n"), 'v:val =~# "note"'))
+enew!
+redir => m3
+silent HexPairInspect
+redir END
+call add(out, '--')
+call extend(out, filter(split(m3, "\n"), 'v:val !~# "^\$"'))
+call writefile(out, '$WORK/tplain.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tplain.vim" < /dev/null
+check "the inspector reads an ordinary buffer, at the cursor's byte" \
+    "hexpair: byte 3 (0x3) of 9: c3 a9 1b 20 63 64" \
+    "$(sed -n 1p "$WORK/tplain.out")"
+check "and says buffer, not page, when it runs out of bytes" \
+    "  64-bit   (only 6 bytes left in this buffer)" \
+    "$(sed -n 6p "$WORK/tplain.out")"
+check "and reads them as text the same way it does on a page" \
+    "  utf-8    U+00E9 'é' (2 bytes)" "$(sed -n 8p "$WORK/tplain.out")"
+check "and names the block, the same way" "  block    Latin-1 Supplement" \
+    "$(sed -n 11p "$WORK/tplain.out")"
+check "a converted file says whose bytes these are" \
+    "  note     Vim's bytes, not the file's: 'fileencoding' is latin1, this Vim holds utf-8" \
+    "$(sed -n 13p "$WORK/tplain.out")"
+check "and a dos file says what its line breaks really are" \
+    "  note     a line break reads 0a here; 'fileformat' is dos, so the file has 0d 0a" \
+    "$(sed -n 14p "$WORK/tplain.out")"
+check "an empty buffer has nothing to read, and says so not throws" \
+    "hexpair: this buffer holds no bytes" "$(sed -n 16p "$WORK/tplain.out")"
+
 check "a byte order mark is recognised in each encoding that has one" \
     "['utf-8', 'utf-16be', 'utf-16le', 'utf-32le, or utf-16le followed by U+0000', 'utf-32be', '']" \
     "$(sed -n 17p "$WORK/tname.out")"
