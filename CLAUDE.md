@@ -724,6 +724,17 @@ that call them directly. The job carries a non-gating probe step ("Probe
 PowerShell, including the way hexpair calls it") whose value is the
 comparison between a bare run and one through Vim's `system()`.
 
+**CI runs both large-file checkers**, one per platform, as a step of its
+own with a budget of its own. They are the only checks that touch a real
+multi-gigabyte file, and they cover different things from the straddle
+block above: that one is a SPARSE 4 GiB fixture testing xxd's offset-column
+widening from eight digits to nine, a few KiB on disk; the checkers build a
+real 3 GiB file and verify that bytes written past 2 GiB land where they
+were told, against a pattern predicted from the offset. Peak disk is three
+times the fixture on Linux (the file, the whole-file temp the shrink
+splices through, and the `:w {file}` copy) and twice it on Windows, where
+SetLength truncates in place and no temp is needed.
+
 ### What `test/check-large-file.cmd` cost to get running, and the rules it left
 
 It now passes all twenty checks on native Windows - the same-length write,

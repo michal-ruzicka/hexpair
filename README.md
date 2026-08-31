@@ -29,7 +29,7 @@ Everything runs on `xxd`, which ships with Vim itself, and portable
 VimScript: no `sed`, `tr`, `dd` or anything else, so it behaves the same
 on Linux, macOS and the BSDs, on native Windows (where `xxd.exe` is found
 inside the Vim installation even when it is not on `PATH`) and inside WSL —
-with one exception, files over 2 GiB on native Windows, described below.
+with one platform note about files over 2 GiB on native Windows, below.
 
 And it is **good enough for real work on real, even _very_ big, files:** 
 because it shows one page at a time and writes one page at a time, a file that 
@@ -37,13 +37,18 @@ does not fit in memory — a disk image, a core dump, a database — is no diffe
 from a small one. Editing an 8 TiB file costs the same ~20 MiB of memory as 
 editing an 8 KiB one.
 
-> **On native Windows, past 2 GiB the work is done by PowerShell rather
-> than `xxd`.** `xxd` keeps its seek offset in a C `long`, 32 bits there, so
-> past that point it reads and writes the wrong place; `.NET`'s `FileStream`
-> seeks with an `Int64`, so reading, searching, comparing, overwriting,
-> growing, shrinking and `:w {file}` all work. It costs one process start
-> per operation — and buys one thing back, since shrinking a file becomes
-> cheaper there than anywhere else. **WSL has neither limit.**
+> **A note about `xxd` on native Windows.** `xxd` keeps its seek offset in a
+> C `long`, which is 32 bits there, so past 2 GiB it reads and writes the
+> wrong place. Hexpair does the seeking with PowerShell beyond that point
+> instead, and everything works — reading, searching, comparing,
+> overwriting, growing, shrinking, `:w {file}`. What changes is the cost: a
+> process start per operation.
+>
+> **This is a limitation of `xxd` on one platform, not of hexpair and not
+> of the file.** On Linux, macOS, the BSDs and inside WSL a `long` is 64
+> bits and `xxd` seeks natively, so files of any size work the ordinary
+> way — the ceiling is 2⁶³−1 bytes, eight exbibytes, which is not a limit
+> anyone is going to meet.
 > See [Windows and the 2 GiB limit](#windows-and-the-2-gib-limit).
 
 **The hex*pair* name:** hex and text, always paired. *Within a line* —
@@ -444,8 +449,10 @@ on a Windows machine is a `wsl vim` away. A 32-bit build of anything has
 the same limit as Windows for the `xxd` half, which hexpair does not
 currently detect — it is gated on being Windows.
 
-So on native Windows, treat hexpair as a full hex editor up to 2 GiB, and
-as a read-only viewer past it.
+So on native Windows hexpair is a full hex editor at any size. Past 2 GiB
+what changes is how the bytes are moved and what it costs, not what can be
+done — and the shrink row above is the one place where the Windows path is
+the *faster* one.
 
 ### Windows: `vimhex` and `vimhexdiff` outside Vim
 

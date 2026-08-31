@@ -1514,15 +1514,18 @@ check "helptags found the plugin's tags" "1" \
 # Past 2 GiB a Windows Vim reaches the file through PowerShell, not xxd
 # (|hexpair-windows-2gib|), so this block stops testing what it is for -
 # xxd's own offset column widening from eight digits to nine at 4 GiB - and
-# starts exercising a different mechanism entirely. It also HANGS the
-# Windows CI runner: the job times out at fifteen minutes here, and every
-# PowerShell call this block would make is the first one the suite makes at
-# all. Why that runner blocks where a real Windows machine does not is not
-# yet known and is being chased separately; skipping is not a fix for it.
+# starts exercising a different mechanism entirely. That alone is the
+# reason; it would be skipped here even if it passed.
 #
-# What is lost is nothing: the widening itself is checked without a 4 GiB
-# file by "and the column widens past eight digits", and the PowerShell
-# read and write paths by the checks that call them directly.
+# It also used to hang the Windows CI runner, timing out the job at fifteen
+# minutes. That was never explained and stopped happening on its own; if it
+# returns, note that this block would make the first PowerShell calls the
+# suite makes at all.
+#
+# What is lost is nothing. The widening is checked without a 4 GiB file by
+# "and the column widens past eight digits", the PowerShell read and write
+# paths by the checks that call them directly, and what a real page past
+# 2 GiB does on Windows by test/check-large-file.cmd, which CI now runs.
 if [ "$IS_WIN" = 1 ]; then
     echo "skip - the 4 GiB straddle block (Windows reaches those offsets"
     echo "       through PowerShell, not xxd; see hexpair-windows-2gib)"

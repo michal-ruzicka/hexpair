@@ -25,13 +25,25 @@ concurrency:
 jobs:
   test-and-pack-linux:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install Vim
         run: sudo apt-get update && sudo apt-get install -y vim xxd
       - name: Run the regression suite
         run: test/run-tests.sh
+      # The suite cannot do this: it needs a multi-gigabyte file, which is
+      # why the script is separate and normally run by hand. In CI it is
+      # worth the minutes because it is the only check that a page past
+      # 2 GiB is written where it says - and on Linux it also exercises the
+      # splice, which is the path Windows now avoids entirely.
+      - name: Check a file over 2 GiB
+        timeout-minutes: 20
+        run: |
+          df -h "$RUNNER_TEMP" | sed 's/^/  /'
+          # Three times the fixture at peak here: the file, the whole-file
+          # temp the shrink splices through, and the ':w {file}' copy.
+          TMPDIR="$RUNNER_TEMP" test/check-large-file.sh
       - name: Package the release tarball
         run: ./pack-release
       - name: Record the tarball hash
@@ -45,7 +57,7 @@ jobs:
 
   test-and-pack-windows:
     runs-on: windows-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # Windows is the platform the plugin's portability rules exist for -
@@ -146,6 +158,19 @@ jobs:
             exit 1
           }
           test/run-tests.sh
+      # The one check that native Windows past 2 GiB does what it claims:
+      # PowerShell seeks, .NET writes, and every byte is verified against a
+      # pattern predicted from its own offset. Nothing else in this job
+      # reaches those offsets - the suite's 4 GiB block is skipped here on
+      # purpose, and for a different reason (see run-tests.sh).
+      #
+      # `shell: cmd` and not bash: the driver runs Vim itself, and doing
+      # that from a batch file rather than from anything with a PowerShell
+      # or an MSYS layer above it is the whole design (see the .cmd).
+      - name: Check a file over 2 GiB
+        shell: cmd
+        timeout-minutes: 30
+        run: test\check-large-file.cmd
       - name: Package the release tarball
         shell: cmd
         run: pack-release.cmd

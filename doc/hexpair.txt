@@ -932,8 +932,11 @@ page it shows, so a file of any size opens instantly.
 |:w| writes the page back - see |hexpair-paged-write| below.
 
                                                     *hexpair-windows-2gib*
-On native Windows, files over 2 GiB can be READ but not written.  Two
-separate limits, both outside this plugin:
+On native Windows, files over 2 GiB are read and written through PowerShell
+rather than xxd.  Everything works - reading, searching, comparing,
+overwriting, growing, shrinking, |:w| {file} and |:saveas| - and what
+changes is only how the bytes are moved and what that costs.  The limit is
+outside this plugin, and is in two places at once:
 
 - `xxd` carries its seek offset in a C `long` - strtol() into it, fseek()
   out of it - and a `long` is 32 bits on Windows, which is LLP64 (a 64-bit

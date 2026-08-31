@@ -53,6 +53,9 @@ setlocal
 cd /d "%~dp0"
 
 if "%HEXPAIR_VIM%"=="" set HEXPAIR_VIM=vim
+REM Backslashes for cmd: CI hands this over spelled with forward
+REM slashes, and so does anyone copying a path out of Git Bash.
+set HEXPAIR_VIM=%HEXPAIR_VIM:/=\%
 set SIZE=%1
 if "%SIZE%"=="" set SIZE=3
 set HANDOFF=%TEMP%\hexpair-check-large.cmd
