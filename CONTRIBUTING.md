@@ -33,7 +33,7 @@ reports and patches are welcome via the project's
 | `vimhex-contex-entry.add.reg`, `.remove.reg` | Explorer context-menu submenu, added and removed. **Generated** — see `make-context-entry-reg.py`; bundled in every release tarball |
 | `make-context-entry-reg.py` | Generates the two `.reg` files above (they carry `REG_EXPAND_SZ` values, which `.reg` can only write as `hex(2):` plus UTF-16LE bytes). Takes an optional install path. Development-only, not in the tarball |
 | `icons/` | The three context-menu icons and what draws them: `build.py` renders `hexpair-{open,pick,with}.ico` from `design.py` via `rasticon.py`, a from-scratch PNG/ICO encoder. Only the `.ico` files are bundled in a release tarball; the generators are development-only |
-| `test/` | Headless regression tests (`run-tests.sh`, see *Testing*) |
+| `test/` | Headless regression tests (`run-tests.sh`, see *Testing*) and `check-large-file.sh`, which the suite cannot replace: it builds a multi-gigabyte file and edits it past 2 GiB, which is the only way to exercise what Windows does there. Run by hand |
 | `.gitattributes` | Line-ending normalization rules |
 | `.gitignore` | Excludes `build/`, `dist/` and the demo MP4 from version control |
 | `pack-release` | POSIX wrapper around `pack-release.py` |

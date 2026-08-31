@@ -292,6 +292,20 @@ demo/                 - the animation at the top of README.md and what
                         long (hence MP4 then ffmpeg), and its work
                         directory must be short as well as off tmpfs
 test/run-tests.sh     - headless regression suite (vim -es)
+test/check-large-file.sh - what the suite cannot be: builds a
+                        multi-gigabyte file and edits it past 2 GiB, which
+                        is the only way to exercise the Windows paths in
+                        earnest. Run by hand, needs 2x the size in disk.
+                        Refuses under 3 GiB rather than run every check
+                        against the ordinary paths and report a success
+                        that means nothing. Checks THREE things per edit -
+                        the bytes that should change did, the bytes on
+                        either side did not, the length is right - because
+                        a whole-file hash answers none of them separately.
+                        Its own arithmetic cost a 3 GiB run to get right:
+                        the edits rewrite the first columns of a dump LINE,
+                        so the offset has to be line-aligned or every
+                        expectation is off by up to fifteen bytes.
 dist/                 - packaged release tarballs (gitignored)
 ```
 

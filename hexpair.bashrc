@@ -13,20 +13,26 @@
 # It defines one function:
 #
 #     vimhex FILE          the first page
-#     vimhex FILE PAGE     that page, 1-based; also '$' for the last one
-#                          and '+N' / '-N' to step from the first
+#     vimhex FILE PAGE     that page, 1-based; also '$' for the last one,
+#                          '$-N' for N pages back from it, and '+N' / '-N'
+#                          to step from the first
 #     vimhex FILE @BYTE    the page holding that byte, cursor on it;
 #                          decimal or 0x-prefixed, and 1-based, so a
 #                          position :HexPairPages reported can be typed
-#                          straight back in
+#                          straight back in. '@$' is the last byte and
+#                          '@$-N' is N back from it.
 #     vimhex - [...]       read from standard input instead of a file
 #
 #     vimhex disk.img
 #     vimhex disk.img 37
 #     vimhex disk.img '$'          the end of the file, without counting pages
+#     vimhex disk.img '$-5'        five pages back from the end
+#     vimhex disk.img '@$-0x100'   0x100 bytes back from the last one
 #     vimhex disk.img @0x4a2000
 #     cat disk.img | vimhex -
 #     dd if=/dev/sda bs=1M count=64 | vimhex - @1024
+#
+# Quote anything containing a '$', or the shell reads it as a variable.
 #
 # A block device (/dev/sda) cannot be paged directly: the size the system
 # reports for it is 0, and hexpair pages what a file says it holds. Read a
@@ -81,9 +87,10 @@ vimhex()
             jump='execute "HexPairGoOffset" $HEXPAIR_OPEN_WHERE'
             ;;
         *)
-            # A page number, '$' for the last page, or '+N' / '-N'.
-            # :HexPairPageGoto parses all three; passing it through the
-            # environment keeps the shell out of it.
+            # A page number, '$' for the last page, '$-N' for N back from
+            # it, or '+N' / '-N' from the first. :HexPairPageGoto parses
+            # them all; passing the value through the environment keeps
+            # the shell out of it, which is what lets a '$' survive.
             jump='execute "HexPairPageGoto" $HEXPAIR_OPEN_WHERE'
             ;;
     esac

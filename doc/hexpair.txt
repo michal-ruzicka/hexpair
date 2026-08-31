@@ -1089,6 +1089,12 @@ HexPairOpenFile({file} [, {page}])
                             {N}     the page numbered N, 1-based
                             +N, -N  N pages forward or back from this one
                             $       the last page
+                            $-N     N pages back from the last one
+                        `$-N` is the one a bare `-N` cannot express: that
+                        counts from the page in view, this from the end of
+                        the file.  `$+N` is refused where it is typed,
+                        naming a page past the last one, which is never a
+                        page.
                         A step past either end is refused with the same
                         "page N does not exist" as a number out of range,
                         rather than being clamped, so a mistyped step does
@@ -1096,7 +1102,7 @@ HexPairOpenFile({file} [, {page}])
                         discard unsaved changes without !, same as above.
                         <Plug>(HexPairPageGoto) is the mapping equivalent:
                         it prompts with |input()| instead of needing a
-                        typed {page}, and accepts the same three forms.
+                        typed {page}, and accepts the same forms.
                         <Plug>(HexPairPageGotoForce) is the same prompt but
                         discards unsaved changes without asking, like the
                         {page} variant with !.
@@ -1379,11 +1385,17 @@ HexPairOpenFile({file} [, {page}])
                         banner already makes.)  A hex number needs the
                         0x on it: a bare "ff" is not a byte position, and
                         says so.  `+N` and `-N` step from the byte the
-                        cursor is on, and `$` is the file's last byte -
-                        the same shorthand |:HexPairPageGoto| takes for
-                        the last page, since the two prompts sit under
-                        neighbouring keys and answering one in the
-                        other's language should not be a mistake.
+                        cursor is on; `$` is the file's last byte and
+                        `$-N` is N bytes back from it, which is the thing
+                        a bare `-N` cannot say - that one counts from
+                        wherever the cursor is, this one from the end.
+                        `$-N` takes hex too (`$-0x10`).  `$+N` is refused
+                        where it is typed: it names a byte past the last
+                        one, which is never a byte.  |:HexPairPageGoto|
+                        takes the same forms for pages, since the two
+                        prompts sit under neighbouring keys and answering
+                        one in the other's language should not be a
+                        mistake.
                         Refuses to leave a page with unwritten
                         changes without !, like the other navigation
                         commands, and leaves you in whichever view you
@@ -1657,6 +1669,7 @@ vimhexdiff.cmd, taking the same arguments: >
     vimhex bigfile.bin
     vimhex bigfile.bin 3
     vimhex bigfile.bin $
+    vimhex bigfile.bin $-5
     vimhex bigfile.bin @0x4a2000
     type bigfile.bin | vimhex -
     vimhexdiff old.img new.img

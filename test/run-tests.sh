@@ -908,7 +908,7 @@ EOF
 "$HEXPAIR_VIM" -es -u NONE -S "$WORK/t30.vim"
 check "empty prompt input is cancellation, not an error" "{}" "$(sed -n 1p "$WORK/t30.out")"
 check "numeric prompt input yields the page number"      "{'page': 7}" "$(sed -n 2p "$WORK/t30.out")"
-check "non-numeric prompt input is a clear error"         "{'msg': 'hexpair: not a page number: abc (a page, +N or -N to step, \$ for the last)'}" "$(sed -n 3p "$WORK/t30.out")"
+check "non-numeric prompt input is a clear error"         "{'msg': 'hexpair: not a page number: abc (a page, +N or -N from here, \$ for the last, \$-N for N back from it)'}" "$(sed -n 3p "$WORK/t30.out")"
 
 # --- Test 31: :HexPairPageGoto! discards unsaved changes -------------------
 # The mechanism <Plug>(HexPairPageGotoForce) relies on (s:GotoPage()'s
@@ -1451,6 +1451,37 @@ check "growing says only what moves is written" \
     "Everything after this page has to move, so 900 of the file's 5000 bytes are rewritten in place - the rest is not touched, and no second copy of it is made (5000 -> 5003 bytes)." \
     "$(sed -n 5p "$WORK/ts3f.out")"
 
+# Which of those two the prompt shows is s:ResizeIsInPlace()'s answer, and
+# s:Write() acts on the SAME one - they were two copies of the rule, and the
+# copy in the prompt did not know that past 2 GiB both directions go in
+# place. It announced a whole-file rewrite while shortening a 120 GiB file
+# by moving its tail: alarming, and false.
+cat > "$WORK/tplan.vim" <<EOF
+$(printf "$HEX")
+enew
+let out = []
+" A small file: a shrink is a rewrite, a grow with a short tail is not.
+call add(out, HexPairPagedResizeIsInPlaceForTest(400, 512, 0, 5000) . '')
+call add(out, HexPairPagedResizeIsInPlaceForTest(600, 512, 4000, 5000) . '')
+" Past 2 GiB: both directions in place, whatever the cost model would say.
+call add(out, HexPairPagedResizeIsInPlaceForTest(400, 512, 3000000000, 5000000000) . '')
+call add(out, HexPairPagedResizeIsInPlaceForTest(600, 512, 3000000000, 5000000000) . '')
+call writefile(out, '$WORK/tplan.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tplan.vim" < /dev/null
+if [ "$IS_WIN" = 1 ]; then huge_shrink=1; huge_grow=1; else huge_shrink=0; huge_grow=1; fi
+check "a shrink under the limit rewrites the file" "0" \
+    "$(sed -n 1p "$WORK/tplan.out")"
+check "a grow with a short tail does not" "1" \
+    "$(sed -n 2p "$WORK/tplan.out")"
+# The row this fixes: on Windows the shrink is in place, so the prompt must
+# not say the file is being rewritten.
+check "past 2 GiB a shrink is in place too, on Windows" "$huge_shrink" \
+    "$(sed -n 3p "$WORK/tplan.out")"
+check "and a grow stays in place there" "$huge_grow" \
+    "$(sed -n 4p "$WORK/tplan.out")"
+
 # --- The help file must produce tags ---------------------------------------
 # :helptags aborts on the FIRST duplicate tag and writes none at all, so
 # one repeated tag costs the plugin its whole :help - after exactly the
@@ -1778,13 +1809,13 @@ check "an empty offset prompt cancels"    "{}" "$(sed -n 2p "$WORK/tk1.out")"
 check "byte 1234 parses to offset 1233"   "{'offset': 1233}" "$(sed -n 3p "$WORK/tk1.out")"
 check "byte 0x10 parses to offset 15"     "{'offset': 15}"   "$(sed -n 4p "$WORK/tk1.out")"
 check "a non-position is reported" \
-    "hexpair: not a byte position: 'zz' (decimal, or 0x for hex; byte 1 is the first, +N and -N step from here, $ is the last)" \
+    "hexpair: not a byte position: 'zz' (decimal, or 0x for hex; byte 1 is the first, +N and -N step from here, $ is the last, \$-N is N back from it)" \
     "$(sed -n 5p "$WORK/tk1.out")"
 # A bare "ff" reads as hex to a person and as the decimal 0 to str2nr(),
 # so it is refused as a position rather than reported as "positions start
 # at 1", which is a complaint about the wrong thing.
 check "hex without the 0x is not a position either" \
-    "hexpair: not a byte position: 'ff' (decimal, or 0x for hex; byte 1 is the first, +N and -N step from here, $ is the last)" \
+    "hexpair: not a byte position: 'ff' (decimal, or 0x for hex; byte 1 is the first, +N and -N step from here, $ is the last, \$-N is N back from it)" \
     "$(sed -n 6p "$WORK/tk1.out")"
 # A step is the one form where 0 means something ("stay here") and where
 # the 1-based question does not arise at all.
@@ -1795,7 +1826,7 @@ check "a step parses as a step, in either base" \
 # in the other's language should not be a mistake. Left for the caller to
 # resolve, which is the only place that knows how big the file is.
 check "'\$' parses as the last byte, resolved by the caller" \
-    "{'last': 1}" "$(sed -n 8p "$WORK/tk1.out")"
+    "{'delta': 0, 'last': 1}" "$(sed -n 8p "$WORK/tk1.out")"
 
 # --- Piped input that Vim may already have transcoded is flagged -----------
 # A named file can be re-read with ++bin; piped input cannot, so if the
@@ -2400,7 +2431,7 @@ qa!
 EOF
 "$HEXPAIR_VIM" -es -u NONE -S "$WORK/tpg.vim" < /dev/null
 check "a step and a \$ parse as themselves" \
-    "[{'last': 1}, {'delta': 2}, {'delta': -2}, {'page': 7}]" \
+    "[{'delta': 0, 'last': 1}, {'delta': 2}, {'delta': -2}, {'page': 7}]" \
     "$(sed -n 1p "$WORK/tpg.out")"
 check "and resolve against the page in view" "[10, 5, 1, 7]" \
     "$(sed -n 2p "$WORK/tpg.out")"
@@ -3205,6 +3236,40 @@ EOF
 "$HEXPAIR_VIM" -es -u NONE -S "$WORK/tgodollar.vim" < /dev/null
 check "'\$' goes to the file's last byte" \
     "$(sed -n 2p "$WORK/tgodollar.out")" "$(sed -n 1p "$WORK/tgodollar.out")"
+# '$-N' counts back from the END, which a bare '-N' cannot say - that one
+# steps from wherever the cursor happens to be. Both parsers take it, and
+# both refuse '$+N', which would name a page or a byte past the last one.
+cat > "$WORK/tdollar.vim" <<EOF
+$(printf "$HEX")
+let out = []
+HexPairOpen $WORK/diffa.bin 1
+HexPairGoOffset \$-9
+call add(out, HexPairStatus())
+HexPairPageGoto \$-2
+call add(out, HexPairStatus())
+call add(out, string(HexPairPagedParseOffsetInput('\$+9')))
+call add(out, string(HexPairPagedParsePageInput('\$+2')))
+" and \$-N in hex, since a byte position may be written either way
+HexPairGoOffset \$-0x10
+call add(out, HexPairStatus())
+call writefile(out, '$WORK/tdollar.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tdollar.vim" < /dev/null
+# 5000 bytes, so the last is 5000 and nine back is 4991.
+check "'\$-N' counts back from the last byte" "hex 10/10 @0x137f (4991)" \
+    "$(sed -n 1p "$WORK/tdollar.out")"
+# 10 pages of 512, so two back from the last is page 8.
+check "and '\$-N' back from the last page" "hex 8/10 @0xe01 (3585)" \
+    "$(sed -n 2p "$WORK/tdollar.out")"
+check "'\$+N' is refused as a byte, where it was typed" \
+    "{'msg': 'hexpair: \$+9 is past the last byte - \$ is the end, so only \$-N (back from it) means anything'}" \
+    "$(sed -n 3p "$WORK/tdollar.out")"
+check "and as a page" \
+    "{'msg': 'hexpair: \$+2 is past the last page - \$ is the end, so only \$-N (back from it) means anything'}" \
+    "$(sed -n 4p "$WORK/tdollar.out")"
+check "and the byte form takes hex too" "hex 10/10 @0x1378 (4984)" \
+    "$(sed -n 5p "$WORK/tdollar.out")"
 
 # --- Reading past what xxd can seek to ------------------------------------
 # xxd carries its seek in a long - strtol(), fseek() - which is 32 bits on

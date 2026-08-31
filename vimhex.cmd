@@ -12,17 +12,21 @@ REM deliberately the same command taking the same arguments - a hex view is
 REM opened the same way whichever shell you happen to be standing in:
 REM
 REM     vimhex FILE          the first page
-REM     vimhex FILE PAGE     that page, 1-based; also $ for the last one
-REM                          and +N / -N to step from the first
+REM     vimhex FILE PAGE     that page, 1-based; also $ for the last one,
+REM                          $-N for N pages back from it, and +N / -N to
+REM                          step from the first
 REM     vimhex FILE @BYTE    the page holding that byte, cursor on it;
 REM                          decimal or 0x-prefixed, and 1-based, so a
 REM                          position :HexPairPages reported can be typed
-REM                          straight back in
+REM                          straight back in. @$ is the last byte and
+REM                          @$-N is N back from it.
 REM     vimhex - [...]       read from standard input instead of a file
 REM
 REM     vimhex disk.img
 REM     vimhex disk.img 37
 REM     vimhex disk.img $
+REM     vimhex disk.img $-5
+REM     vimhex disk.img @$-0x100
 REM     vimhex disk.img @0x4a2000
 REM     type disk.img | vimhex -
 REM
@@ -105,4 +109,6 @@ exit /b 1
 
 :usage
 >&2 echo usage: vimhex FILE^|- [PAGE^|@BYTE]
+>&2 echo        PAGE:  N, +N, -N, $, $-N
+>&2 echo        @BYTE: @N, @0xN, @+N, @-N, @$, @$-N
 exit /b 1

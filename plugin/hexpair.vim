@@ -2509,6 +2509,16 @@ function! HexPairPagedFileSizeForTest(file) abort
   return s:FileSize(a:file)
 endfunction
 
+" The resize plan, which s:Write() acts on and s:ConfirmResize() describes.
+" Takes the page state as arguments rather than reading it, so the decision
+" can be asked about a 120 GiB file from a test that has no such file.
+function! HexPairPagedResizeIsInPlaceForTest(newlen, pagelen, base, total) abort
+  let b:hexpair_page_len = a:pagelen
+  let b:hexpair_page_base = a:base
+  let b:hexpair_page_total = a:total
+  return s:ResizeIsInPlace(a:newlen)
+endfunction
+
 " The whole of a file as flat lowercase hex. Shared by both readers: xxd -p
 " over a file it does not have to seek in, which is the fast part of xxd and
 " the part that was never in question.
@@ -2769,11 +2779,28 @@ function! HexPairPagedResizeMessage(delta, total, moved) abort
         \ . "\nContinue?", a:moved, a:total, a:total, a:total + a:delta)
 endfunction
 
+" Will this resize move only the tail, or rewrite the whole file?
+"
+" ONE predicate, because s:Write() acts on the answer and s:ConfirmResize()
+" describes it, and a message that describes a different plan from the one
+" carried out is worse than no message: it was telling the user the whole
+" file would be rewritten while shortening a 120 GiB file in place, which
+" is both alarming and false.
+function! s:ResizeIsInPlace(newlen) abort
+  " Past what xxd can seek to, both directions go in place - there is no
+  " cost model to consult, because SetLength makes the shrink that is a
+  " whole-file rewrite everywhere else into a tail move and a cut.
+  if !s:XxdCanSeek(b:hexpair_page_total)
+    return 1
+  endif
+  return a:newlen > b:hexpair_page_len && s:TailShiftIsCheaper()
+endfunction
+
 function! s:ConfirmResize(newlen) abort
   if !g:hexpair_page_confirm
     return 1
   endif
-  let inplace = a:newlen > b:hexpair_page_len && s:TailShiftIsCheaper()
+  let inplace = s:ResizeIsInPlace(a:newlen)
   let msg = HexPairPagedResizeMessage(a:newlen - b:hexpair_page_len,
         \ b:hexpair_page_total, inplace ? s:TailSize() : b:hexpair_page_total)
   return confirm(msg, "&Write it\n&Cancel", 2, 'Question') == 1
@@ -3205,21 +3232,24 @@ function! s:Write() abort
     elseif !s:ConfirmResize(newlen)
       echomsg 'hexpair: cancelled; nothing was written'
       return
-    elseif !s:XxdCanSeek(b:hexpair_page_total)
-      " Both directions go in place past this limit, whatever
-      " s:TailShiftIsCheaper() would have said. The splice WOULD work now
-      " that s:CopyRange() has a PowerShell path, but it rewrites the whole
-      " file, and a file this side of the limit is at least 2 GiB - so the
-      " case the cost model calls expensive is the one that is actually
-      " cheap here, because SetLength can shorten a file in place and no
-      " other platform can do that at all.
+    elseif s:ResizeIsInPlace(newlen)
+      " Which of the two in-place paths is by direction alone. The splice
+      " WOULD work past the limit now that s:CopyRange() has a PowerShell
+      " path, but it rewrites the whole file, and a file that side of the
+      " limit is at least 2 GiB - so the case the cost model calls
+      " expensive is the one that is actually cheap there, SetLength being
+      " able to shorten a file in place where no other platform can.
       if newlen > b:hexpair_page_len
         call s:GrowInPlace(raw, newlen)
       else
+        " Only reachable past the limit: s:ResizeIsInPlace() says yes to a
+        " SHRINK nowhere else, and s:ShrinkInPlace() is PowerShell's alone
+        " (SetLength has no counterpart in Vim or xxd). Said out loud
+        " because the branch does not show it - and if it were ever
+        " reached elsewhere it would throw, not corrupt, since
+        " s:HasPowerShell() gates every step of it.
         call s:ShrinkInPlace(raw, newlen)
       endif
-    elseif newlen > b:hexpair_page_len && s:TailShiftIsCheaper()
-      call s:GrowInPlace(raw, newlen)
     else
       call s:Splice(raw, newlen)
     endif
@@ -3359,8 +3389,23 @@ function! HexPairPagedParsePageInput(text) abort
   if empty(a:text)
     return {}
   endif
+  " '$' alone, or a step FROM the last page: '$-5' is five back from the
+  " end, which is the thing a bare '-5' cannot say - that one steps from
+  " wherever the view happens to be. Returned as 'last' plus a delta so the
+  " resolver, which is the only place that knows how many pages there are,
+  " does the arithmetic.
   if a:text ==# '$'
-    return {'last': 1}
+    return {'last': 1, 'delta': 0}
+  endif
+  if a:text =~# '^\$-\d\+$'
+    return {'last': 1, 'delta': -str2nr(a:text[2:])}
+  endif
+  " '$+N' is past the last page, which is never a page. Refused by name,
+  " where it was typed, rather than left to the bounds check to report as
+  " a page that does not exist - the user knows which end they meant.
+  if a:text =~# '^\$+\d\+$'
+    return {'msg': 'hexpair: ' . a:text . ' is past the last page - $ is '
+          \ . 'the end, so only $-N (back from it) means anything'}
   endif
   if a:text =~# '^[+-]\d\+$'
     " str2nr() is not asked to make sense of a leading '+'.
@@ -3368,7 +3413,8 @@ function! HexPairPagedParsePageInput(text) abort
   endif
   if a:text !~# '^\d\+$'
     return {'msg': 'hexpair: not a page number: ' . a:text
-          \ . ' (a page, +N or -N to step, $ for the last)'}
+          \ . ' (a page, +N or -N from here, $ for the last, '
+          \ . '$-N for N back from it)'}
   endif
   return {'page': str2nr(a:text)}
 endfunction
@@ -3379,7 +3425,9 @@ endfunction
 " it was asked for as a number, a step or a $.
 function! HexPairPagedResolvePage(parsed, current, totalpages) abort
   if has_key(a:parsed, 'last')
-    return a:totalpages
+    " '$' is delta 0, '$-5' is five back from it. One branch for both, so
+    " they cannot disagree about which end they count from.
+    return a:totalpages + get(a:parsed, 'delta', 0)
   endif
   if has_key(a:parsed, 'delta')
     return a:current + a:parsed.delta
@@ -3417,7 +3465,7 @@ function! s:PageGotoPrompt(force) abort
   if !s:RequirePaged()
     return
   endif
-  let n = input(printf('hexpair: goto page (1-%d, +N/-N, $): ',
+  let n = input(printf('hexpair: goto page (1-%d, +N/-N, $, $-N): ',
         \ b:hexpair_page_totalpages))
   redraw
   call s:PageGotoText(n, a:force)
@@ -4441,7 +4489,7 @@ function! s:GotoOffsetPrompt(force) abort
   " Worded to match s:PageGotoPrompt()'s, which sits under the neighbouring
   " key: both take +N/-N and $, and a prompt that lists one and not the
   " other is a prompt that teaches the wrong thing about its neighbour.
-  let text = input(printf('hexpair: goto byte (1-%d, +N/-N, $): ',
+  let text = input(printf('hexpair: goto byte (1-%d, +N/-N, $, $-N): ',
         \ b:hexpair_page_total))
   redraw
   if !empty(text)
@@ -4504,7 +4552,21 @@ function! HexPairPagedParseOffsetInput(text) abort
   " knows how big the file is; 'last' rather than an offset for the reason
   " HexPairPagedParsePageInput() returns it that way.
   if a:text ==# '$'
-    return {'last': 1}
+    return {'last': 1, 'delta': 0}
+  endif
+  " '$-N' is N bytes back from the last one - the thing a bare '-N' cannot
+  " say, since that steps from wherever the cursor is. Resolved by the
+  " caller, which is the only place that knows how long the file is.
+  if a:text =~# '^\$-\%(0[xX]\x\+\|\d\+\)$'
+    let n = a:text[2:]
+    return {'last': 1,
+          \ 'delta': -(n =~# '^0[xX]' ? str2nr(n[2:], 16) : str2nr(n))}
+  endif
+  " '$+N' is past the last byte, which is not a byte. Refused where it was
+  " typed rather than reported later as an offset outside the file.
+  if a:text =~# '^\$+'
+    return {'msg': 'hexpair: ' . a:text . ' is past the last byte - $ is '
+          \ . 'the end, so only $-N (back from it) means anything'}
   endif
   " A leading + or - makes it a step from the byte the cursor is on
   " rather than a position in the file, which is the only form where 0
@@ -4518,7 +4580,7 @@ function! HexPairPagedParseOffsetInput(text) abort
   if text !~# '^\%(0[xX]\x\+\|\d\+\)$'
     return {'msg': printf('hexpair: not a byte position: %s (decimal, or '
           \ . '0x for hex; byte 1 is the first, +N and -N step from '
-          \ . 'here, $ is the last)',
+          \ . 'here, $ is the last, $-N is N back from it)',
           \ string(a:text))}
   endif
   let n = text =~# '^0[xX]' ? str2nr(text[2:], 16) : str2nr(text)
@@ -4540,23 +4602,26 @@ function! s:GotoOffset(text, force) abort
     if has_key(parsed, 'msg')
       throw parsed.msg
     endif
+    " BEFORE the step branch: '$' and '$-N' carry a delta as well, and
+    " the step branch would otherwise take them and count from the
+    " cursor rather than from the end of the file.
+    if has_key(parsed, 'last')
+      " '$' is the last byte and '$-N' is N back from it, resolved here
+      " because this is where the size is known. An empty file has no last
+      " byte; letting it through as -1 would be reported as "byte 0 is
+      " outside the file", which is true and says nothing about why.
+      let total = s:FileSize(b:hexpair_page_file)
+      if total <= 0
+        throw 'hexpair: the file is empty; it has no last byte'
+      endif
+      let parsed = {'offset': total - 1 + get(parsed, 'delta', 0)}
+    endif
     if has_key(parsed, 'delta')
       " A step is from the byte the cursor is on, so it needs no page
       " arithmetic of its own - it becomes a position and takes the same
       " road as one, including the check that it is inside the file.
       let here = s:IsHexView() ? s:PagedByteOffset() : s:TextByteOffset()
       let parsed = {'offset': here + parsed.delta}
-    endif
-    if has_key(parsed, 'last')
-      " '$' is the last byte, resolved here because this is where the size
-      " is known. An empty file has no last byte; letting it through as -1
-      " would be reported as "byte 0 is outside the file", which is true
-      " but says nothing about why.
-      let total = getfsize(b:hexpair_page_file)
-      if total <= 0
-        throw 'hexpair: the file is empty; it has no last byte'
-      endif
-      let parsed = {'offset': total - 1}
     endif
     if !has_key(parsed, 'offset')
       return

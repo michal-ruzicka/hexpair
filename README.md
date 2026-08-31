@@ -329,6 +329,8 @@ and it gives you `vimhex`:
 vimhex bigfile.bin              # the first page
 vimhex bigfile.bin 3            # page 3
 vimhex bigfile.bin '$'          # the last page, without counting them
+vimhex bigfile.bin '$-5'        # five pages back from the end
+vimhex bigfile.bin '@$-0x100'   # 0x100 bytes back from the last one
 vimhex bigfile.bin @0x4a2000    # the page holding that byte
 cat bigfile.bin | vimhex -      # piped input
 ```
@@ -454,6 +456,8 @@ taking the same arguments as the shell functions above:
 vimhex bigfile.bin              REM the first page
 vimhex bigfile.bin 3            REM page 3
 vimhex bigfile.bin $            REM the last page, without counting them
+vimhex bigfile.bin $-5          REM five pages back from the end
+vimhex bigfile.bin @$-0x100     REM 0x100 bytes back from the last one
 vimhex bigfile.bin @0x4a2000    REM the page holding that byte
 type bigfile.bin | vimhex -     REM piped input
 vimhexdiff old.img new.img      REM the two side by side
