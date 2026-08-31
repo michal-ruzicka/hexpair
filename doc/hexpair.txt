@@ -362,8 +362,8 @@ last byte, and on a short last line on its last existing byte.
                                                     *hexpair-marking-views*
 Every byte-level marking - the bytes you have edited (|HexPairModified|),
 the bytes that differ from the file being compared with (|HexPairDiff|),
-the matches of the search (|HexPairFind|) and the byte a mark stands on
-(|HexPairMark|) - is drawn in BOTH views, and only over the lines on
+the matches of the search (|HexPairFind-highlight|) and the byte a mark
+(|HexPairMark-highlight|) - is drawn in BOTH views, and only over the lines on
 screen.  A dump has three columns per byte and one for its character; a
 page of text has one column per byte, and the line break that ends a line
 is a byte of the page with no column of its own, so it is the one byte
@@ -1132,7 +1132,7 @@ HexPairOpenFile({file} [, {page}])
                         between them are decoration, and a '?' stands for
                         any nibble.  A match starts on a byte, never
                         between two.  Every match on the page is marked
-                        with |HexPairFind|.
+                        with |HexPairFind-highlight|.
 
                         The search obeys |'wrapscan'| like Vim's own, and
                         says when it wrapped.  ! forgets the pattern and
@@ -1790,7 +1790,7 @@ message longer than one line, which is what triggers that prompt.  It sets
   page's offset.  Undo of edits made within one view of one page works
   normally.  What protects an edit you have not written yet is the refusal
   to turn a page or open another one while the buffer is |'modified'|,
-  which is what the |:HexPairPageNext!| bang overrides.
+  which is what |:HexPairPageNext|'s bang overrides.
 - Cursor mapping is byte-exact for any byte the cursor can rest on.  A 0a
   byte acting as a line separator in the text view is the exception: the
   cursor cannot rest on it, so it clamps to the last byte of the line and
@@ -1800,6 +1800,6 @@ message longer than one line, which is what triggers that prompt.  It sets
 - A page is an ordinary Vim buffer, so it costs what that many lines cost,
   and a write costs a pass over them: about a seventh of a second for the
   default 128 KiB page, in proportion for a larger one
-  (|hexpair-paged-size|).  The size of the FILE never enters into it.
+  (|g:hexpair_page_size|).  The size of the FILE never enters into it.
 
 vim:tw=78:ts=8:ft=help:norl:
