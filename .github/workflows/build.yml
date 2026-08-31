@@ -83,6 +83,52 @@ jobs:
           $fwd = $dir -replace '\\', '/'
           Add-Content -Path $env:GITHUB_ENV -Value "HEXPAIR_VIM=$fwd/vim.exe"
           Add-Content -Path $env:GITHUB_ENV -Value "HEXPAIR_XXD=$fwd/xxd.exe"
+      # This job has hung inside the 4 GiB straddle block, which is the
+      # first place the suite starts PowerShell - hexpair reaches offsets
+      # past 2 GiB that way, since xxd seeks with a 32-bit long on Windows
+      # (see hexpair-windows-2gib in doc/hexpair.txt). That block is
+      # skipped here for now, which lets the rest of the suite run but
+      # explains nothing.
+      #
+      # This measures the thing that would explain it. The bare runs say
+      # whether PowerShell starts on this runner at all and what a cold
+      # start costs; the third says whether it starts when a native
+      # Windows Vim asks through system(), which is what hexpair actually
+      # does and the only one of the three that matches the failing path.
+      #
+      # Diagnostic, not gating: continue-on-error so a runner without
+      # PowerShell reports rather than blocks, and a timeout of its own
+      # because "it hangs" is a possible answer and finding that out
+      # should cost three minutes rather than fifteen.
+      - name: Probe PowerShell, including the way hexpair calls it
+        shell: bash
+        timeout-minutes: 3
+        continue-on-error: true
+        run: |
+          probe() {
+            start=$(date +%s)
+            powershell -NoProfile -NonInteractive -Command "exit 0"
+            echo "  $1: exit=$? elapsed=$(( $(date +%s) - start ))s"
+          }
+          probe "bare, cold"
+          probe "bare, warm"
+
+          # Exactly s:HasPowerShell(): a native Windows Vim, system(), the
+          # same arguments. If the suite hangs where this returns, the
+          # problem is not PowerShell itself.
+          printf '%s\n' \
+            'let t = reltime()' \
+            "call system('powershell -NoProfile -NonInteractive -Command exit 0')" \
+            "call writefile([printf('exit=%d elapsed=%.1fs shell=%s', v:shell_error, reltimefloat(reltime(t)), &shell)], 'probe.out')" \
+            'qa!' > probe.vim
+          "$HEXPAIR_VIM" -es -u NONE -S probe.vim < /dev/null || echo "  vim itself exited $?"
+          if [ -f probe.out ]; then
+            echo "  through Vim's system(): $(cat probe.out)"
+          else
+            echo "  through Vim's system(): NO OUTPUT - system() did not return"
+          fi
+          rm -f probe.vim probe.out
+
       # Git Bash, so the one suite runs on both platforms; it converts its
       # own paths to the drive-letter form that a native Vim understands.
       # The MS-Windows check is the point of the job: an MSYS Vim would

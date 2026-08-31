@@ -664,9 +664,23 @@ then times out at fifteen minutes. **The cause is not known**: the same
 reads and writes work on a real Windows machine on a 120 GiB file, at about
 a second a page, so it is something about that runner - PowerShell absent,
 shimmed, or blocked - and not about the code path. Skipping is a way to see
-the rest of the suite, not a fix; a run of
-`powershell -NoProfile -NonInteractive -Command "exit 0"` timed in that job
-is the thing that would settle it. Nothing is lost meanwhile: the widening
+the rest of the suite, not a fix.
+
+**The CI job now probes for it** ("Probe PowerShell, including the way
+hexpair calls it", diagnostic and non-gating, with a three-minute timeout
+of its own). Read its three lines in this order:
+
+- both `bare` lines fail or hang -> PowerShell is absent or blocked on that
+  runner, and nothing in this plugin can help; the skip is the answer.
+- the bare lines are quick but `through Vim's system()` says NO OUTPUT ->
+  the problem is that specific call, not PowerShell. That is the
+  interesting outcome: it would mean `system()` from a native Windows Vim,
+  under a Git Bash step, does not return for this command - and the
+  `shell=` it prints says which shell it went through, which is the first
+  thing to suspect.
+- everything is quick -> the hang is elsewhere in that block, and the next
+  step is `g:hexpair_debug` in the job to see how many processes a page
+  turn there actually starts. Nothing is lost meanwhile: the widening
 is checked without a 4 GiB file by "and the column widens past eight
 digits", and the PowerShell paths by the checks that call them directly.
 
