@@ -10,6 +10,14 @@ and this project adheres to
 ## [v2.3.0-devel] – 2026-08-28
 
 ### Added
+- **`:HexPairInspect` now says what the character _is_.** A `name` row for
+  every code point you cannot see — the C0 and C1 controls, `DEL`, and the
+  space and format characters a hex editor meets constantly — a `block` row
+  naming the Unicode block, which answers *what script even is this*, and a
+  `bom` row when the bytes at the cursor are a byte order mark, which the
+  UTF-8 rows cannot say because `ff fe` is not UTF-8. No full character
+  names: that needs `UnicodeData.txt`, which is a different order of thing
+  from a table of ranges. See `:help hexpair-inspect-naming`.
 - **`vimhex.cmd` and `vimhexdiff.cmd`**, the `cmd.exe` counterparts of the
   two shell functions in `hexpair.bashrc` - same names, same arguments, so
   a hex view is opened the same way whichever shell you are standing in.

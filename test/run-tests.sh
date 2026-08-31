@@ -2615,11 +2615,73 @@ check "and the floats" \
     "  float32  781.035217                  12.141422" "$(sed -n 16p "$WORK/tins.out")"
 check "and what the bytes are as text" \
     "  utf-8    U+0041 'A' (1 byte)" "$(sed -n 18p "$WORK/tins.out")"
+# The hex view's own rows end with what the utf-8 reading IS - which is
+# where the naming rows were added, so everything after them moved down one.
+check "and what block that character belongs to" \
+    "  block    Basic Latin" "$(sed -n 21p "$WORK/tins.out")"
 check "a width that does not fit in what is left of the page says so" \
-    "  16-bit   (only 1 byte left on this page)" "$(sed -n 21p "$WORK/tins.out")"
-check "both views read the same bytes" "1" "$(sed -n 22p "$WORK/tins.out")"
+    "  16-bit   (only 1 byte left on this page)" "$(sed -n 22p "$WORK/tins.out")"
+check "both views read the same bytes" "1" "$(sed -n 23p "$WORK/tins.out")"
 check "and a banner line has nothing to read" "hexpair: no byte here to read" \
-    "$(sed -n 23p "$WORK/tins.out")"
+    "$(sed -n 24p "$WORK/tins.out")"
+
+# --- Naming a code point ----------------------------------------------------
+# Vim has no Unicode database, so the plugin carries two tables: the controls
+# and format characters by hand, the blocks generated from Blocks.txt by
+# make-unicode-blocks.py. What is checked here is the WORDING and the
+# boundaries - a block lookup that is off by one lands in the neighbouring
+# script and reads perfectly plausible.
+cat > "$WORK/tname.vim" <<EOF
+$(printf "$HEX")
+let out = []
+for cp in [0x00, 0x1b, 0x7f, 0x85, 0xa0, 0xfeff, 0xfffd]
+  call add(out, HexPairPagedCharNotes(cp)[0][1])
+endfor
+for cp in [0x41, 0x7f, 0x80, 0x24f, 0x250, 0x4e2d, 0x1f600, 0x2fe0, 0x10ffff]
+  let notes = HexPairPagedCharNotes(cp)
+  call add(out, notes[len(notes) - 1][1])
+endfor
+call add(out, string(map([[0xef,0xbb,0xbf], [0xfe,0xff], [0xff,0xfe], [0xff,0xfe,0x00,0x00], [0x00,0x00,0xfe,0xff], [0x41,0x42]], 'HexPairPagedBomText(v:val)')))
+call writefile(out, '$WORK/tname.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tname.vim" < /dev/null
+check "a C0 control is named and said to be one" \
+    "NUL (null), a C0 control" "$(sed -n 1p "$WORK/tname.out")"
+check "and so is the one everybody meets" \
+    "ESC (escape), a C0 control" "$(sed -n 2p "$WORK/tname.out")"
+check "DEL belongs to neither range and says so" \
+    "DEL (delete), a control" "$(sed -n 3p "$WORK/tname.out")"
+check "a C1 control is named too" \
+    "NEL (next line), a C1 control" "$(sed -n 4p "$WORK/tname.out")"
+check "a character with a glyph nobody can see is named, without a kind" \
+    "NBSP (no-break space)" "$(sed -n 5p "$WORK/tname.out")"
+check "the byte order mark is named as one" \
+    "BOM (zero width no-break space, the byte order mark)" \
+    "$(sed -n 6p "$WORK/tname.out")"
+check "and a name with no abbreviation is not initialised at" \
+    "replacement character, what a decoder leaves where it failed" \
+    "$(sed -n 7p "$WORK/tname.out")"
+check "the block of an ordinary character" "Basic Latin" \
+    "$(sed -n 8p "$WORK/tname.out")"
+check "the last code point of a block is still in it" "Basic Latin" \
+    "$(sed -n 9p "$WORK/tname.out")"
+check "and the next one is in the next block" "Latin-1 Supplement" \
+    "$(sed -n 10p "$WORK/tname.out")"
+check "a boundary in the middle of the table, below" "Latin Extended-B" \
+    "$(sed -n 11p "$WORK/tname.out")"
+check "and above" "IPA Extensions" "$(sed -n 12p "$WORK/tname.out")"
+check "a block nobody would guess from the bytes" "CJK Unified Ideographs" \
+    "$(sed -n 13p "$WORK/tname.out")"
+check "one past the BMP, which is where the table stops being small" \
+    "Emoticons" "$(sed -n 14p "$WORK/tname.out")"
+check "a gap between blocks is a gap, not the block before it" \
+    "no block - unassigned here" "$(sed -n 15p "$WORK/tname.out")"
+check "and the very last code point resolves" \
+    "Supplementary Private Use Area-B" "$(sed -n 16p "$WORK/tname.out")"
+check "a byte order mark is recognised in each encoding that has one" \
+    "['utf-8', 'utf-16be', 'utf-16le', 'utf-32le, or utf-16le followed by U+0000', 'utf-32be', '']" \
+    "$(sed -n 17p "$WORK/tname.out")"
 
 # ===========================================================================
 # Two views of one file

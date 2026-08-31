@@ -212,6 +212,20 @@ make-context-entry-   generates the two .reg files above. Exists because
                       Development-only, like icons/*.py: it matches no
                       pattern in the packaging test's shipped-files glob,
                       so it is correctly never expected in FILES.
+make-unicode-blocks.py - regenerates the Unicode block table inside
+                      plugin/hexpair.vim, between two markers, from
+                      Blocks.txt. Pinned by version in the URL and by
+                      SHA-256 in the script, so a re-run either produces
+                      the same 338 ranges or refuses. It exists because
+                      Vim has no Unicode database at all: charclass()
+                      knows three coarse classes and there is no name
+                      lookup, so the block is the most the inspector can
+                      honestly say about an arbitrary code point.
+                      Development-only, like the other generators here.
+                      **The markers are `"\ ` comment continuations, not
+                      plain `"` comments** - they sit INSIDE a continued
+                      list literal, where a plain comment line ends the
+                      continuation and the rest becomes nonsense.
 icons/                three custom icons for the entries above, and
                       what generates them:
                       - rasticon.py: a from-scratch vector rasterizer
@@ -449,6 +463,18 @@ Key function map:
   then may `b:undo_ftplugin` revert them), and when the restored
   filetype is empty no `FileType` event fires, so the plugin executes
   `b:undo_ftplugin` and clears `b:did_ftplugin` itself.
+- **Naming a code point** - `HexPairPagedCharNotes()`, and
+  `HexPairPagedBomText()` beside it. Two tables: the controls and format
+  characters by hand (C0, C1, DEL, NBSP, the zero-width joiners, the bidi
+  marks - the set someone actually reaches for the inspector about), and
+  the 338 Unicode blocks generated into `s:Blocks()`. That list is built on
+  FIRST USE and not at load: a literal inside a function body is stored as
+  text until the function runs, so a Vim that never inspects a character
+  pays nothing for 14 KB of ranges. The rows describe the UTF-8 reading
+  only, which is the one with no byte order to choose; `bom` is the single
+  exception, because `ff fe` is not UTF-8 and is exactly what someone
+  opening a file at offset 0 wants named. **No full character names**: that
+  is `UnicodeData.txt`, two megabytes, a different order of thing.
 - The data inspector's two directions. `s:Inspect()` reads up to eight
   bytes and `b:hexpair_inspect` is `[absolute offset, count]` of what it
   actually got — which near a page or file end is fewer, and the marking

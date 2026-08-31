@@ -3860,6 +3860,437 @@ function! s:CodePointText(cp, used) abort
         \ : printf('U+%04X%s', a:cp, glyph)
 endfunction
 
+" What a code point IS, as far as this plugin can honestly say. Vim has no
+" Unicode database: charclass() knows three coarse classes, and there is no
+" name lookup at all - so two questions are answerable here and one is not.
+"
+" Answered: the NAME of a code point that has no glyph and no identity you
+" can see - the C0 and C1 controls, and the space and format characters a
+" hex editor meets constantly, which is exactly the set someone reaches for
+" |:HexPairInspect| about. And the BLOCK any code point falls in, which is
+" the "what script even is this" question, and the one that turns a run of
+" unfamiliar bytes into "Cyrillic" or "CJK Unified Ideographs".
+"
+" NOT answered: the full character name, LATIN SMALL LETTER E WITH ACUTE and
+" its 150000 friends. That is UnicodeData.txt, two megabytes of names - a
+" different order of thing from a 14 KB table of ranges, and not something to
+" carry inside a Vim plugin. Saying the block and stopping is the honest
+" edge of what fits here.
+function! s:ControlNames() abort
+  if exists('s:controlnames')
+    return s:controlnames
+  endif
+  " "ABBR the long name", split on the first space: two parallel lists would
+  " be two things to keep in step.
+  let c0 = [
+        \ 'NUL null', 'SOH start of heading', 'STX start of text',
+        \ 'ETX end of text', 'EOT end of transmission', 'ENQ enquiry',
+        \ 'ACK acknowledge', 'BEL bell', 'BS backspace',
+        \ 'HT horizontal tab', 'LF line feed', 'VT vertical tab',
+        \ 'FF form feed', 'CR carriage return', 'SO shift out',
+        \ 'SI shift in', 'DLE data link escape', 'DC1 device control 1',
+        \ 'DC2 device control 2', 'DC3 device control 3',
+        \ 'DC4 device control 4', 'NAK negative acknowledge',
+        \ 'SYN synchronous idle', 'ETB end of transmission block',
+        \ 'CAN cancel', 'EM end of medium', 'SUB substitute', 'ESC escape',
+        \ 'FS file separator', 'GS group separator', 'RS record separator',
+        \ 'US unit separator',]
+  let c1 = [
+        \ 'PAD padding character', 'HOP high octet preset',
+        \ 'BPH break permitted here', 'NBH no break here', 'IND index',
+        \ 'NEL next line', 'SSA start of selected area',
+        \ 'ESA end of selected area', 'HTS character tabulation set',
+        \ 'HTJ character tabulation with justification',
+        \ 'VTS line tabulation set', 'PLD partial line forward',
+        \ 'PLU partial line backward', 'RI reverse line feed',
+        \ 'SS2 single shift two', 'SS3 single shift three',
+        \ 'DCS device control string', 'PU1 private use one',
+        \ 'PU2 private use two', 'STS set transmit state',
+        \ 'CCH cancel character', 'MW message waiting',
+        \ 'SPA start of guarded area', 'EPA end of guarded area',
+        \ 'SOS start of string', 'SGC single graphic character introducer',
+        \ 'SCI single character introducer',
+        \ 'CSI control sequence introducer', 'ST string terminator',
+        \ 'OSC operating system command', 'PM privacy message',
+        \ 'APC application program command',]
+  let special = [
+        \ [32,'SP space'], [160,'NBSP no-break space'],
+        \ [173,'SHY soft hyphen'], [1564,'ALM arabic letter mark'],
+        \ [8203,'ZWSP zero width space'],
+        \ [8204,'ZWNJ zero width non-joiner'],
+        \ [8205,'ZWJ zero width joiner'], [8206,'LRM left-to-right mark'],
+        \ [8207,'RLM right-to-left mark'], [8232,'LS line separator'],
+        \ [8233,'PS paragraph separator'],
+        \ [8234,'LRE left-to-right embedding'],
+        \ [8235,'RLE right-to-left embedding'],
+        \ [8236,'PDF pop directional formatting'],
+        \ [8237,'LRO left-to-right override'],
+        \ [8238,'RLO right-to-left override'], [8288,'WJ word joiner'],
+        \ [8294,'LRI left-to-right isolate'],
+        \ [8295,'RLI right-to-left isolate'],
+        \ [8296,'FSI first strong isolate'],
+        \ [8297,'PDI pop directional isolate'],
+        \ [65279,'BOM zero width no-break space, the byte order mark'],
+        \ [65533,'- replacement character, what a decoder leaves where it failed'],]
+  let s:controlnames = {}
+  let i = 0
+  while i < len(c0)
+    let s:controlnames[i] = s:NamePair(c0[i], 'a C0 control')
+    let i += 1
+  endwhile
+  let i = 0
+  while i < len(c1)
+    let s:controlnames[0x80 + i] = s:NamePair(c1[i], 'a C1 control')
+    let i += 1
+  endwhile
+  " DEL sits on its own: ASCII's last code point, a control by behaviour and
+  " in neither the C0 nor the C1 range.
+  let s:controlnames[0x7f] = s:NamePair('DEL delete', 'a control')
+  for pair in special
+    let s:controlnames[pair[0]] = s:NamePair(pair[1], '')
+  endfor
+  return s:controlnames
+endfunction
+
+function! s:NamePair(spec, kind) abort
+  return [matchstr(a:spec, '^\S\+'), matchstr(a:spec, '^\S\+\s\+\zs.*'), a:kind]
+endfunction
+
+" The Unicode blocks, sorted and disjoint. GENERATED - run
+" make-unicode-blocks.py rather than editing between the markers; the
+" Unicode version and the digest it is checked against are in that script.
+"
+" Built on first use and not at load: a list literal inside a function body
+" is stored as text until the function runs, so a Vim that never inspects a
+" character never pays for this.
+function! s:Blocks() abort
+  if exists('s:blocks')
+    return s:blocks
+  endif
+  let s:blocks = [
+        "\ >>> generated by make-unicode-blocks.py - do not edit below
+        \ [0x0,0x7F,'Basic Latin'], [0x80,0xFF,'Latin-1 Supplement'],
+        \ [0x100,0x17F,'Latin Extended-A'],
+        \ [0x180,0x24F,'Latin Extended-B'], [0x250,0x2AF,'IPA Extensions'],
+        \ [0x2B0,0x2FF,'Spacing Modifier Letters'],
+        \ [0x300,0x36F,'Combining Diacritical Marks'],
+        \ [0x370,0x3FF,'Greek and Coptic'], [0x400,0x4FF,'Cyrillic'],
+        \ [0x500,0x52F,'Cyrillic Supplement'], [0x530,0x58F,'Armenian'],
+        \ [0x590,0x5FF,'Hebrew'], [0x600,0x6FF,'Arabic'],
+        \ [0x700,0x74F,'Syriac'], [0x750,0x77F,'Arabic Supplement'],
+        \ [0x780,0x7BF,'Thaana'], [0x7C0,0x7FF,'NKo'],
+        \ [0x800,0x83F,'Samaritan'], [0x840,0x85F,'Mandaic'],
+        \ [0x860,0x86F,'Syriac Supplement'],
+        \ [0x870,0x89F,'Arabic Extended-B'],
+        \ [0x8A0,0x8FF,'Arabic Extended-A'], [0x900,0x97F,'Devanagari'],
+        \ [0x980,0x9FF,'Bengali'], [0xA00,0xA7F,'Gurmukhi'],
+        \ [0xA80,0xAFF,'Gujarati'], [0xB00,0xB7F,'Oriya'],
+        \ [0xB80,0xBFF,'Tamil'], [0xC00,0xC7F,'Telugu'],
+        \ [0xC80,0xCFF,'Kannada'], [0xD00,0xD7F,'Malayalam'],
+        \ [0xD80,0xDFF,'Sinhala'], [0xE00,0xE7F,'Thai'],
+        \ [0xE80,0xEFF,'Lao'], [0xF00,0xFFF,'Tibetan'],
+        \ [0x1000,0x109F,'Myanmar'], [0x10A0,0x10FF,'Georgian'],
+        \ [0x1100,0x11FF,'Hangul Jamo'], [0x1200,0x137F,'Ethiopic'],
+        \ [0x1380,0x139F,'Ethiopic Supplement'], [0x13A0,0x13FF,'Cherokee'],
+        \ [0x1400,0x167F,'Unified Canadian Aboriginal Syllabics'],
+        \ [0x1680,0x169F,'Ogham'], [0x16A0,0x16FF,'Runic'],
+        \ [0x1700,0x171F,'Tagalog'], [0x1720,0x173F,'Hanunoo'],
+        \ [0x1740,0x175F,'Buhid'], [0x1760,0x177F,'Tagbanwa'],
+        \ [0x1780,0x17FF,'Khmer'], [0x1800,0x18AF,'Mongolian'],
+        \ [0x18B0,0x18FF,'Unified Canadian Aboriginal Syllabics Extended'],
+        \ [0x1900,0x194F,'Limbu'], [0x1950,0x197F,'Tai Le'],
+        \ [0x1980,0x19DF,'New Tai Lue'], [0x19E0,0x19FF,'Khmer Symbols'],
+        \ [0x1A00,0x1A1F,'Buginese'], [0x1A20,0x1AAF,'Tai Tham'],
+        \ [0x1AB0,0x1AFF,'Combining Diacritical Marks Extended'],
+        \ [0x1B00,0x1B7F,'Balinese'], [0x1B80,0x1BBF,'Sundanese'],
+        \ [0x1BC0,0x1BFF,'Batak'], [0x1C00,0x1C4F,'Lepcha'],
+        \ [0x1C50,0x1C7F,'Ol Chiki'], [0x1C80,0x1C8F,'Cyrillic Extended-C'],
+        \ [0x1C90,0x1CBF,'Georgian Extended'],
+        \ [0x1CC0,0x1CCF,'Sundanese Supplement'],
+        \ [0x1CD0,0x1CFF,'Vedic Extensions'],
+        \ [0x1D00,0x1D7F,'Phonetic Extensions'],
+        \ [0x1D80,0x1DBF,'Phonetic Extensions Supplement'],
+        \ [0x1DC0,0x1DFF,'Combining Diacritical Marks Supplement'],
+        \ [0x1E00,0x1EFF,'Latin Extended Additional'],
+        \ [0x1F00,0x1FFF,'Greek Extended'],
+        \ [0x2000,0x206F,'General Punctuation'],
+        \ [0x2070,0x209F,'Superscripts and Subscripts'],
+        \ [0x20A0,0x20CF,'Currency Symbols'],
+        \ [0x20D0,0x20FF,'Combining Diacritical Marks for Symbols'],
+        \ [0x2100,0x214F,'Letterlike Symbols'],
+        \ [0x2150,0x218F,'Number Forms'], [0x2190,0x21FF,'Arrows'],
+        \ [0x2200,0x22FF,'Mathematical Operators'],
+        \ [0x2300,0x23FF,'Miscellaneous Technical'],
+        \ [0x2400,0x243F,'Control Pictures'],
+        \ [0x2440,0x245F,'Optical Character Recognition'],
+        \ [0x2460,0x24FF,'Enclosed Alphanumerics'],
+        \ [0x2500,0x257F,'Box Drawing'], [0x2580,0x259F,'Block Elements'],
+        \ [0x25A0,0x25FF,'Geometric Shapes'],
+        \ [0x2600,0x26FF,'Miscellaneous Symbols'],
+        \ [0x2700,0x27BF,'Dingbats'],
+        \ [0x27C0,0x27EF,'Miscellaneous Mathematical Symbols-A'],
+        \ [0x27F0,0x27FF,'Supplemental Arrows-A'],
+        \ [0x2800,0x28FF,'Braille Patterns'],
+        \ [0x2900,0x297F,'Supplemental Arrows-B'],
+        \ [0x2980,0x29FF,'Miscellaneous Mathematical Symbols-B'],
+        \ [0x2A00,0x2AFF,'Supplemental Mathematical Operators'],
+        \ [0x2B00,0x2BFF,'Miscellaneous Symbols and Arrows'],
+        \ [0x2C00,0x2C5F,'Glagolitic'], [0x2C60,0x2C7F,'Latin Extended-C'],
+        \ [0x2C80,0x2CFF,'Coptic'], [0x2D00,0x2D2F,'Georgian Supplement'],
+        \ [0x2D30,0x2D7F,'Tifinagh'], [0x2D80,0x2DDF,'Ethiopic Extended'],
+        \ [0x2DE0,0x2DFF,'Cyrillic Extended-A'],
+        \ [0x2E00,0x2E7F,'Supplemental Punctuation'],
+        \ [0x2E80,0x2EFF,'CJK Radicals Supplement'],
+        \ [0x2F00,0x2FDF,'Kangxi Radicals'],
+        \ [0x2FF0,0x2FFF,'Ideographic Description Characters'],
+        \ [0x3000,0x303F,'CJK Symbols and Punctuation'],
+        \ [0x3040,0x309F,'Hiragana'], [0x30A0,0x30FF,'Katakana'],
+        \ [0x3100,0x312F,'Bopomofo'],
+        \ [0x3130,0x318F,'Hangul Compatibility Jamo'],
+        \ [0x3190,0x319F,'Kanbun'], [0x31A0,0x31BF,'Bopomofo Extended'],
+        \ [0x31C0,0x31EF,'CJK Strokes'],
+        \ [0x31F0,0x31FF,'Katakana Phonetic Extensions'],
+        \ [0x3200,0x32FF,'Enclosed CJK Letters and Months'],
+        \ [0x3300,0x33FF,'CJK Compatibility'],
+        \ [0x3400,0x4DBF,'CJK Unified Ideographs Extension A'],
+        \ [0x4DC0,0x4DFF,'Yijing Hexagram Symbols'],
+        \ [0x4E00,0x9FFF,'CJK Unified Ideographs'],
+        \ [0xA000,0xA48F,'Yi Syllables'], [0xA490,0xA4CF,'Yi Radicals'],
+        \ [0xA4D0,0xA4FF,'Lisu'], [0xA500,0xA63F,'Vai'],
+        \ [0xA640,0xA69F,'Cyrillic Extended-B'], [0xA6A0,0xA6FF,'Bamum'],
+        \ [0xA700,0xA71F,'Modifier Tone Letters'],
+        \ [0xA720,0xA7FF,'Latin Extended-D'],
+        \ [0xA800,0xA82F,'Syloti Nagri'],
+        \ [0xA830,0xA83F,'Common Indic Number Forms'],
+        \ [0xA840,0xA87F,'Phags-pa'], [0xA880,0xA8DF,'Saurashtra'],
+        \ [0xA8E0,0xA8FF,'Devanagari Extended'], [0xA900,0xA92F,'Kayah Li'],
+        \ [0xA930,0xA95F,'Rejang'],
+        \ [0xA960,0xA97F,'Hangul Jamo Extended-A'],
+        \ [0xA980,0xA9DF,'Javanese'], [0xA9E0,0xA9FF,'Myanmar Extended-B'],
+        \ [0xAA00,0xAA5F,'Cham'], [0xAA60,0xAA7F,'Myanmar Extended-A'],
+        \ [0xAA80,0xAADF,'Tai Viet'],
+        \ [0xAAE0,0xAAFF,'Meetei Mayek Extensions'],
+        \ [0xAB00,0xAB2F,'Ethiopic Extended-A'],
+        \ [0xAB30,0xAB6F,'Latin Extended-E'],
+        \ [0xAB70,0xABBF,'Cherokee Supplement'],
+        \ [0xABC0,0xABFF,'Meetei Mayek'],
+        \ [0xAC00,0xD7AF,'Hangul Syllables'],
+        \ [0xD7B0,0xD7FF,'Hangul Jamo Extended-B'],
+        \ [0xD800,0xDB7F,'High Surrogates'],
+        \ [0xDB80,0xDBFF,'High Private Use Surrogates'],
+        \ [0xDC00,0xDFFF,'Low Surrogates'],
+        \ [0xE000,0xF8FF,'Private Use Area'],
+        \ [0xF900,0xFAFF,'CJK Compatibility Ideographs'],
+        \ [0xFB00,0xFB4F,'Alphabetic Presentation Forms'],
+        \ [0xFB50,0xFDFF,'Arabic Presentation Forms-A'],
+        \ [0xFE00,0xFE0F,'Variation Selectors'],
+        \ [0xFE10,0xFE1F,'Vertical Forms'],
+        \ [0xFE20,0xFE2F,'Combining Half Marks'],
+        \ [0xFE30,0xFE4F,'CJK Compatibility Forms'],
+        \ [0xFE50,0xFE6F,'Small Form Variants'],
+        \ [0xFE70,0xFEFF,'Arabic Presentation Forms-B'],
+        \ [0xFF00,0xFFEF,'Halfwidth and Fullwidth Forms'],
+        \ [0xFFF0,0xFFFF,'Specials'],
+        \ [0x10000,0x1007F,'Linear B Syllabary'],
+        \ [0x10080,0x100FF,'Linear B Ideograms'],
+        \ [0x10100,0x1013F,'Aegean Numbers'],
+        \ [0x10140,0x1018F,'Ancient Greek Numbers'],
+        \ [0x10190,0x101CF,'Ancient Symbols'],
+        \ [0x101D0,0x101FF,'Phaistos Disc'], [0x10280,0x1029F,'Lycian'],
+        \ [0x102A0,0x102DF,'Carian'],
+        \ [0x102E0,0x102FF,'Coptic Epact Numbers'],
+        \ [0x10300,0x1032F,'Old Italic'], [0x10330,0x1034F,'Gothic'],
+        \ [0x10350,0x1037F,'Old Permic'], [0x10380,0x1039F,'Ugaritic'],
+        \ [0x103A0,0x103DF,'Old Persian'], [0x10400,0x1044F,'Deseret'],
+        \ [0x10450,0x1047F,'Shavian'], [0x10480,0x104AF,'Osmanya'],
+        \ [0x104B0,0x104FF,'Osage'], [0x10500,0x1052F,'Elbasan'],
+        \ [0x10530,0x1056F,'Caucasian Albanian'],
+        \ [0x10570,0x105BF,'Vithkuqi'], [0x105C0,0x105FF,'Todhri'],
+        \ [0x10600,0x1077F,'Linear A'],
+        \ [0x10780,0x107BF,'Latin Extended-F'],
+        \ [0x10800,0x1083F,'Cypriot Syllabary'],
+        \ [0x10840,0x1085F,'Imperial Aramaic'],
+        \ [0x10860,0x1087F,'Palmyrene'], [0x10880,0x108AF,'Nabataean'],
+        \ [0x108E0,0x108FF,'Hatran'], [0x10900,0x1091F,'Phoenician'],
+        \ [0x10920,0x1093F,'Lydian'],
+        \ [0x10980,0x1099F,'Meroitic Hieroglyphs'],
+        \ [0x109A0,0x109FF,'Meroitic Cursive'],
+        \ [0x10A00,0x10A5F,'Kharoshthi'],
+        \ [0x10A60,0x10A7F,'Old South Arabian'],
+        \ [0x10A80,0x10A9F,'Old North Arabian'],
+        \ [0x10AC0,0x10AFF,'Manichaean'], [0x10B00,0x10B3F,'Avestan'],
+        \ [0x10B40,0x10B5F,'Inscriptional Parthian'],
+        \ [0x10B60,0x10B7F,'Inscriptional Pahlavi'],
+        \ [0x10B80,0x10BAF,'Psalter Pahlavi'],
+        \ [0x10C00,0x10C4F,'Old Turkic'], [0x10C80,0x10CFF,'Old Hungarian'],
+        \ [0x10D00,0x10D3F,'Hanifi Rohingya'], [0x10D40,0x10D8F,'Garay'],
+        \ [0x10E60,0x10E7F,'Rumi Numeral Symbols'],
+        \ [0x10E80,0x10EBF,'Yezidi'], [0x10EC0,0x10EFF,'Arabic Extended-C'],
+        \ [0x10F00,0x10F2F,'Old Sogdian'], [0x10F30,0x10F6F,'Sogdian'],
+        \ [0x10F70,0x10FAF,'Old Uyghur'], [0x10FB0,0x10FDF,'Chorasmian'],
+        \ [0x10FE0,0x10FFF,'Elymaic'], [0x11000,0x1107F,'Brahmi'],
+        \ [0x11080,0x110CF,'Kaithi'], [0x110D0,0x110FF,'Sora Sompeng'],
+        \ [0x11100,0x1114F,'Chakma'], [0x11150,0x1117F,'Mahajani'],
+        \ [0x11180,0x111DF,'Sharada'],
+        \ [0x111E0,0x111FF,'Sinhala Archaic Numbers'],
+        \ [0x11200,0x1124F,'Khojki'], [0x11280,0x112AF,'Multani'],
+        \ [0x112B0,0x112FF,'Khudawadi'], [0x11300,0x1137F,'Grantha'],
+        \ [0x11380,0x113FF,'Tulu-Tigalari'], [0x11400,0x1147F,'Newa'],
+        \ [0x11480,0x114DF,'Tirhuta'], [0x11580,0x115FF,'Siddham'],
+        \ [0x11600,0x1165F,'Modi'],
+        \ [0x11660,0x1167F,'Mongolian Supplement'],
+        \ [0x11680,0x116CF,'Takri'], [0x116D0,0x116FF,'Myanmar Extended-C'],
+        \ [0x11700,0x1174F,'Ahom'], [0x11800,0x1184F,'Dogra'],
+        \ [0x118A0,0x118FF,'Warang Citi'], [0x11900,0x1195F,'Dives Akuru'],
+        \ [0x119A0,0x119FF,'Nandinagari'],
+        \ [0x11A00,0x11A4F,'Zanabazar Square'], [0x11A50,0x11AAF,'Soyombo'],
+        \ [0x11AB0,0x11ABF,'Unified Canadian Aboriginal Syllabics Extended-A'],
+        \ [0x11AC0,0x11AFF,'Pau Cin Hau'],
+        \ [0x11B00,0x11B5F,'Devanagari Extended-A'],
+        \ [0x11BC0,0x11BFF,'Sunuwar'], [0x11C00,0x11C6F,'Bhaiksuki'],
+        \ [0x11C70,0x11CBF,'Marchen'], [0x11D00,0x11D5F,'Masaram Gondi'],
+        \ [0x11D60,0x11DAF,'Gunjala Gondi'], [0x11EE0,0x11EFF,'Makasar'],
+        \ [0x11F00,0x11F5F,'Kawi'], [0x11FB0,0x11FBF,'Lisu Supplement'],
+        \ [0x11FC0,0x11FFF,'Tamil Supplement'],
+        \ [0x12000,0x123FF,'Cuneiform'],
+        \ [0x12400,0x1247F,'Cuneiform Numbers and Punctuation'],
+        \ [0x12480,0x1254F,'Early Dynastic Cuneiform'],
+        \ [0x12F90,0x12FFF,'Cypro-Minoan'],
+        \ [0x13000,0x1342F,'Egyptian Hieroglyphs'],
+        \ [0x13430,0x1345F,'Egyptian Hieroglyph Format Controls'],
+        \ [0x13460,0x143FF,'Egyptian Hieroglyphs Extended-A'],
+        \ [0x14400,0x1467F,'Anatolian Hieroglyphs'],
+        \ [0x16100,0x1613F,'Gurung Khema'],
+        \ [0x16800,0x16A3F,'Bamum Supplement'], [0x16A40,0x16A6F,'Mro'],
+        \ [0x16A70,0x16ACF,'Tangsa'], [0x16AD0,0x16AFF,'Bassa Vah'],
+        \ [0x16B00,0x16B8F,'Pahawh Hmong'], [0x16D40,0x16D7F,'Kirat Rai'],
+        \ [0x16E40,0x16E9F,'Medefaidrin'], [0x16F00,0x16F9F,'Miao'],
+        \ [0x16FE0,0x16FFF,'Ideographic Symbols and Punctuation'],
+        \ [0x17000,0x187FF,'Tangut'], [0x18800,0x18AFF,'Tangut Components'],
+        \ [0x18B00,0x18CFF,'Khitan Small Script'],
+        \ [0x18D00,0x18D7F,'Tangut Supplement'],
+        \ [0x1AFF0,0x1AFFF,'Kana Extended-B'],
+        \ [0x1B000,0x1B0FF,'Kana Supplement'],
+        \ [0x1B100,0x1B12F,'Kana Extended-A'],
+        \ [0x1B130,0x1B16F,'Small Kana Extension'],
+        \ [0x1B170,0x1B2FF,'Nushu'], [0x1BC00,0x1BC9F,'Duployan'],
+        \ [0x1BCA0,0x1BCAF,'Shorthand Format Controls'],
+        \ [0x1CC00,0x1CEBF,'Symbols for Legacy Computing Supplement'],
+        \ [0x1CF00,0x1CFCF,'Znamenny Musical Notation'],
+        \ [0x1D000,0x1D0FF,'Byzantine Musical Symbols'],
+        \ [0x1D100,0x1D1FF,'Musical Symbols'],
+        \ [0x1D200,0x1D24F,'Ancient Greek Musical Notation'],
+        \ [0x1D2C0,0x1D2DF,'Kaktovik Numerals'],
+        \ [0x1D2E0,0x1D2FF,'Mayan Numerals'],
+        \ [0x1D300,0x1D35F,'Tai Xuan Jing Symbols'],
+        \ [0x1D360,0x1D37F,'Counting Rod Numerals'],
+        \ [0x1D400,0x1D7FF,'Mathematical Alphanumeric Symbols'],
+        \ [0x1D800,0x1DAAF,'Sutton SignWriting'],
+        \ [0x1DF00,0x1DFFF,'Latin Extended-G'],
+        \ [0x1E000,0x1E02F,'Glagolitic Supplement'],
+        \ [0x1E030,0x1E08F,'Cyrillic Extended-D'],
+        \ [0x1E100,0x1E14F,'Nyiakeng Puachue Hmong'],
+        \ [0x1E290,0x1E2BF,'Toto'], [0x1E2C0,0x1E2FF,'Wancho'],
+        \ [0x1E4D0,0x1E4FF,'Nag Mundari'], [0x1E5D0,0x1E5FF,'Ol Onal'],
+        \ [0x1E7E0,0x1E7FF,'Ethiopic Extended-B'],
+        \ [0x1E800,0x1E8DF,'Mende Kikakui'], [0x1E900,0x1E95F,'Adlam'],
+        \ [0x1EC70,0x1ECBF,'Indic Siyaq Numbers'],
+        \ [0x1ED00,0x1ED4F,'Ottoman Siyaq Numbers'],
+        \ [0x1EE00,0x1EEFF,'Arabic Mathematical Alphabetic Symbols'],
+        \ [0x1F000,0x1F02F,'Mahjong Tiles'],
+        \ [0x1F030,0x1F09F,'Domino Tiles'],
+        \ [0x1F0A0,0x1F0FF,'Playing Cards'],
+        \ [0x1F100,0x1F1FF,'Enclosed Alphanumeric Supplement'],
+        \ [0x1F200,0x1F2FF,'Enclosed Ideographic Supplement'],
+        \ [0x1F300,0x1F5FF,'Miscellaneous Symbols and Pictographs'],
+        \ [0x1F600,0x1F64F,'Emoticons'],
+        \ [0x1F650,0x1F67F,'Ornamental Dingbats'],
+        \ [0x1F680,0x1F6FF,'Transport and Map Symbols'],
+        \ [0x1F700,0x1F77F,'Alchemical Symbols'],
+        \ [0x1F780,0x1F7FF,'Geometric Shapes Extended'],
+        \ [0x1F800,0x1F8FF,'Supplemental Arrows-C'],
+        \ [0x1F900,0x1F9FF,'Supplemental Symbols and Pictographs'],
+        \ [0x1FA00,0x1FA6F,'Chess Symbols'],
+        \ [0x1FA70,0x1FAFF,'Symbols and Pictographs Extended-A'],
+        \ [0x1FB00,0x1FBFF,'Symbols for Legacy Computing'],
+        \ [0x20000,0x2A6DF,'CJK Unified Ideographs Extension B'],
+        \ [0x2A700,0x2B73F,'CJK Unified Ideographs Extension C'],
+        \ [0x2B740,0x2B81F,'CJK Unified Ideographs Extension D'],
+        \ [0x2B820,0x2CEAF,'CJK Unified Ideographs Extension E'],
+        \ [0x2CEB0,0x2EBEF,'CJK Unified Ideographs Extension F'],
+        \ [0x2EBF0,0x2EE5F,'CJK Unified Ideographs Extension I'],
+        \ [0x2F800,0x2FA1F,'CJK Compatibility Ideographs Supplement'],
+        \ [0x30000,0x3134F,'CJK Unified Ideographs Extension G'],
+        \ [0x31350,0x323AF,'CJK Unified Ideographs Extension H'],
+        \ [0xE0000,0xE007F,'Tags'],
+        \ [0xE0100,0xE01EF,'Variation Selectors Supplement'],
+        \ [0xF0000,0xFFFFF,'Supplementary Private Use Area-A'],
+        \ [0x100000,0x10FFFF,'Supplementary Private Use Area-B'],
+        "\ <<< generated
+        \ ]
+  return s:blocks
+endfunction
+
+" The block a code point falls in, or '' where nothing is assigned. Linear,
+" because this runs once per :HexPairInspect and never in a redraw.
+function! s:BlockName(cp) abort
+  for block in s:Blocks()
+    if a:cp < block[0]
+      return ''
+    endif
+    if a:cp <= block[1]
+      return block[2]
+    endif
+  endfor
+  return ''
+endfunction
+
+" A byte order mark, if these bytes are one. The name and block rows below
+" describe the UTF-8 reading and nothing else - it is the one with no byte
+" order to choose, and naming all four readings would be four lines of
+" mostly noise - which leaves exactly one thing unsaid that a hex editor
+" user opening a file at offset 0 actually wants: that ff fe is a mark and
+" not data. This says it.
+"
+" ff fe 00 00 is genuinely ambiguous - a UTF-32LE mark, or a UTF-16LE one
+" followed by a NUL - so it is reported as both rather than guessed at.
+function! HexPairPagedBomText(bytes) abort
+  let b = a:bytes
+  if len(b) >= 3 && b[0 : 2] == [0xef, 0xbb, 0xbf]
+    return 'utf-8'
+  endif
+  if len(b) >= 4 && b[0 : 3] == [0x00, 0x00, 0xfe, 0xff]
+    return 'utf-32be'
+  endif
+  if len(b) >= 4 && b[0 : 3] == [0xff, 0xfe, 0x00, 0x00]
+    return 'utf-32le, or utf-16le followed by U+0000'
+  endif
+  if len(b) >= 2 && b[0 : 1] == [0xfe, 0xff]
+    return 'utf-16be'
+  endif
+  if len(b) >= 2 && b[0 : 1] == [0xff, 0xfe]
+    return 'utf-16le'
+  endif
+  return ''
+endfunction
+
+" What the inspector adds about one code point: a list of [label, text],
+" empty entries left out, so the caller lays it out like its other rows.
+function! HexPairPagedCharNotes(cp) abort
+  let out = []
+  let names = s:ControlNames()
+  if has_key(names, a:cp)
+    let name = names[a:cp]
+    " '-' means the code point has no abbreviation anyone would recognise,
+    " so it is named and not initialised at.
+    let said = name[0] ==# '-' ? name[1] : printf('%s (%s)', name[0], name[1])
+    call add(out, ['name', name[2] ==# '' ? said : said . ', ' . name[2]])
+  endif
+  let block = s:BlockName(a:cp)
+  call add(out, ['block', block ==# '' ? 'no block - unassigned here' : block])
+  return out
+endfunction
+
 function! s:NeedsBytes(want, have) abort
   return printf('needs %d bytes, %d left', a:want, a:have)
 endfunction
@@ -3868,29 +4299,35 @@ endfunction
 " be wrong is a different answer, because a data inspector that reported
 " a code point for an overlong sequence or a surrogate would be inventing
 " one: those byte sequences are not characters at all.
-function! HexPairPagedUtf8Text(bytes) abort
+" One decoder, two readers. The inspector needs the CODE POINT and not a
+" sentence about it, so the decoding lives here and the wording lives in
+" HexPairPagedUtf8Text() below - rather than the sentence being parsed back,
+" or the decode written twice and drifting.
+"
+" Answers {'cp': N, 'used': K} or {'err': 'why not'}.
+function! HexPairPagedUtf8Decode(bytes) abort
   if empty(a:bytes)
-    return '-'
+    return {'err': '-'}
   endif
   let b0 = a:bytes[0]
   if b0 < 0x80
-    return s:CodePointText(b0, 1)
+    return {'cp': b0, 'used': 1}
   endif
   " 0x80-0xbf is a continuation byte with nothing in front of it, and
   " 0xc0/0xc1 could only ever start an overlong two-byte sequence.
   if b0 < 0xc2 || b0 > 0xf4
-    return 'not utf-8 (byte ' . printf('%02x', b0) . ' cannot start one)'
+    return {'err': 'not utf-8 (byte ' . printf('%02x', b0) . ' cannot start one)'}
   endif
   let want = b0 < 0xe0 ? 2 : (b0 < 0xf0 ? 3 : 4)
   if len(a:bytes) < want
-    return s:NeedsBytes(want, len(a:bytes))
+    return {'err': s:NeedsBytes(want, len(a:bytes))}
   endif
   let cp = b0 % (want == 2 ? 32 : (want == 3 ? 16 : 8))
   let i = 1
   while i < want
     let b = a:bytes[i]
     if b / 64 != 2
-      return 'not utf-8 (byte ' . printf('%02x', b) . ' is not a continuation)'
+      return {'err': 'not utf-8 (byte ' . printf('%02x', b) . ' is not a continuation)'}
     endif
     let cp = cp * 64 + b % 64
     let i += 1
@@ -3899,15 +4336,20 @@ function! HexPairPagedUtf8Text(bytes) abort
   " spells, and is not that character however it looks.
   let least = want == 2 ? 0x80 : (want == 3 ? 0x800 : 0x10000)
   if cp < least
-    return printf('not utf-8 (overlong: U+%04X in %d bytes)', cp, want)
+    return {'err': printf('not utf-8 (overlong: U+%04X in %d bytes)', cp, want)}
   endif
   if cp >= 0xd800 && cp <= 0xdfff
-    return printf('not utf-8 (U+%04X is a surrogate)', cp)
+    return {'err': printf('not utf-8 (U+%04X is a surrogate)', cp)}
   endif
   if cp > 0x10ffff
-    return printf('not utf-8 (U+%04X is past the last code point)', cp)
+    return {'err': printf('not utf-8 (U+%04X is past the last code point)', cp)}
   endif
-  return s:CodePointText(cp, want)
+  return {'cp': cp, 'used': want}
+endfunction
+
+function! HexPairPagedUtf8Text(bytes) abort
+  let got = HexPairPagedUtf8Decode(a:bytes)
+  return has_key(got, 'err') ? got.err : s:CodePointText(got.cp, got.used)
 endfunction
 
 " The same as UTF-16, in the byte order a:little asks for. A high
@@ -4032,6 +4474,20 @@ function! HexPairPagedInspectLines(bytes, at, total) abort
         \ HexPairPagedUtf16Text(a:bytes, 1), HexPairPagedUtf16Text(a:bytes, 0)))
   call add(out, printf('  %-8s %-26s  %s', 'utf-32',
         \ HexPairPagedUtf32Text(a:bytes, 1), HexPairPagedUtf32Text(a:bytes, 0)))
+  " What the utf-8 row decoded, said in words: the name of a code point
+  " nobody can see, and the block it belongs to. Only for a sequence that
+  " actually decoded - naming a byte that is not utf-8 would be asserting an
+  " encoding the file has not been said to be in.
+  let decoded = HexPairPagedUtf8Decode(a:bytes)
+  if !has_key(decoded, 'err')
+    for note in HexPairPagedCharNotes(decoded.cp)
+      call add(out, printf('  %-8s %s', note[0], note[1]))
+    endfor
+  endif
+  let bom = HexPairPagedBomText(a:bytes)
+  if bom !=# ''
+    call add(out, printf('  %-8s %s byte order mark', 'bom', bom))
+  endif
   if !has('num64')
     call add(out, '  (32- and 64-bit values need a Vim with +num64)')
   endif

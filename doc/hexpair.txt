@@ -183,10 +183,46 @@ last byte, and on a short last line on its last existing byte.
       utf-8    U+0041 'A' (1 byte)
       utf-16   U+4241 '䉁' (2 bytes)       U+4142 '䅂' (2 bytes)
       utf-32   U+44434241 - past U+10FFFF  U+41424344 - past U+10FFFF
+      block    Basic Latin
+<
+                        A |:HexPairInspect| on an ESC, at the start of a
+                        UTF-16LE file, would end: >
+
+      utf-8    U+001B (1 byte)
+      utf-16   U+FE1B (2 bytes)            U+1BFF (2 bytes)
+      utf-32   U+41FE1B - past U+10FFFF    U+1BFFFE41 - past U+10FFFF
+      name     ESC (escape), a C0 control
+      bom      utf-16le byte order mark
 <
                         The signed reading follows the unsigned one where
                         the two differ ("43981 / -21555"), which is
                         exactly when the top bit is set.
+
+                                                *hexpair-inspect-naming*
+                        The last rows say what the character IS, and they
+                        describe the UTF-8 reading: it is the one with no
+                        byte order to choose, and naming all four readings
+                        would be four lines of mostly noise.
+
+                        "name" appears for a code point you cannot see -
+                        every C0 and C1 control, DEL, and the space and
+                        format characters a hex editor meets constantly
+                        (NBSP, SOFT HYPHEN, the zero-width joiners and
+                        the bidi marks).  "block" is the Unicode block,
+                        which is the "what script even is this" question,
+                        and is there for every code point that decodes.
+                        "bom" appears when the bytes at the cursor are a
+                        byte order mark in any encoding - the one thing
+                        the UTF-8 rows above cannot say, since ff fe is
+                        not UTF-8 at all.
+
+                        There is deliberately no full character NAME, the
+                        LATIN SMALL LETTER E WITH ACUTE kind.  That needs
+                        UnicodeData.txt, two megabytes of names for a
+                        hundred and fifty thousand characters, which is a
+                        different order of thing from a table of ranges
+                        and does not belong inside a Vim plugin.  The
+                        block table is Unicode 16.0.0.
 
                         The three text rows say what the bytes would be
                         as characters.  UTF-8 has no byte order to get
