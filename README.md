@@ -173,9 +173,9 @@ code, releases and issue tracker.
   instantly, reading only the page it shows and never loading the rest. `:w` writes the page back: overwriting values patches it
   **in place**, so the rest of the file is never read or written
   whatever its size; inserting bytes moves only what follows them, also
-  in place; and only deleting them rewrites the file. Either change of
-  length says what it will cost and asks first. See
-  [below](#paged-large-file-mode).
+  in place; and only deleting them rewrites the file — except past 2 GiB
+  on native Windows, where that is in place too. Either change of length
+  says what it will cost and asks first. See [Pages](#pages).
 
 ## Installation
 
