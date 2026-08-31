@@ -2059,6 +2059,18 @@ function! HexPairPagedSeekWriteRawForTest(dst, off, src) abort
   return s:SeekWriteRaw(a:dst, a:off, a:src)
 endfunction
 
+" The two that make a length change possible, likewise. Between them and
+" the writer above they are every byte-moving operation the grow and shrink
+" paths perform, so exercising them at small offsets exercises what a
+" resize of a 120 GiB file does - minus the 2 GiB nobody will generate.
+function! HexPairPagedSeekSetLengthForTest(file, newlen) abort
+  return s:SeekSetLength(a:file, a:newlen)
+endfunction
+
+function! HexPairPagedSeekMoveRangeForTest(file, from, len, to) abort
+  return s:SeekMoveRange(a:file, a:from, a:len, a:to)
+endfunction
+
 " Reading a byte range that xxd cannot seek to, on Windows.
 "
 " PowerShell does the SEEK and nothing else: .NET's FileStream.Seek takes an
@@ -2242,6 +2254,92 @@ function! s:SeekWriteRaw(dst, off, src) abort
           \ . 'Check it before writing again. (g:hexpair_verify_writes = 0 '
           \ . 'turns this check off.)', a:off + 1, a:dst)
   endif
+endfunction
+
+" Setting a file's length, and moving a range inside it, at offsets xxd
+" cannot seek to. The other half of s:SeekWriteRaw().
+"
+" SetLength is worth more here than anywhere else: it both extends and
+" TRUNCATES, so on this platform a shrinking write does not have to rewrite
+" the file. The rest of the plugin has to, because "nothing in Vim or xxd
+" can shorten a file except writing it afresh" - which is true of Vim and
+" xxd and not of .NET. On a 120 GiB file that is the difference between
+" moving a few pages and copying 120 GiB.
+let s:pssetlenscript =
+      \   '$ErrorActionPreference = ''Stop'';'
+      \ . '$fs = [IO.File]::Open($env:HEXPAIR_PS_DST, ''Open'', ''Write'');'
+      \ . 'try { $fs.SetLength([int64]$env:HEXPAIR_PS_LEN) }'
+      \ . 'finally { $fs.Close() }'
+
+" One move, fully buffered: the whole range is read before any of it is
+" written, so a source and destination that overlap - which is the normal
+" case when a tail slides by less than a block - cannot eat their own tail.
+" The caller chunks and orders the moves (s:GrowInPlace goes backwards from
+" the end for that reason); this only has to be right about one of them.
+let s:psmovescript =
+      \   '$ErrorActionPreference = ''Stop'';'
+      \ . '$len = [int]$env:HEXPAIR_PS_LEN;'
+      \ . '$buf = New-Object byte[] $len;'
+      \ . '$fs = [IO.File]::Open($env:HEXPAIR_PS_DST, ''Open'', ''ReadWrite'');'
+      \ . 'try {'
+      \ .   '[void]$fs.Seek([int64]$env:HEXPAIR_PS_OFF, ''Begin'');'
+      \ .   '$got = 0;'
+      \ .   'while ($got -lt $len) {'
+      \ .     '$n = $fs.Read($buf, $got, $len - $got);'
+      \ .     'if ($n -le 0) { break };'
+      \ .     '$got += $n'
+      \ .   '};'
+      \ .   'if ($got -lt $len) { throw ''short read moving a range'' };'
+      \ .   '[void]$fs.Seek([int64]$env:HEXPAIR_PS_TO, ''Begin'');'
+      \ .   '$fs.Write($buf, 0, $len)'
+      \ . '} finally { $fs.Close() }'
+
+function! s:SeekSetLength(file, newlen) abort
+  if !s:HasPowerShell()
+    throw printf('hexpair: resizing %s needs PowerShell here - xxd seeks '
+          \ . 'with a 32-bit offset on this platform - and it did not run. '
+          \ . 'Nothing was written.', a:file)
+  endif
+  call s:Debug('powershell setlength: %s to %d', a:file, a:newlen)
+  let $HEXPAIR_PS_DST = a:file
+  let $HEXPAIR_PS_LEN = a:newlen
+  try
+    call s:Run(printf('powershell -NoProfile -NonInteractive -Command %s',
+          \ shellescape(s:pssetlenscript)))
+  finally
+    let $HEXPAIR_PS_DST = ''
+    let $HEXPAIR_PS_LEN = ''
+  endtry
+  " The one thing that can be checked without reading gigabytes, and the
+  " one that says the resize happened at all.
+  let got = getfsize(a:file)
+  if got != a:newlen
+    throw printf('hexpair: %s should now be %d bytes and is %d. Check it '
+          \ . 'before writing again.', a:file, a:newlen, got)
+  endif
+endfunction
+
+function! s:SeekMoveRange(file, from, len, to) abort
+  if !s:HasPowerShell()
+    throw printf('hexpair: moving bytes inside %s needs PowerShell here - '
+          \ . 'xxd seeks with a 32-bit offset on this platform - and it did '
+          \ . 'not run. Nothing was written.', a:file)
+  endif
+  call s:Debug('powershell move: %d bytes from %d to %d in %s',
+        \ a:len, a:from, a:to, a:file)
+  let $HEXPAIR_PS_DST = a:file
+  let $HEXPAIR_PS_OFF = a:from
+  let $HEXPAIR_PS_TO = a:to
+  let $HEXPAIR_PS_LEN = a:len
+  try
+    call s:Run(printf('powershell -NoProfile -NonInteractive -Command %s',
+          \ shellescape(s:psmovescript)))
+  finally
+    let $HEXPAIR_PS_DST = ''
+    let $HEXPAIR_PS_OFF = ''
+    let $HEXPAIR_PS_TO = ''
+    let $HEXPAIR_PS_LEN = ''
+  endtry
 endfunction
 
 " Can xxd be trusted to seek to a:off on this platform?
@@ -2547,6 +2645,13 @@ endfunction
 
 " Move [a:from, a:from + a:len) of the paged file to a:to, in place.
 function! s:MoveRange(from, len, to, hex) abort
+  " Past what xxd can seek to, PowerShell moves the bytes within the file
+  " directly - no hex round trip, and no temp file, since it can read and
+  " write through one handle.
+  if !s:XxdCanSeek(a:from + a:len) || !s:XxdCanSeek(a:to + a:len)
+    call s:SeekMoveRange(b:hexpair_page_file, a:from, a:len, a:to)
+    return
+  endif
   call s:Run(printf('%s -s %d -l %d -p %s %s', s:xxd, a:from, a:len,
         \ shellescape(b:hexpair_page_file), shellescape(a:hex)))
   call s:Run(printf('%s -r -p -s %d %s %s', s:xxd, a:to,
@@ -2574,6 +2679,13 @@ endfunction
 " means a full disk - the likely failure when a file is growing - fails
 " here, before a byte of the tail has been touched.
 function! s:ExtendBy(delta) abort
+  " SetLength does this in one call and without writing the bytes, which
+  " past 2 GiB is the only way to do it here at all.
+  if !s:XxdCanSeek(b:hexpair_page_total + a:delta)
+    call s:SeekSetLength(b:hexpair_page_file,
+          \ b:hexpair_page_total + a:delta)
+    return
+  endif
   let hex = tempname()
   try
     call writefile([repeat('00', a:delta)], hex)
@@ -2597,6 +2709,47 @@ endfunction
 " Keeping a copy would need room for the whole tail, which is precisely
 " what this path exists to avoid: the temporary space it uses is one
 " block's worth of hex, whatever the size of the file.
+" Shrinking a file in place: move the tail LEFT over the bytes the page no
+" longer needs, then cut the file to its new length.
+"
+" The rest of the plugin cannot do this and says so - "nothing in Vim or
+" xxd can shorten a file except writing it afresh", which is what s:Splice()
+" does. That is true of Vim and of xxd, and not of .NET: SetLength truncates.
+" So on this one platform, and only past the offsets xxd can reach, the
+" expensive case becomes the cheap one - a 120 GiB file shrinks by moving
+" the bytes after the page, not by copying 120 GiB.
+"
+" Order matters and is the whole correctness argument:
+"   1. the page's new (shorter) bytes go in at base - this cannot disturb
+"      the tail, which still starts further along than they now reach;
+"   2. the tail slides left over what is left of the old page, forwards
+"      from its start, so each block is read before anything overwrites it;
+"   3. only then is the file cut, so nothing is discarded until every byte
+"      that had to survive has been moved.
+" A failure at any step leaves a longer file than intended, never a shorter
+" one - the bytes are still there to try again with.
+function! s:ShrinkInPlace(raw, newlen) abort
+  let base = b:hexpair_page_base
+  let tail = base + b:hexpair_page_len
+  let size = s:TailSize()
+  let delta = b:hexpair_page_len - a:newlen
+
+  call s:SeekWriteRaw(b:hexpair_page_file, base, a:raw)
+
+  let moved = 0
+  while moved < size
+    let chunk = size - moved
+    if chunk > s:blocksize
+      let chunk = s:blocksize
+    endif
+    let from = tail + moved
+    call s:SeekMoveRange(b:hexpair_page_file, from, chunk, from - delta)
+    let moved += chunk
+  endwhile
+
+  call s:SeekSetLength(b:hexpair_page_file, b:hexpair_page_total - delta)
+endfunction
+
 function! s:GrowInPlace(raw, newlen) abort
   let base = b:hexpair_page_base
   let tail = base + b:hexpair_page_len
@@ -2899,23 +3052,21 @@ function! s:Write() abort
           \ newlen, b:hexpair_page_len, off)
     if newlen == b:hexpair_page_len
       call s:PatchInPlace(raw)
-    elseif !s:XxdCanSeek(b:hexpair_page_base + b:hexpair_page_len)
-      " Same-length writes past 2 GiB work here - PowerShell seeks where
-      " xxd cannot, and s:PatchInPlace() puts the bytes straight back over
-      " the range they came from. A LENGTH-CHANGING write does not: it
-      " moves the tail or rewrites the file, several operations each
-      " putting bytes somewhere on the strength of offsets nobody can test
-      " on this platform from where this is developed, and s:CopyRange()
-      " reads with readblob(), which is itself broken here for large files.
-      " Refusing costs the edit; getting it wrong costs the file.
-      throw printf('hexpair: this page starts at byte %d, past the 2 GiB '
-            \ . 'xxd can seek to here, and only same-length writes are '
-            \ . 'possible past that. This one would change the file''s '
-            \ . 'length by %d bytes. Nothing was written.',
-            \ b:hexpair_page_base + 1, newlen - b:hexpair_page_len)
     elseif !s:ConfirmResize(newlen)
       echomsg 'hexpair: cancelled; nothing was written'
       return
+    elseif !s:XxdCanSeek(b:hexpair_page_total)
+      " Past what xxd can seek to there is no splice to fall back on:
+      " s:CopyRange() reads through readblob(), which returns nothing here
+      " for a large file. Both directions therefore go in place, whatever
+      " s:TailShiftIsCheaper() would have said - and for these sizes that
+      " is the better answer anyway, since the alternative was copying the
+      " whole file.
+      if newlen > b:hexpair_page_len
+        call s:GrowInPlace(raw, newlen)
+      else
+        call s:ShrinkInPlace(raw, newlen)
+      endif
     elseif newlen > b:hexpair_page_len && s:TailShiftIsCheaper()
       call s:GrowInPlace(raw, newlen)
     else

@@ -938,9 +938,21 @@ is no seeking to do.  xxd's limit was never its formatting.  What is left
 is one process start a page, a few hundred milliseconds; a file-wide scan
 pays it per block.
 
-Writing past the limit is REFUSED: `xxd -r` has the same 32-bit offsets and
-there is no fallback in place for it, so hexpair declines rather than
-putting the bytes somewhere else.
+Writing past the limit goes the same way.  `xxd -r` has the same 32-bit
+offsets, so every step that moves bytes is PowerShell's: an overwrite
+seeks and writes, a grow extends with SetLength and slides the tail along,
+a shrink slides the tail back and cuts the file.  Each write reads back
+what it wrote and refuses to call it done if the bytes are not there;
+g:hexpair_verify_writes turns that check off.
+
+SetLength is worth naming: shrinking a file IN PLACE is something this
+plugin cannot do on any other platform, because neither Vim nor xxd can
+shorten a file except by writing it afresh (|hexpair-splice|).  .NET can,
+so past 2 GiB the expensive case is the cheap one - the bytes after the
+page move, and the file is cut.
+
+Still refused there: `:w {file}` and `:saveas`, which copy the WHOLE file
+through readblob().
 
 Linux, macOS and the BSDs are LP64: a `long` is 64 bits, so xxd's seek is,
 and their struct stat.st_size is a 64-bit off_t, so readblob() would be

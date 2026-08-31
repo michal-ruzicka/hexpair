@@ -369,9 +369,23 @@ where it has no seeking to do and is as fast as ever. What remains is one
 process start per page turn — a few hundred milliseconds. A file-wide
 search past 2 GiB pays it per block and is correspondingly slow.
 
-**Writing past 2 GiB is refused.** `xxd -r`, which is how bytes get put at
-an offset, has the same 32-bit limit, and there is no equivalent fallback
-in place — so hexpair declines rather than writing to the wrong offset.
+**Writing past 2 GiB works too**, through the same route. `xxd -r` has the
+same 32-bit limit, so every byte-moving step goes through PowerShell
+instead: an overwrite seeks and writes, a grow extends the file with
+`SetLength` and slides the tail along, and a shrink slides the tail back
+and then cuts the file. Every write reads back what it wrote and refuses to
+call it done if the bytes are not there — set `g:hexpair_verify_writes = 0`
+if you would rather have the speed.
+
+That last one is worth its own line: **shrinking a file in place is
+something the plugin cannot do anywhere else.** Vim and `xxd` have no way
+to shorten a file except to write it out afresh, so on every other platform
+a shrinking write copies the whole thing. `.NET`'s `SetLength` truncates,
+so here the expensive case is the cheap one — a 120 GiB file shrinks by
+moving the bytes after the edited page, not by copying 120 GiB.
+
+The one thing still refused past 2 GiB is `:w {file}` and `:saveas`, which
+copy the *whole* file through `readblob()` — the function Windows breaks.
 
 **Everywhere else is fine.** Linux, macOS and the BSDs are LP64: `long` is
 64 bits, so `xxd`'s seek is; and their `struct stat.st_size` is a 64-bit

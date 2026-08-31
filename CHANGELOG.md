@@ -113,11 +113,17 @@ and this project adheres to
   dump is built in VimScript there, since handing xxd the bytes with `-o`
   would not help either — its display offset is an `unsigned long`, so the
   offset column would wrap at 4 GiB even given the right bytes.
-- **Writing past 2 GiB on Windows is refused rather than misplaced.** The
-  same limit applies to `xxd -r`, which is how every write puts bytes at an
-  offset, and Vim has no primitive to write at an offset to fall back to. It
-  was patching the page in at 2 GiB, over whatever was there. A refusal
-  loses an edit; the alternative loses the file.
+- **Writing past 2 GiB on Windows works, through the same route.** `xxd -r`
+  has the same 32-bit limit, so every byte-moving step goes through
+  PowerShell: an overwrite seeks and writes, a grow extends with
+  `SetLength` and slides the tail, a shrink slides the tail back and cuts
+  the file. Each write reads back what it wrote before calling it done
+  (`g:hexpair_verify_writes = 0` opts out). **Shrinking in place is new
+  ground**: Vim and `xxd` cannot shorten a file except by rewriting it, so
+  everywhere else a shrinking write copies the whole thing — `.NET`'s
+  `SetLength` truncates, so past 2 GiB the expensive case is the cheap one.
+  `:w {file}` and `:saveas` are still refused there: they copy the whole
+  file through `readblob()`.
 - **`:saveas` left the buffer modified, and the view editing the old
   file.** The bytes were written, but Vim leaves `'modified'` to the
   autocommand for an `acwrite` buffer and this one only cleared it on the

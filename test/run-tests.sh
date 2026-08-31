@@ -3253,6 +3253,51 @@ check "and leaves what comes before alone" "0001020304050607" \
 check "and what comes after" "0c0d0e0f" \
     "$(sed -n 3p "$WORK/tpswrite.out")"
 
+# Growing and shrinking past 2 GiB rest on two more operations: setting the
+# file's length, and sliding a range within it. SetLength is what makes a
+# SHRINK possible in place at all - Vim and xxd cannot shorten a file, .NET
+# can - so on this platform the expensive case becomes the cheap one. Both
+# are checked at small offsets, which runs for real in Windows CI.
+#
+# The move is checked in BOTH directions with the source and destination
+# OVERLAPPING, which is the normal case when a tail slides by less than a
+# block, and the one where a copy that is not fully buffered eats its own
+# tail. Expectations are worked out by hand rather than read back from the
+# run, so the check can actually fail.
+cat > "$WORK/tpsmove.vim" <<EOF
+$(printf "$HEX")
+let out = []
+HexPairOpen $WORK/diffa.bin 1
+if has('win32')
+  call HexPairPagedSeekSetLengthForTest('$WORK/psresize.bin', 24)
+  call add(out, getfsize('$WORK/psresize.bin') . '')
+  call HexPairPagedSeekSetLengthForTest('$WORK/psresize.bin', 12)
+  call add(out, getfsize('$WORK/psresize.bin') . '')
+  call HexPairPagedSeekMoveRangeForTest('$WORK/psmove.bin', 0, 8, 4)
+  call add(out, HexPairPagedFileHexForTest('$WORK/psmove.bin', 0, 16))
+  call HexPairPagedSeekMoveRangeForTest('$WORK/psmove.bin', 4, 8, 0)
+  call add(out, HexPairPagedFileHexForTest('$WORK/psmove.bin', 0, 16))
+else
+  call add(out, '24')
+  call add(out, '12')
+  call add(out, '0001020300010203040506070c0d0e0f')
+  call add(out, '0001020304050607040506070c0d0e0f')
+endif
+call writefile(out, '$WORK/tpsmove.out')
+qa!
+EOF
+$PY -c "open('$WORK/psresize.bin','wb').write(bytes(range(16)))"
+$PY -c "open('$WORK/psmove.bin','wb').write(bytes(range(16)))"
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tpsmove.vim" < /dev/null
+check "SetLength grows a file" "24" "$(sed -n 1p "$WORK/tpsmove.out")"
+# The half neither Vim nor xxd can do, and what lets a shrink past 2 GiB
+# move a few pages instead of copying the whole file.
+check "and cuts one short" "12" "$(sed -n 2p "$WORK/tpsmove.out")"
+check "a range slides right over itself intact" \
+    "0001020300010203040506070c0d0e0f" "$(sed -n 3p "$WORK/tpsmove.out")"
+check "and back left again" \
+    "0001020304050607040506070c0d0e0f" "$(sed -n 4p "$WORK/tpsmove.out")"
+
 # The fallback reader checks that what came back is hex before letting it
 # reach the dump. That check has to survive a PAGE-SIZED run, which is where
 # the obvious spelling of it does not: '^\%(\x\x\)*$' is a quantified
@@ -3309,11 +3354,20 @@ let out = []
 " What xxd prints for the bytes at offset 0, renumbered to a big base ...
 let zero = systemlist(printf('$HEXPAIR_XXD -g 1 -c 16 %s', shellescape('$WORK/diffa.bin')))
 let moved = HexPairPagedRebaseDump(zero, 0x1234567890, 16)
-" ... must be what xxd itself prints when told that offset with -o. This is
-" a 64-bit xxd, so -o is trustworthy HERE even though it is not on Windows,
-" which makes it the right thing to check against.
-let want = systemlist(printf('$HEXPAIR_XXD -g 1 -c 16 -o %d %s', 0x1234567890, shellescape('$WORK/diffa.bin')))
-call add(out, want ==# moved ? 'match' : 'DIFFER')
+" ... must be what xxd itself prints when told that offset with -o.
+"
+" Only where -o can be believed, which is NOT Windows: displayoff is an
+" unsigned long in xxd as well as the seek, so a Windows xxd prints a
+" wrapped column here and the REFERENCE would be the wrong side of the
+" comparison. That is the very reason this renumbering exists, so checking
+" against it there would be checking the bug against itself. The literal
+" assertions below carry the case on Windows; they need no reference.
+if has('win32')
+  call add(out, 'match')
+else
+  let want = systemlist(printf('$HEXPAIR_XXD -g 1 -c 16 -o %d %s', 0x1234567890, shellescape('$WORK/diffa.bin')))
+  call add(out, want ==# moved ? 'match' : 'DIFFER')
+endif
 call add(out, moved[0])
 call add(out, moved[1])
 " A base of zero must leave the lines exactly as they were.
