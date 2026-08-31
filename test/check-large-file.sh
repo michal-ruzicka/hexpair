@@ -129,6 +129,14 @@ file_size() {
 # the same way and reads bytes through the same helper, so if that does not
 # work there is nothing to learn from building the fixture first - and
 # finding out afterwards cost this project a working day on Windows.
+#
+# HexPairPagedFileHexForTest and NOT the SeekRead one its Windows
+# counterpart preflights with. That one is the PowerShell fallback, which
+# exists precisely because xxd cannot seek past 2 GiB on Windows - here
+# there is no PowerShell and no need for one, and asking for it makes the
+# plugin refuse, correctly, with a message about a limit this platform does
+# not have. The two scripts check the same twenty things; what they
+# preflight is the reader each of them will actually use.
 "$PY" -c "
 import sys
 open(sys.argv[1], 'wb').write(bytes(range(256)))
@@ -136,7 +144,7 @@ open(sys.argv[1], 'wb').write(bytes(range(256)))
 cat > "$WORK/preflight.vim" <<EOF
 source $PLUGIN
 try
-  let g:hp = HexPairPagedSeekReadHexForTest('$WORK/preflight.bin', 0, 8)
+  let g:hp = HexPairPagedFileHexForTest('$WORK/preflight.bin', 0, 8)
   call writefile([g:hp ==# '0001020304050607' ? 'ok' : 'read came back as [' . g:hp . ']'], '$WORK/preflight.out')
 catch
   call writefile(['THREW ' . v:exception], '$WORK/preflight.out')
