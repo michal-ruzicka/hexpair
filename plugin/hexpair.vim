@@ -1491,8 +1491,34 @@ function! s:PageLabel() abort
         \ ? '[unnamed buffer]' : b:hexpair_page_file
 endfunction
 
+" The paged file's size, or an error saying why there isn't one.
+"
+" getfsize() answers -1 when it cannot see the file and -2 when the size
+" does not fit in a Number - which on a Vim without +num64 is EVERY file
+" over 2 GiB, the size this plugin exists for. Neither is a size, and
+" neither is zero: taken as "<= 0 means empty", a 5 GiB file opened on such
+" a Vim as an empty view, with the page count, the bounds and every offset
+" derived from it silently meaningless.
+"
+" Zero itself is a real answer and stays one - an empty file is openable and
+" says so (s:LoadEmpty).
+function! s:FileSize(file) abort
+  let size = getfsize(a:file)
+  if size == -2
+    throw printf('hexpair: this Vim cannot measure %s - getfsize() says the '
+          \ . 'size does not fit in a Number, which means a build without '
+          \ . '+num64 and a file over 2 GiB. :version says whether this one '
+          \ . 'has it.', a:file)
+  endif
+  if size < 0
+    throw printf('hexpair: cannot read the size of %s - is it still there?',
+          \ a:file)
+  endif
+  return size
+endfunction
+
 function! s:ResolvePage(file, pagesize, idx) abort
-  let total = getfsize(a:file)
+  let total = s:FileSize(a:file)
   let totalpages = HexPairPagedTotalPages(a:pagesize, total)
   let [base, len] = HexPairPagedBounds(a:idx, a:pagesize, total)
   if base < 0
@@ -1514,8 +1540,10 @@ endfunction
 " friends running past either end.
 function! s:LoadPage(pageidx) abort
   " No bytes means no pages - but the file is still perfectly openable,
-  " and saying so is more use than refusing to show it.
-  if getfsize(b:hexpair_page_file) <= 0
+  " and saying so is more use than refusing to show it. s:FileSize()
+  " throws for the answers that are not sizes at all, so this really is
+  " "empty" and not "unmeasurable" wearing the same clothes.
+  if s:FileSize(b:hexpair_page_file) <= 0
     call s:LoadEmpty()
     return 1
   endif
@@ -2436,6 +2464,13 @@ endfunction
 " that checking the start would get wrong.
 function! HexPairPagedRangeIsXxdsForTest(off, len) abort
   return s:XxdCanSeek(a:off + a:len)
+endfunction
+
+" The -1 half of s:FileSize() is testable anywhere; the -2 half needs a Vim
+" without +num64 AND a file over 2 GiB, so it is checked by reading, not by
+" running.
+function! HexPairPagedFileSizeForTest(file) abort
+  return s:FileSize(a:file)
 endfunction
 
 " The whole of a file as flat lowercase hex. Shared by both readers: xxd -p

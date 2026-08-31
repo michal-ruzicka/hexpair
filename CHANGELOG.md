@@ -101,6 +101,13 @@ and this project adheres to
   look at, the bytes a diff compares and the bytes a `:w` puts back were
   all affected. Everything past that limit now goes through PowerShell —
   see **Windows and the 2 GiB limit** in `README.md`.
+- **A file too large for this Vim to measure opened as an empty one.**
+  `getfsize()` answers `-2` when the size does not fit in a Number — which
+  on a build without `+num64` is any file over 2 GiB — and `-1` when it
+  cannot see the file at all. Both were read as "no bytes", so such a file
+  opened as an empty view with the page count and every offset derived from
+  it silently meaningless. Both are now refused with a message naming the
+  cause; an actual empty file still opens and still says it is empty.
 - **A `^M` at the end of every line of a page, on Windows.** `xxd` opens a
   dump in text mode there (`xxd.c`: `BIN_ASSIGN(fpo = stdout, revert)` for
   the stream, `BIN_WRITE(revert)` for a named output file), so every dump

@@ -3368,6 +3368,44 @@ check "a range that STRADDLES the limit is not, on Windows" "$want_straddle" \
 check "and one wholly past it never is" "$want_high" \
     "$(sed -n 4p "$WORK/tbound.out")"
 
+# getfsize() has two answers that are not sizes: -1 when it cannot see the
+# file, and -2 when the size does not fit in a Number - which on a Vim
+# without +num64 is EVERY file over 2 GiB, the size this plugin is for.
+# Read as "<= 0 means empty", a 5 GiB file would have opened as an empty
+# view on such a Vim, with the page count and every offset derived from it
+# meaningless, and nothing saying so. Zero itself stays a real answer.
+cat > "$WORK/tfsize.vim" <<EOF
+$(printf "$HEX")
+let out = []
+call writefile([], '$WORK/fsempty.bin', 'b')
+try
+  call add(out, 'empty ' . HexPairPagedFileSizeForTest('$WORK/fsempty.bin'))
+catch
+  call add(out, 'empty THREW ' . v:exception)
+endtry
+try
+  call add(out, 'real ' . HexPairPagedFileSizeForTest('$WORK/diffa.bin'))
+catch
+  call add(out, 'real THREW')
+endtry
+try
+  call HexPairPagedFileSizeForTest('$WORK/no-such-file.bin')
+  call add(out, 'missing ACCEPTED')
+catch /^hexpair:/
+  call add(out, 'missing refused')
+endtry
+call writefile(out, '$WORK/tfsize.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tfsize.vim" < /dev/null
+# Zero is a size and must survive: an empty file is openable and says so.
+check "an empty file measures zero, not an error" "empty 0" \
+    "$(sed -n 1p "$WORK/tfsize.out")"
+check "and a real one measures its length" "real 5000" \
+    "$(sed -n 2p "$WORK/tfsize.out")"
+check "but a size that is not a size is refused, not read as empty" \
+    "missing refused" "$(sed -n 3p "$WORK/tfsize.out")"
+
 # The fallback reader checks that what came back is hex before letting it
 # reach the dump. That check has to survive a PAGE-SIZED run, which is where
 # the obvious spelling of it does not: '^\%(\x\x\)*$' is a quantified
