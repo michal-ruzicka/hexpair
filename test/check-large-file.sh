@@ -8,6 +8,13 @@
 #
 #     test/check-large-file.sh [SIZE_IN_GIB]      (default 3, minimum 3)
 #
+# POSIX sh, and on Windows it runs under Git Bash - the same way
+# test/run-tests.sh does, and the same way CI runs that one there. Which
+# means the same trap: Git Bash rewrites paths in the ARGUMENTS it hands a
+# native program, but not inside a file that Vim opens itself, so every
+# path written into a generated .vim script has to be in the drive-letter
+# form first. Hence the cygpath conversions below.
+#
 # Needs SIZE_IN_GIB of free disk for the fixture, and the same again while
 # the ':w {file}' check runs - so six free gigabytes at the default.
 #
@@ -51,7 +58,8 @@ if [ "$GIB" -lt 3 ]; then
 fi
 VIM=${HEXPAIR_VIM:-vim}
 XXD=${HEXPAIR_XXD:-xxd}
-PLUGIN=$(cd "$(dirname "$0")/.." && pwd)/plugin/hexpair.vim
+cd "$(dirname "$0")" || exit 1
+ROOT=$(cd .. && pwd)
 
 PY=
 for c in python3 python; do
@@ -64,8 +72,23 @@ done
 
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
+# BOTH of them: $WORK is written into the generated .vim scripts, and so is
+# $ROOT by way of the `source` line. Converting only one is a bug that shows
+# up on Windows alone, as a Vim that cannot find the plugin it was told to
+# load - which is exactly what happened here before this line grew its
+# second half.
 if command -v cygpath >/dev/null 2>&1; then
     WORK=$(cygpath -m "$WORK")
+    ROOT=$(cygpath -m "$ROOT")
+fi
+PLUGIN=$ROOT/plugin/hexpair.vim
+# Said here rather than left to Vim: a failed :source in Ex mode abandons the
+# rest of the -S script silently, and every check below then fails for a
+# reason that has nothing to do with the plugin.
+if [ ! -f "$PLUGIN" ]; then
+    echo "check-large-file.sh: no plugin at $PLUGIN - run this from the" >&2
+    echo "  test/ directory of a hexpair checkout." >&2
+    exit 1
 fi
 BIG=$WORK/large.bin
 
@@ -101,6 +124,33 @@ actual_hex() {
 file_size() {
     "$PY" -c "import os,sys; print(os.path.getsize(sys.argv[1]))" "$BIG"
 }
+
+# PREFLIGHT, before the disk goes anywhere. Every check below drives Vim
+# the same way and reads bytes through the same helper, so if that does not
+# work there is nothing to learn from building the fixture first - and
+# finding out afterwards cost this project a working day on Windows.
+"$PY" -c "
+import sys
+open(sys.argv[1], 'wb').write(bytes(range(256)))
+" "$WORK/preflight.bin"
+cat > "$WORK/preflight.vim" <<EOF
+source $PLUGIN
+try
+  let g:hp = HexPairPagedSeekReadHexForTest('$WORK/preflight.bin', 0, 8)
+  call writefile([g:hp ==# '0001020304050607' ? 'ok' : 'read came back as [' . g:hp . ']'], '$WORK/preflight.out')
+catch
+  call writefile(['THREW ' . v:exception], '$WORK/preflight.out')
+endtry
+qa!
+EOF
+"$VIM" -es -u NONE -S "$WORK/preflight.vim" < /dev/null
+if [ "$(sed -n 1p "$WORK/preflight.out" 2>/dev/null)" != "ok" ]; then
+    echo "check-large-file.sh: the preflight read FAILED, so nothing below" >&2
+    echo "  would mean anything. No fixture was built." >&2
+    echo "  $(sed -n 1p "$WORK/preflight.out" 2>/dev/null)" >&2
+    exit 1
+fi
+echo "  preflight read ok, so the fixture is worth building"
 
 echo "Building a ${GIB} GiB file with a known byte at every offset..."
 "$PY" - "$BIG" "$GIB" <<'EOF'
@@ -146,7 +196,7 @@ echo "  (that is past the 2147483647 xxd can seek to on Windows)"
 # pattern predicts, at the offset the edits will use. If this fails, every
 # check below would be comparing against the wrong expectation and the run
 # would be meaningless rather than red.
-check "the fixture holds the predicted byte where the edits will go" \
+check "the fixture holds the predicted byte where the edits go" \
     "$(expected_hex $OFF 8)" "$(actual_hex $OFF 8)"
 
 run_vim() {
@@ -210,7 +260,7 @@ check "  what followed is back where it was" "$TAIL_BEFORE" \
 check "  and so is the far end" "$FAR_BEFORE" "$(actual_hex $((SIZE - 32)) 32)"
 # The head of the file is the part no edit should ever have touched, and the
 # part a mis-seeked write is most likely to have landed in.
-check "  the start of the file was never touched" "$(expected_hex 0 32)" \
+check "  the start of the file was never touched (asked of xxd)" "$(expected_hex 0 32)" \
     "$(actual_hex 0 32)"
 
 # --- 4. ':w {file}' writes the whole thing ----------------------------------

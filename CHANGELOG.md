@@ -88,6 +88,10 @@ and this project adheres to
   answering one in the other's language should not be a mistake.
 
 ### Fixed
+- **`xxd` was located only when a page was opened**, so any other route
+  into the readers died with `E121: Undefined variable` instead of a
+  message naming `xxd`. It is resolved on demand now, and a missing `xxd`
+  is reported as itself wherever it is first needed.
 - **On native Windows, everything past 2 GiB was read and written at the
   wrong offset.** `xxd` keeps its seek offset in a C `long` — `strtol()`
   into `long seekoff`, then `fseek()` — and a `long` is 32 bits on Windows,

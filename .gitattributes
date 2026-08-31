@@ -2,6 +2,11 @@
 * text=auto eol=lf
 # The Windows batch script must keep CRLF to run under cmd.exe.
 *.cmd text eol=crlf
+# PowerShell is more forgiving than cmd.exe, but these scripts GENERATE
+# batch files, and a batch file with LF endings breaks under cmd.exe -
+# which cost a day of diagnosis when a generated runvim.cmd inherited
+# LF from a here-string in an LF-committed .ps1.
+*.ps1 text eol=crlf
 # Registry Editor is more forgiving about line endings than cmd.exe's
 # "goto", but a .reg file is Windows-only regardless - keep it CRLF too.
 *.reg text eol=crlf

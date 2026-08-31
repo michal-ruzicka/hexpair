@@ -113,17 +113,19 @@ jobs:
           probe "bare, cold"
           probe "bare, warm"
 
-          # Exactly s:HasPowerShell(): a native Windows Vim, system(), the
-          # same arguments. If the suite hangs where this returns, the
-          # problem is not PowerShell itself.
+          # Through Vim's system(), with the arguments hexpair actually
+          # uses - -InputFormat None included, so this measures the real
+          # call and not an approximation of it. The bare runs above are
+          # always fine even where this one is not, which is exactly why
+          # it has to be asked separately.
           printf '%s\n' \
             'let t = reltime()' \
-            "call system('powershell -NoProfile -NonInteractive -Command exit 0')" \
+            "call system('powershell -NoProfile -NonInteractive -InputFormat None -Command exit 0')" \
             "call writefile([printf('exit=%d elapsed=%.1fs shell=%s', v:shell_error, reltimefloat(reltime(t)), &shell)], 'probe.out')" \
             'qa!' > probe.vim
           "$HEXPAIR_VIM" -es -u NONE -S probe.vim < /dev/null || echo "  vim itself exited $?"
           if [ -f probe.out ]; then
-            echo "  through Vim's system(): $(cat probe.out)"
+            echo "  through Vim's system(), -InputFormat None: $(cat probe.out)"
           else
             echo "  through Vim's system(): NO OUTPUT - system() did not return"
           fi

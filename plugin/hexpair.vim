@@ -404,6 +404,27 @@ endfunction
 " Resolve the xxd executable: PATH first, then the Vim runtime directory,
 " where xxd.exe ships on Windows even when it is not on PATH.
 " Returns '' if not found.
+" xxd, resolved once and remembered, and the ONLY way the rest of this file
+" names it. The variable used to be assigned by the two entry points alone,
+" on the assumption - written down in s:HexOfString(), which had its own
+" copy of this - that everything runs with a page open. Test hooks do not,
+" and a caller that arrived any other way got `E121: Undefined variable`
+" instead of a message about xxd. Found by test/probe-minimal.cmd, calling
+" the reader cold.
+"
+" It THROWS rather than returning empty: every caller is already inside the
+" try that turns a hexpair error into a refused operation with a message,
+" and an empty command interpolated into a printf is not.
+function! s:Xxd() abort
+  if !exists('s:xxd') || s:xxd ==# ''
+    let s:xxd = s:ResolveXxd()
+  endif
+  if s:xxd ==# ''
+    throw 'hexpair: xxd not found in PATH nor in $VIMRUNTIME'
+  endif
+  return s:xxd
+endfunction
+
 function! s:ResolveXxd() abort
   if executable('xxd')
     return 'xxd'
@@ -1640,7 +1661,7 @@ function! s:LoadPage(pageidx) abort
       if raw ==# ''
         let dump = []
       else
-        call s:Run(printf('%s -g 1 -c %d %s %s', s:xxd, n,
+        call s:Run(printf('%s -g 1 -c %d %s %s', s:Xxd(), n,
               \ shellescape(raw), shellescape(dumpfile)))
         " xxd numbered the temp file from zero, since that is where it
         " starts. The offset column is the one thing it cannot be told
@@ -1659,7 +1680,7 @@ function! s:LoadPage(pageidx) abort
   else
     let dumpfile = tempname()
     try
-      call s:Run(printf('%s -s %d -l %d -g 1 -c %d %s %s', s:xxd,
+      call s:Run(printf('%s -s %d -l %d -g 1 -c %d %s %s', s:Xxd(),
             \ base, len, n, shellescape(b:hexpair_page_file),
             \ shellescape(dumpfile)))
       let dump = readfile(dumpfile)
@@ -2000,7 +2021,7 @@ function! s:HasOffsetOption() abort
     " otherwise runs on the 8.0 baseline the rest of the plugin does.
     call writefile(['A'], probe, 'b')
     call s:Run(printf('%s -g 1 -c 16 -o 16 %s %s',
-          \ s:xxd, shellescape(probe), shellescape(out)))
+          \ s:Xxd(), shellescape(probe), shellescape(out)))
     let lines = readfile(out)
     let s:has_o = !empty(lines) && lines[0] =~# '^00000010: 41'
   catch
@@ -2019,7 +2040,7 @@ endfunction
 " offsets that xxd -r seeks by.
 function! s:CanonicalDump(src, base, out) abort
   if s:HasOffsetOption()
-    call s:Run(printf('%s -g 1 -c %d -o %d %s %s', s:xxd,
+    call s:Run(printf('%s -g 1 -c %d -o %d %s %s', s:Xxd(),
           \ b:hexpair_n, a:base, shellescape(a:src), shellescape(a:out)))
     return
   endif
@@ -2027,7 +2048,7 @@ function! s:CanonicalDump(src, base, out) abort
   " job the Windows path past 2 GiB does, so it is the same function -
   " there were two copies of this loop, which is one more than the number
   " of places the format can be got right in.
-  call s:Run(printf('%s -g 1 -c %d %s %s', s:xxd,
+  call s:Run(printf('%s -g 1 -c %d %s %s', s:Xxd(),
         \ b:hexpair_n, shellescape(a:src), shellescape(a:out)))
   call writefile(HexPairPagedRebaseDump(readfile(a:out), a:base,
         \ b:hexpair_n), a:out)
@@ -2190,11 +2211,26 @@ let s:psreadscript =
 " Probed once per session, and asked of the thing itself rather than of
 " $PATH: what matters is that it starts and runs a command, which
 " executable('powershell') does not answer.
+" How PowerShell is started, in one place because six call sites used to
+" spell it out and a difference between them would be invisible.
+"
+" -InputFormat None guards a known hazard, and is NOT a fix for anything
+" observed here - say so, because the comment that used to stand in its
+" place claimed otherwise and was wrong. Vim's system() redirects the
+" child's stdin, and PowerShell started with -Command and a redirected
+" stdin will, under the default -InputFormat Text, read it; a stream
+" nothing ever closes is then a wait with no end. Cheap to prevent,
+" invisible from a shell where stdin is a console, so it stays.
+" -NonInteractive stops it prompting, and -NoProfile keeps a user's
+" profile out of a call that has to behave the same for everyone.
+let s:psinvoke = 'powershell -NoProfile -NonInteractive -InputFormat None '
+      \ . '-Command '
+
 function! s:HasPowerShell() abort
   if exists('s:has_powershell')
     return s:has_powershell
   endif
-  call system('powershell -NoProfile -NonInteractive -Command exit 0')
+  call system(s:psinvoke . 'exit 0')
   let s:has_powershell = !v:shell_error
   return s:has_powershell
 endfunction
@@ -2228,8 +2264,7 @@ function! s:SeekReadRaw(file, off, len) abort
   let $HEXPAIR_PS_OFF = a:off
   let $HEXPAIR_PS_LEN = a:len
   try
-    call s:Run(printf('powershell -NoProfile -NonInteractive -Command %s',
-          \ shellescape(s:psreadscript)))
+    call s:Run(s:psinvoke . shellescape(s:psreadscript))
   finally
     let $HEXPAIR_PS_SRC = ''
     let $HEXPAIR_PS_OUT = ''
@@ -2304,8 +2339,7 @@ function! s:SeekWriteRaw(dst, off, src) abort
   let $HEXPAIR_PS_DST = a:dst
   let $HEXPAIR_PS_OFF = a:off
   try
-    call s:Run(printf('powershell -NoProfile -NonInteractive -Command %s',
-          \ shellescape(s:pswritescript)))
+    call s:Run(s:psinvoke . shellescape(s:pswritescript))
   finally
     let $HEXPAIR_PS_SRC = ''
     let $HEXPAIR_PS_DST = ''
@@ -2373,8 +2407,7 @@ function! s:SeekSetLength(file, newlen) abort
   let $HEXPAIR_PS_DST = a:file
   let $HEXPAIR_PS_LEN = a:newlen
   try
-    call s:Run(printf('powershell -NoProfile -NonInteractive -Command %s',
-          \ shellescape(s:pssetlenscript)))
+    call s:Run(s:psinvoke . shellescape(s:pssetlenscript))
   finally
     let $HEXPAIR_PS_DST = ''
     let $HEXPAIR_PS_LEN = ''
@@ -2401,8 +2434,7 @@ function! s:SeekMoveRange(file, from, len, to) abort
   let $HEXPAIR_PS_TO = a:to
   let $HEXPAIR_PS_LEN = a:len
   try
-    call s:Run(printf('powershell -NoProfile -NonInteractive -Command %s',
-          \ shellescape(s:psmovescript)))
+    call s:Run(s:psinvoke . shellescape(s:psmovescript))
   finally
     let $HEXPAIR_PS_DST = ''
     let $HEXPAIR_PS_OFF = ''
@@ -2461,8 +2493,7 @@ function! s:SeekCopyRange(src, off, len, dst, truncate) abort
   let $HEXPAIR_PS_LEN = a:len
   let $HEXPAIR_PS_TRUNC = a:truncate ? '1' : '0'
   try
-    call s:Run(printf('powershell -NoProfile -NonInteractive -Command %s',
-          \ shellescape(s:pscopyscript)))
+    call s:Run(s:psinvoke . shellescape(s:pscopyscript))
   finally
     let $HEXPAIR_PS_SRC = ''
     let $HEXPAIR_PS_DST = ''
@@ -2523,7 +2554,7 @@ endfunction
 " over a file it does not have to seek in, which is the fast part of xxd and
 " the part that was never in question.
 function! s:HexFromFile(file) abort
-  let out = s:Run(printf('%s -p %s', s:xxd, shellescape(a:file)))
+  let out = s:Run(printf('%s -p %s', s:Xxd(), shellescape(a:file)))
   " xxd -p prints hex and line breaks and nothing else, so the line breaks
   " are all there is to remove - the CR because a Windows xxd ends its lines
   " with one. Two passes over a single character each, rather than one over
@@ -2548,7 +2579,7 @@ function! s:FileHex(file, off, len) abort
     return s:SeekReadHex(a:file, a:off, a:len)
   endif
   try
-    let out = s:Run(printf('%s -p -s %d -l %d %s', s:xxd, a:off, a:len,
+    let out = s:Run(printf('%s -p -s %d -l %d %s', s:Xxd(), a:off, a:len,
           \ shellescape(a:file)))
     return substitute(substitute(out, '\n', '', 'g'), '\r', '', 'g')
   catch /^hexpair:/
@@ -2644,7 +2675,7 @@ function! s:PatchInPlace(raw) abort
   let dump = tempname()
   try
     call s:CanonicalDump(a:raw, b:hexpair_page_base, dump)
-    call s:Run(printf('%s -r %s %s', s:xxd,
+    call s:Run(printf('%s -r %s %s', s:Xxd(),
           \ shellescape(dump), shellescape(b:hexpair_page_file)))
   finally
     call delete(dump)
@@ -2838,9 +2869,9 @@ function! s:MoveRange(from, len, to, hex) abort
     call s:SeekMoveRange(b:hexpair_page_file, a:from, a:len, a:to)
     return
   endif
-  call s:Run(printf('%s -s %d -l %d -p %s %s', s:xxd, a:from, a:len,
+  call s:Run(printf('%s -s %d -l %d -p %s %s', s:Xxd(), a:from, a:len,
         \ shellescape(b:hexpair_page_file), shellescape(a:hex)))
-  call s:Run(printf('%s -r -p -s %d %s %s', s:xxd, a:to,
+  call s:Run(printf('%s -r -p -s %d %s %s', s:Xxd(), a:to,
         \ shellescape(a:hex), shellescape(b:hexpair_page_file)))
 endfunction
 
@@ -2875,7 +2906,7 @@ function! s:ExtendBy(delta) abort
   let hex = tempname()
   try
     call writefile([repeat('00', a:delta)], hex)
-    call s:Run(printf('%s -r -p -s %d %s %s', s:xxd, b:hexpair_page_total,
+    call s:Run(printf('%s -r -p -s %d %s %s', s:Xxd(), b:hexpair_page_total,
           \ shellescape(hex), shellescape(b:hexpair_page_file)))
   finally
     call delete(hex)
@@ -3115,7 +3146,7 @@ function! s:PageBytes(raw) abort
       let off = s:IsBannerLine(getline('.')) ? b:hexpair_page_base
             \ : b:hexpair_page_base + scan.bytes + s:PagedCursorLineIndex()
       call writefile(scan.lines, hex)
-      call s:Run(printf('%s -r -p %s %s', s:xxd,
+      call s:Run(printf('%s -r -p %s %s', s:Xxd(),
             \ shellescape(hex), shellescape(a:raw)))
     else
       " The text view's bytes need no conversion at all - they are the
@@ -3712,7 +3743,7 @@ function! s:InspectBytes(count) abort
   let raw = tempname()
   try
     call writefile(lines, raw, 'b')
-    let hex = substitute(s:Run(printf('%s -p -l %d %s', s:xxd, a:count,
+    let hex = substitute(s:Run(printf('%s -p -l %d %s', s:Xxd(), a:count,
           \ shellescape(raw))), '[^0-9a-fA-F]', '', 'g')
   finally
     call delete(raw)
@@ -4259,19 +4290,10 @@ let s:computed_encodings = ['utf-8', 'utf-16le', 'utf-16be',
 " one way to see a string's bytes exactly whatever 'encoding' is - the same
 " round trip the inspector's text view uses, and for the same reason.
 function! s:HexOfString(text) abort
-  " Everything else here runs with a page open, which is what resolves
-  " s:xxd; this one is also reachable from HexPairPagedCharBytes() with no
-  " buffer at all, which is how the suite asks it questions.
-  if !exists('s:xxd') || s:xxd ==# ''
-    let s:xxd = s:ResolveXxd()
-    if s:xxd ==# ''
-      throw 'hexpair: xxd not found in PATH nor in $VIMRUNTIME'
-    endif
-  endif
   let raw = tempname()
   try
     call writefile([a:text], raw, 'b')
-    return tolower(substitute(s:Run(printf('%s -p %s', s:xxd,
+    return tolower(substitute(s:Run(printf('%s -p %s', s:Xxd(),
           \ shellescape(raw))), '[^0-9a-fA-F]', '', 'g'))
   finally
     call delete(raw)
@@ -5066,7 +5088,7 @@ function! s:SpliceIntoPage(at, len, hex) abort
   let dump = tempname()
   try
     call writefile([new], hex)
-    call s:Run(printf('%s -r -p %s %s', s:xxd,
+    call s:Run(printf('%s -r -p %s %s', s:Xxd(),
           \ shellescape(hex), shellescape(raw)))
     call s:CanonicalDump(raw, b:hexpair_page_base, dump)
     call s:SetLinesUndoable(s:HexViewLines(readfile(dump)))
@@ -6757,7 +6779,7 @@ function! s:BytesAsText(label, hex) abort
     let raw = tempname()
     try
       call writefile([a:hex], hexfile)
-      call s:Run(printf('%s -r -p %s %s', s:xxd,
+      call s:Run(printf('%s -r -p %s %s', s:Xxd(),
             \ shellescape(hexfile), shellescape(raw)))
       let text = join(readfile(raw, 'b'), "\n")
     catch
@@ -6917,7 +6939,7 @@ function! s:ToText() abort
   let raw = tempname()
   try
     call writefile(scan.lines, hex)
-    call s:Run(printf('%s -r -p %s %s', s:xxd,
+    call s:Run(printf('%s -r -p %s %s', s:Xxd(),
           \ shellescape(hex), shellescape(raw)))
     call s:PagedClearHighlight()
     call s:ClearMarkings()

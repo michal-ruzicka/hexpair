@@ -3291,8 +3291,9 @@ check "and the byte form takes hex too" "hex 10/10 @0x1378 (4984)" \
 cat > "$WORK/tblob.vim" <<EOF
 $(printf "$HEX")
 let out = []
-" A page first: s:xxd is resolved when one is opened, and the xxd reader
-" needs it.
+" A page first, because this compares the two readers as a page load would
+" use them. Not because it has to: s:Xxd() resolves on demand, which the
+" cold check below pins.
 HexPairOpen $WORK/diffa.bin 1
 if has('win32')
   let xxd = HexPairPagedFileHexForTest('$WORK/diffa.bin', 1000, 64)
@@ -3315,6 +3316,29 @@ check "and comes back as flat lowercase hex" \
     "128 lowercase-hex" "$(sed -n 2p "$WORK/tblob.out")"
 check "and past the end it is nothing, not something" "''" \
     "$(sed -n 3p "$WORK/tblob.out")"
+
+# COLD, with no page ever opened. The block above opens one first and says
+# why - "s:xxd is resolved when one is opened" - which is a workaround for a
+# bug the suite was carrying rather than catching: s:xxd was assigned by the
+# two entry points alone, so any other caller got E121 instead of a message
+# about xxd. Found on Windows, by a script that called the reader in a
+# fresh Vim. s:Xxd() resolves on demand now, and this is the check that
+# it still does.
+cat > "$WORK/tcold.vim" <<EOF
+$(printf "$HEX")
+let out = []
+try
+  call add(out, HexPairPagedFileHexForTest('$WORK/diffa.bin', 0, 4))
+catch
+  call add(out, 'THREW ' . v:exception)
+endtry
+call writefile(out, '$WORK/tcold.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tcold.vim" < /dev/null
+check "the reader resolves xxd itself, with no page ever opened" \
+    "$("$HEXPAIR_XXD" -p -s 0 -l 4 "$WORK/diffa.bin" | tr -d '\n\r')" \
+    "$(sed -n 1p "$WORK/tcold.out")"
 
 # The writer, the same way. A same-length overwrite past 2 GiB is the one
 # write that works on Windows - PowerShell seeks where xxd cannot - and it

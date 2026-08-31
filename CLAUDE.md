@@ -292,7 +292,7 @@ demo/                 - the animation at the top of README.md and what
                         long (hence MP4 then ffmpeg), and its work
                         directory must be short as well as off tmpfs
 test/run-tests.sh     - headless regression suite (vim -es)
-test/check-large-file.sh - what the suite cannot be: builds a
+test/check-large-file.{cmd,ps1,sh} - what the suite cannot be: builds a
                         multi-gigabyte file and edits it past 2 GiB, which
                         is the only way to exercise the Windows paths in
                         earnest. Run by hand, needs 2x the size in disk.
@@ -306,6 +306,47 @@ test/check-large-file.sh - what the suite cannot be: builds a
                         the edits rewrite the first columns of a dump LINE,
                         so the offset has to be line-aligned or every
                         expectation is off by up to fifteen bytes.
+                        On Windows the .cmd is the DRIVER, not a wrapper:
+                        it runs Vim, and the .ps1 never does. Every
+                        arrangement in which PowerShell started Vim -
+                        Start-Process with redirected handles, `& cmd /c`
+                        with the path as an argument, `start /wait`, with
+                        and without capturing stdout - hung on a read of
+                        eight bytes, while `vim -es -u NONE -S file <nul`
+                        from a batch always works. Six explanations were
+                        offered and five were wrong; this stops explaining
+                        and adopts the working shape. The .ps1 keeps the
+                        arithmetic (2.7-billion offsets, and cmd's `set /a`
+                        is 32-bit) and runs in PHASES, leaving an edit.vim
+                        for the driver between them, because the checks
+                        must interleave with the edits - "the file grew by
+                        two bytes" cannot be asked after the shrink undid
+                        it. State between phases is state.json; the
+                        driver learns the work directory from a generated
+                        batch of `set` lines, the one handoff cmd can
+                        consume with no quoting rules involved.
+                        A PREFLIGHT reads eight bytes of a 256-byte file
+                        through the same call before any fixture is built,
+                        so a broken setup costs a second rather than three
+                        gigabytes.
+                        TWO implementations, deliberately. The .ps1 (via
+                        .cmd) is for native Windows and needs nothing
+                        installed: cmd's `set /a` is 32-bit and cannot hold
+                        a 2.7-billion offset, and python3 is an install the
+                        maintainer does not want there - while PowerShell
+                        is already what hexpair uses past 2 GiB, so the
+                        check needs nothing the feature does not. The .sh
+                        is POSIX (python3), for Linux, WSL and the Git Bash
+                        Vim. They assert the SAME twenty checks under the
+                        same names, which is checkable by diffing their
+                        output and is the only thing keeping them from
+                        drifting - if one gains a check, give the other the
+                        same one. Known limit of the .ps1: past 2 GiB it
+                        reads back through the same FileStream calls the
+                        plugin wrote with, so a Seek fault affecting reads
+                        and writes identically would hide; the length
+                        checks and the head check (asked of xxd, under
+                        2 GiB) do not go that way.
 dist/                 - packaged release tarballs (gitignored)
 ```
 
@@ -561,6 +602,8 @@ come back**; each names the test that would catch it.
 | Formatting a page's dump byte by byte in VimScript, when xxd could not be used for it: correct, and 3.5 SECONDS a page (131072 iterations of strpart/str2nr/concat) - which on Windows read as Vim hanging for half a minute on every page turn. xxd's limit is its SEEK, not its formatting: PowerShell now writes the page's bytes to a temp file and xxd dumps THAT from offset 0, with only the offset column renumbered here (`HexPairPagedRebaseDump()`, 8192 map() calls, 25 ms). 3530 ms -> 48 ms. The same page load also used to read the range TWICE, once for the dump and once for `b:hexpair_page_hex`; on a path where starting the process is the cost, that was half the total | "renumbered offsets are what xxd itself would have printed" + the three with it |
 | `g:hexpair_bytes_per_line = 0` was ACCEPTED: the only check was `size % bytesperline != 0`, and Vim answers `512 % 0` with 0 rather than erroring, so a zero width passed "is a multiple of" and fell over later in `xxd -c 0`. Width is checked by name and first now, as the RANGE 1..256 - 256 being xxd's own `#define COLS 256`, above which it exits with "invalid number of columns", which would otherwise reach the user as a command that failed for reasons nothing connects to the setting. The message names the range AND the page-size multiple, because "must be positive" left the reader asking what else was wanted of the number. `g:hexpair_page_size` also had no upper bound and is capped at `s:pagesizemax` (2147483647) - a correctness boundary, not a tidy number: a page's length reaches `xxd -l` (a C long, 32-bit on Windows) and PowerShell's `[int]`, and both would overflow silently | "a zero bytes-per-line is caught, not read as a multiple" + the three with it |
 | The offset-column renumbering existed TWICE - `s:CanonicalDump()`'s no-`-o` fallback and the Windows path past 2 GiB - which is one more place than the format can be got right in. One `HexPairPagedRebaseDump()` now. Its tests cover non-default widths, since every other test in the suite uses the default and a renumberer that advanced by 16 rather than by `n` would pass all of them | "renumbering follows a narrower dump line" + the two with it |
+| **`vim -es` reads Ex commands from STANDARD INPUT, and a failed `:source` leaves it doing exactly that.** `-S` only says what to run first; if that aborts, Vim does not exit, it reads the console forever with nothing printed. Every harness that drives it must close stdin - `< /dev/null`, or `<nul` from cmd. The tell, if it ever recurs: typing `:qa!` into the frozen run moves it on by exactly one step, which no blocked child process does | not testable here (needs Windows); `test/check-large-file.*` all redirect stdin |
+| PowerShell called from Vim's `system()` is invoked with `-InputFormat None`. Vim redirects the child's stdin, and PowerShell started with `-Command` and a redirected stdin reads it under the default `-InputFormat Text`. This is a KNOWN HAZARD guarded against, NOT a diagnosed field bug - nothing here ever demonstrated it. All invocations go through one `s:psinvoke` so the six call sites cannot drift | not testable here; the CI probe step measures it |
 | `getfsize()` has two answers that are not sizes - `-1` (cannot see the file) and `-2` (does not fit in a Number, i.e. ANY file over 2 GiB on a build without `+num64`, which is the 8.0 baseline this plugin supports). `s:LoadPage()` tested `<= 0` and so read both as "empty": a 5 GiB file would open as an empty view on such a Vim, with the page count, the bounds and every offset derived from it meaningless and nothing saying so. `s:FileSize()` throws for both and keeps zero as a real answer | "an empty file measures zero, not an error" + the two with it |
 | Guards on the 2 GiB limit test the END of the range, never the start: a range beginning below it and crossing it is xxd's for the seek and not for the rest. `s:FileHex()` tested the start and was the odd one out | "a range that STRADDLES the limit is not, on Windows" |
 | A search match straddling a page boundary was marked on neither page: it fits whole inside neither, and each page was searched alone | "and the page it starts on marks the byte it has" — `s:PageHexForSearch()` reads the page with span-1 bytes of each neighbour |
@@ -674,29 +717,61 @@ the shell - Git Bash says MSYS whichever Vim is being tested). Past 2 GiB a
 Windows Vim reaches a file through PowerShell rather than xxd, so the block
 stops testing what it exists for (xxd's own offset-column widening) and
 becomes the first place in the suite that starts PowerShell at all. The job
-then times out at fifteen minutes. **The cause is not known**: the same
-reads and writes work on a real Windows machine on a 120 GiB file, at about
-a second a page, so it is something about that runner - PowerShell absent,
-shimmed, or blocked - and not about the code path. Skipping is a way to see
-the rest of the suite, not a fix.
+then times out at fifteen minutes. **The cause is not known.** Nothing is
+lost meanwhile: the widening is checked without a 4 GiB file by "and the
+column widens past eight digits", and the PowerShell paths by the checks
+that call them directly. The job carries a non-gating probe step ("Probe
+PowerShell, including the way hexpair calls it") whose value is the
+comparison between a bare run and one through Vim's `system()`.
 
-**The CI job now probes for it** ("Probe PowerShell, including the way
-hexpair calls it", diagnostic and non-gating, with a three-minute timeout
-of its own). Read its three lines in this order:
+### What `test/check-large-file.cmd` cost to get running, and the rules it left
 
-- both `bare` lines fail or hang -> PowerShell is absent or blocked on that
-  runner, and nothing in this plugin can help; the skip is the answer.
-- the bare lines are quick but `through Vim's system()` says NO OUTPUT ->
-  the problem is that specific call, not PowerShell. That is the
-  interesting outcome: it would mean `system()` from a native Windows Vim,
-  under a Git Bash step, does not return for this command - and the
-  `shell=` it prints says which shell it went through, which is the first
-  thing to suspect.
-- everything is quick -> the hang is elsewhere in that block, and the next
-  step is `g:hexpair_debug` in the job to see how many processes a page
-  turn there actually starts. Nothing is lost meanwhile: the widening
-is checked without a 4 GiB file by "and the column widens past eight
-digits", and the PowerShell paths by the checks that call them directly.
+It now passes all twenty checks on native Windows - the same-length write,
+the grow, the shrink, `:w {file}` - which is the only evidence the
+past-2 GiB paths have ever had. Getting there took a day, five wrong
+diagnoses, and one real plugin bug. **The meta-rule, which is the valuable
+part: the instrument is part of the measurement.** A diagnostic harness
+that starts Vim through `Start-Process` with redirected standard handles
+hung on a script that ran no `system()` at all, while a batch file running
+`vim -es -u NONE -S file <nul` never did. Four theories about
+`plugin/hexpair.vim` were argued from that harness's output before anyone
+questioned the harness. **When a diagnostic and the thing being diagnosed
+disagree, take the diagnostic apart first.**
+
+The concrete rules, each of which cost real time:
+
+- **`*.ps1` is pinned to CRLF in `.gitattributes`**, and any batch file a
+  script GENERATES is built from an ARRAY of lines so `Set-Content`
+  supplies the platform newline. A here-string carries its own file's
+  endings, and a batch file with LF endings does not run under cmd.exe -
+  the rule was already written down here for `*.cmd` and was applied to the
+  wrong half of the problem.
+- **"Which Vim is that?" is answered by `v:progpath`, never by the
+  filesystem.** `vim` on PATH is often a launcher that re-executes the real
+  binary, and that is FINE. Guessing by directory was wrong; guessing by
+  size was wrong too, because the real binary on the maintainer's machine
+  is 188 KB. Only Vim knows.
+- **`vim -es` is SILENT Ex mode: `:echomsg` displays nothing**, so
+  `g:hexpair_debug` cannot report there. A script that must say where it
+  got to writes markers with `writefile()`, each overwriting the last -
+  which is what `check-large-file.ps1` does, one per statement, into
+  `trace.out`.
+- **Windows PowerShell 5.1**: `try`/`catch` is a STATEMENT, so `try` inside
+  a parenthesised expression parses as a command name; `Get-Content` on an
+  EMPTY file returns an empty ARRAY, so `.Trim()` on it throws
+  "[System.Object[]] does not contain a method named 'Trim'".
+- **In a batch file a lone `%` is eaten** unless it forms `%VAR%` or `%%`,
+  and `^|` inside double quotes is a literal `^`, not an escape.
+- **A process that survives `taskkill /F` is stuck in the kernel and keeps
+  every handle it holds.** That happened here, and orphans holding a shared
+  redirect file made every layer after the first hang fail too. Diagnostics
+  that kill things must give each run its own files and report whether the
+  kill worked.
+
+The hang itself was never explained. It stopped happening, on the same
+machine and the same commits, both with and without the change that
+appeared to fix it - so the last theory is no better than the four before
+it.
 
 **Read the check COUNT, not just the last line.** The suite is one long
 sequence of blocks, and an edit that replaces a span of it can swallow
