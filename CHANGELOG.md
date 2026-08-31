@@ -101,6 +101,15 @@ and this project adheres to
   look at, the bytes a diff compares and the bytes a `:w` puts back were
   all affected. Everything past that limit now goes through PowerShell —
   see **Windows and the 2 GiB limit** in `README.md`.
+- **A nonsensical `g:hexpair_bytes_per_line` was accepted.** Zero passed
+  the "page size must be a multiple of it" check, because Vim answers
+  `512 % 0` with `0` rather than an error, and a negative one passed for
+  the same reason — both then failed later and obscurely, in `xxd -c 0` and
+  in every column sum on the page. Both are now refused by name.
+- **`g:hexpair_page_size` had no upper bound.** It is capped at
+  2147483647 bytes: a page's length reaches `xxd -l` (a C `long`, 32-bit on
+  Windows) and PowerShell's `[int]`, and a larger one would overflow both
+  silently rather than fail.
 - **A file too large for this Vim to measure opened as an empty one.**
   `getfsize()` answers `-2` when the size does not fit in a Number — which
   on a build without `+num64` is any file over 2 GiB — and `-1` when it

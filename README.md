@@ -408,6 +408,15 @@ begin and not finish.
 | Shrink | **rewrite the whole file** | patch, slide the tail, `SetLength` truncate — **in place** |
 | `:w {file}`, `:saveas` | `readblob` + `writefile` | one PowerShell process per range copied |
 
+`g:hexpair_bytes_per_line` needs no thought here: `xxd` is told `-c N` on
+either side of the line, and the offset column Vim renumbers advances by
+`N`. `g:hexpair_page_size` is capped at 2147483647 bytes, which is a
+correctness boundary rather than a tidy number — a page's length reaches
+`xxd -l` (a C `long`, 32-bit on Windows) and PowerShell's `[int]` (32-bit
+everywhere), and a larger one would overflow both *silently*. Anything
+approaching it is impractical long before: a page is held as hex at two
+characters a byte, so a 2 GiB page wants some 8 GiB of Vim.
+
 **What it costs.** Below 2 GiB, nothing changes anywhere: `xxd` does what it
 always did. Past it, each operation is one PowerShell start — a few hundred
 milliseconds — so a page turn is noticeably slower than a local one but far

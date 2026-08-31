@@ -782,7 +782,17 @@ source $PLUGIN
 let ok       = HexPairPagedSizeError(1024, 16)
 let notmult  = HexPairPagedSizeError(1000, 16)
 let negative = HexPairPagedSizeError(-16, 16)
-call writefile([string(ok), notmult, negative], '$WORK/t26.out')
+" A zero width has to be caught BY NAME rather than by the multiple check:
+" Vim answers 512 % 0 with 0, not an error, so a zero sails through "is a
+" multiple of" and only falls over later in xxd -c 0 and in every column
+" sum on the page.
+let zerowide = HexPairPagedSizeError(512, 0)
+let negwide  = HexPairPagedSizeError(512, -4)
+" And a page bigger than a 32-bit length, which xxd's -l and PowerShell's
+" [int] would both take without complaining and get wrong.
+let toobig   = HexPairPagedSizeError(5 * 1024 * 1024 * 1024, 16)
+let atlimit  = HexPairPagedSizeError(2147483632, 16)
+call writefile([string(ok), notmult, negative, zerowide, negwide, toobig, string(atlimit)], '$WORK/t26.out')
 qa!
 EOF
 "$HEXPAIR_VIM" -es -u NONE -S "$WORK/t26.vim"
@@ -793,6 +803,17 @@ check "page size not a multiple of bytes_per_line" \
 check "page size not positive" \
     "hexpair: g:hexpair_page_size (-16) must be a positive multiple of g:hexpair_bytes_per_line (16)" \
     "$(sed -n 3p "$WORK/t26.out")"
+check "a zero bytes-per-line is caught, not read as a multiple" \
+    "hexpair: g:hexpair_bytes_per_line (0) must be a positive number of bytes per dump line" \
+    "$(sed -n 4p "$WORK/t26.out")"
+check "and a negative one" \
+    "hexpair: g:hexpair_bytes_per_line (-4) must be a positive number of bytes per dump line" \
+    "$(sed -n 5p "$WORK/t26.out")"
+check "a page over the 32-bit length limit is refused" \
+    "hexpair: g:hexpair_page_size (5368709120) is over the 2147483647-byte limit - a page's length is handed to xxd's -l and to PowerShell as a 32-bit number, and a larger one would overflow instead of failing. Pages are meant to be small; the default is 128 KiB." \
+    "$(sed -n 6p "$WORK/t26.out")"
+# Just under it is legal, so the cap is a boundary and not a mood.
+check "and one just under it is not" "''" "$(sed -n 7p "$WORK/t26.out")"
 
 # --- Test 27: hex-digit width boundary clamping (fabricated total, no real -
 # multi-GiB fixture needed - the bounds/page-count functions are pure) -----
@@ -3496,6 +3517,34 @@ check "and each line advances by one line of bytes" \
     "$(sed -n 3p "$WORK/tdump.out")"
 check "a base of zero changes nothing" "unchanged" \
     "$(sed -n 4p "$WORK/tdump.out")"
+
+# A non-default g:hexpair_bytes_per_line has to flow all the way through:
+# xxd is told -c N, and the renumbering must then advance by N a line, not
+# by 16. Getting that wrong would put the right bytes under the wrong
+# offsets on any width but the default - and the default is what every
+# other test uses.
+cat > "$WORK/tdumpw.vim" <<EOF
+$(printf "$HEX")
+let out = []
+for n in [8, 23, 32]
+  let zero = systemlist(printf('$HEXPAIR_XXD -g 1 -c %d %s', n, shellescape('$WORK/diffa.bin')))
+  let moved = HexPairPagedRebaseDump(zero, 0x40000000, n)
+  if has('win32')
+    call add(out, 'match ' . n)
+  else
+    let want = systemlist(printf('$HEXPAIR_XXD -g 1 -c %d -o %d %s', n, 0x40000000, shellescape('$WORK/diffa.bin')))
+    call add(out, (want ==# moved ? 'match ' : 'DIFFER ') . n)
+  endif
+endfor
+call writefile(out, '$WORK/tdumpw.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tdumpw.vim" < /dev/null
+check "renumbering follows a narrower dump line" "match 8" \
+    "$(sed -n 1p "$WORK/tdumpw.out")"
+check "and an odd width that divides nothing" "match 23" \
+    "$(sed -n 2p "$WORK/tdumpw.out")"
+check "and a wider one" "match 32" "$(sed -n 3p "$WORK/tdumpw.out")"
 
 # --- :HexPairDiffShow - what the other file has here ----------------------
 # The marking says WHICH bytes differ and no more; past the end of the other

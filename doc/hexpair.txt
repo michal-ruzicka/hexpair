@@ -538,6 +538,19 @@ g:hexpair_bytes_per_line
                         Example for wide terminals: >
                             let g:hexpair_bytes_per_line = 32
 <
+                        Must be positive, and |g:hexpair_page_size| must
+                        be a multiple of it.  A zero is checked for by
+                        name rather than caught by that multiple rule,
+                        because Vim answers `512 % 0` with 0 rather than
+                        an error - so a zero would otherwise pass the
+                        check and fail later, in `xxd -c 0` and in every
+                        column sum on the page.
+
+                        Any width works everywhere, including past 2 GiB
+                        on Windows (|hexpair-windows-2gib|): xxd is told
+                        `-c N` there as anywhere else, and the offset
+                        column that has to be renumbered in Vim advances
+                        by N a line.
                                                              *g:hexpair_paste*
 g:hexpair_paste         The 'paste' option is global, so it cannot be set
                         just for the dump buffer.  When this option is 1
@@ -1523,6 +1536,18 @@ g:hexpair_page_size     Bytes per page.  Default: 128 KiB (128 * 1024).
                         Since |:HexPairPageGoto| reaches any page
                         directly, a larger page buys nothing but that
                         wait.
+
+                        There is a hard cap of 2147483647 bytes, and it
+                        is a correctness boundary rather than a tidy
+                        number: a page's length is handed to xxd's `-l`,
+                        which is a C long and so 32-bit on Windows, and
+                        to PowerShell as an [int], which is 32-bit
+                        everywhere.  A larger page would overflow both
+                        SILENTLY rather than fail.  Long before that it
+                        is impractical anyway - a page is held as hex at
+                        two characters a byte and drawn as dump lines at
+                        nearly four, so a 2 GiB page wants some 8 GiB of
+                        Vim.  The cap is where correctness ends.
 
                                                   *g:hexpair_page_confirm*
 g:hexpair_page_confirm  Whether a write that changed the page's length

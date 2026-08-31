@@ -304,11 +304,38 @@ endfunction
 " multiple of bytesperline is required, and both are passed explicitly
 " rather than read from g: internally, so tests do not need to fiddle
 " with global state to exercise the error branch.
+" The largest page this can work in, and not an arbitrary tidy number: the
+" byte-moving primitives hand a page's length to xxd's `-l` (a C long, so
+" 32-bit on Windows) and to PowerShell's [int] (32-bit everywhere). A page
+" over that would overflow both silently rather than fail, which is the
+" failure mode this whole area has already produced once.
+"
+" It is far larger than anything sensible - a page is held as hex, at two
+" characters a byte, and rendered as dump lines at nearly four, so a 2 GiB
+" page wants some 8 GiB of Vim. The cap is where CORRECTNESS ends; comfort
+" ended long before.
+let s:pagesizemax = 2147483647
+
 function! HexPairPagedSizeError(size, bytesperline) abort
+  " Checked first, and explicitly rather than by the modulo below: Vim
+  " answers `512 % 0` with 0 rather than an error, so a zero width sails
+  " through "is a multiple of" and only falls over later, in xxd -c 0 and
+  " in every column sum on the page.
+  if a:bytesperline <= 0
+    return printf('hexpair: g:hexpair_bytes_per_line (%d) must be a '
+          \ . 'positive number of bytes per dump line', a:bytesperline)
+  endif
   if a:size <= 0 || a:size % a:bytesperline != 0
     return printf('hexpair: g:hexpair_page_size (%d) must be a positive '
           \ . 'multiple of g:hexpair_bytes_per_line (%d)',
           \ a:size, a:bytesperline)
+  endif
+  if a:size > s:pagesizemax
+    return printf('hexpair: g:hexpair_page_size (%d) is over the %d-byte '
+          \ . 'limit - a page''s length is handed to xxd''s -l and to '
+          \ . 'PowerShell as a 32-bit number, and a larger one would '
+          \ . 'overflow instead of failing. Pages are meant to be small; '
+          \ . 'the default is 128 KiB.', a:size, s:pagesizemax)
   endif
   return ''
 endfunction
@@ -1981,20 +2008,14 @@ function! s:CanonicalDump(src, base, out) abort
           \ b:hexpair_n, a:base, shellescape(a:src), shellescape(a:out)))
     return
   endif
-  " Fallback for an xxd without -o: dump from zero and rewrite the offset
-  " column, one printf per line. %x widens past eight digits exactly as
-  " xxd does, so the fallback produces the same text xxd -o would.
+  " Fallback for an xxd without -o: dump from zero and renumber. The same
+  " job the Windows path past 2 GiB does, so it is the same function -
+  " there were two copies of this loop, which is one more than the number
+  " of places the format can be got right in.
   call s:Run(printf('%s -g 1 -c %d %s %s', s:xxd,
         \ b:hexpair_n, shellescape(a:src), shellescape(a:out)))
-  let lines = readfile(a:out)
-  let i = 0
-  while i < len(lines)
-    let colon = stridx(lines[i], ':')
-    let lines[i] = printf('%08x', a:base + i * b:hexpair_n)
-          \ . strpart(lines[i], colon)
-    let i += 1
-  endwhile
-  call writefile(lines, a:out)
+  call writefile(HexPairPagedRebaseDump(readfile(a:out), a:base,
+        \ b:hexpair_n), a:out)
 endfunction
 
 " A fingerprint of the bytes this page covers, as they are on disk right
