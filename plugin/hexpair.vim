@@ -2071,6 +2071,11 @@ function! HexPairPagedSeekMoveRangeForTest(file, from, len, to) abort
   return s:SeekMoveRange(a:file, a:from, a:len, a:to)
 endfunction
 
+" And the copy ':w {file}' builds a saved file out of.
+function! HexPairPagedSeekCopyRangeForTest(src, off, len, dst, truncate) abort
+  return s:SeekCopyRange(a:src, a:off, a:len, a:dst, a:truncate)
+endfunction
+
 " Reading a byte range that xxd cannot seek to, on Windows.
 "
 " PowerShell does the SEEK and nothing else: .NET's FileStream.Seek takes an
@@ -2342,6 +2347,67 @@ function! s:SeekMoveRange(file, from, len, to) abort
   endtry
 endfunction
 
+" Copying a byte range from one file to another, at offsets xxd cannot seek
+" to and readblob() cannot read.
+"
+" ONE process for the whole range, with the chunking INSIDE it: this is the
+" operation that walks a whole file, so a process per block would be
+" thousands of them. s:CopyRange()'s Vim-side loop exists because
+" readblob() has to be called per block; here the loop belongs in the
+" script.
+"
+" Append or truncate, mirroring s:CopyRange()'s a:truncate, so the three
+" calls that build a saved file - head, page, tail - can keep their shape.
+let s:pscopyscript =
+      \   '$ErrorActionPreference = ''Stop'';'
+      \ . '$off = [int64]$env:HEXPAIR_PS_OFF;'
+      \ . '$left = [int64]$env:HEXPAIR_PS_LEN;'
+      \ . '$mode = if ($env:HEXPAIR_PS_TRUNC -eq ''1'')'
+      \ .   ' { [IO.FileMode]::Create } else { [IO.FileMode]::Append };'
+      \ . '$in = [IO.File]::OpenRead($env:HEXPAIR_PS_SRC);'
+      \ . '$out = New-Object IO.FileStream('
+      \ .   '$env:HEXPAIR_PS_DST, $mode, [IO.FileAccess]::Write);'
+      \ . 'try {'
+      \ .   '[void]$in.Seek($off, ''Begin'');'
+      \ .   '$buf = New-Object byte[] 1048576;'
+      \ .   'while ($left -gt 0) {'
+      \ .     '$take = [Math]::Min([int64]$buf.Length, $left);'
+      \ .     '$n = $in.Read($buf, 0, [int]$take);'
+      \ .     'if ($n -le 0) { throw ''short read copying a range'' };'
+      \ .     '$out.Write($buf, 0, $n);'
+      \ .     '$left -= $n'
+      \ .   '}'
+      \ . '} finally { $in.Close(); $out.Close() }'
+
+function! s:SeekCopyRange(src, off, len, dst, truncate) abort
+  if a:truncate && a:len == 0
+    call writefile([], a:dst, 'b')
+    return
+  endif
+  if !s:HasPowerShell()
+    throw printf('hexpair: copying %s needs PowerShell here - xxd seeks '
+          \ . 'with a 32-bit offset on this platform - and it did not run. '
+          \ . 'Nothing was written.', a:src)
+  endif
+  call s:Debug('powershell copy: %d bytes at %d of %s -> %s (truncate %d)',
+        \ a:len, a:off, a:src, a:dst, a:truncate)
+  let $HEXPAIR_PS_SRC = a:src
+  let $HEXPAIR_PS_DST = a:dst
+  let $HEXPAIR_PS_OFF = a:off
+  let $HEXPAIR_PS_LEN = a:len
+  let $HEXPAIR_PS_TRUNC = a:truncate ? '1' : '0'
+  try
+    call s:Run(printf('powershell -NoProfile -NonInteractive -Command %s',
+          \ shellescape(s:pscopyscript)))
+  finally
+    let $HEXPAIR_PS_SRC = ''
+    let $HEXPAIR_PS_DST = ''
+    let $HEXPAIR_PS_OFF = ''
+    let $HEXPAIR_PS_LEN = ''
+    let $HEXPAIR_PS_TRUNC = ''
+  endtry
+endfunction
+
 " Can xxd be trusted to seek to a:off on this platform?
 "
 " Only Windows is excluded, and by platform rather than by probing, because
@@ -2566,6 +2632,13 @@ endfunction
 " scratch, which is also how a shrinking file gets its new length: Vim
 " cannot truncate a file except by writing it.
 function! s:CopyRange(src, off, len, dst, truncate) abort
+  " Past what xxd can seek to, readblob() is what cannot read - it returns
+  " an empty blob and success for a large file on Windows - so the copy
+  " goes through PowerShell, which does the whole range in one process.
+  if !s:XxdCanSeek(a:off + a:len)
+    call s:SeekCopyRange(a:src, a:off, a:len, a:dst, a:truncate)
+    return
+  endif
   if a:truncate && a:len == 0
     call writefile([], a:dst, 'b')
     return
@@ -2965,18 +3038,6 @@ function! s:WriteWholeTo(target) abort
   if !empty(msg)
     throw msg
   endif
-  " Copying the whole file walks it with s:CopyRange(), which reads through
-  " readblob() - and readblob() is exactly what does not work here for a
-  " large file (an empty blob and success; see s:SeekReadRaw). So this is
-  " refused past the limit even though a same-length patch is not: the
-  " patch touches one page through a path that was written for it, and this
-  " would walk gigabytes through one that was not.
-  if !s:XxdCanSeek(b:hexpair_page_total)
-    throw printf('hexpair: %s is larger than the 2 GiB this platform can '
-          \ . 'copy - readblob(), which reads the parts outside this page, '
-          \ . 'returns nothing past that here. Nothing was written.',
-          \ b:hexpair_page_file)
-  endif
   call s:CheckFresh()
 
   let raw = tempname()
@@ -3056,12 +3117,13 @@ function! s:Write() abort
       echomsg 'hexpair: cancelled; nothing was written'
       return
     elseif !s:XxdCanSeek(b:hexpair_page_total)
-      " Past what xxd can seek to there is no splice to fall back on:
-      " s:CopyRange() reads through readblob(), which returns nothing here
-      " for a large file. Both directions therefore go in place, whatever
-      " s:TailShiftIsCheaper() would have said - and for these sizes that
-      " is the better answer anyway, since the alternative was copying the
-      " whole file.
+      " Both directions go in place past this limit, whatever
+      " s:TailShiftIsCheaper() would have said. The splice WOULD work now
+      " that s:CopyRange() has a PowerShell path, but it rewrites the whole
+      " file, and a file this side of the limit is at least 2 GiB - so the
+      " case the cost model calls expensive is the one that is actually
+      " cheap here, because SetLength can shorten a file in place and no
+      " other platform can do that at all.
       if newlen > b:hexpair_page_len
         call s:GrowInPlace(raw, newlen)
       else

@@ -3298,6 +3298,40 @@ check "a range slides right over itself intact" \
 check "and back left again" \
     "0001020304050607040506070c0d0e0f" "$(sed -n 4p "$WORK/tpsmove.out")"
 
+# ':w {file}' and ':saveas' build the saved file out of three copies - the
+# head before this page, the page, the tail after it - so the copy has to
+# truncate on the first and append on the rest. Past 2 GiB that is
+# PowerShell's too, and it chunks INSIDE one process: this is the operation
+# that walks a whole file, so a process per block would be thousands.
+cat > "$WORK/tpscopy.vim" <<EOF
+$(printf "$HEX")
+let out = []
+HexPairOpen $WORK/diffa.bin 1
+if has('win32')
+  call HexPairPagedSeekCopyRangeForTest('$WORK/pscopy.bin', 0, 4, '$WORK/pscopied.bin', 1)
+  call HexPairPagedSeekCopyRangeForTest('$WORK/pscopy.bin', 12, 4, '$WORK/pscopied.bin', 0)
+  call add(out, HexPairPagedFileHexForTest('$WORK/pscopied.bin', 0, 8))
+  call add(out, getfsize('$WORK/pscopied.bin') . '')
+  " Truncating again must leave only the second copy, not append to it.
+  call HexPairPagedSeekCopyRangeForTest('$WORK/pscopy.bin', 8, 2, '$WORK/pscopied.bin', 1)
+  call add(out, HexPairPagedFileHexForTest('$WORK/pscopied.bin', 0, 2) . ' ' . getfsize('$WORK/pscopied.bin'))
+else
+  call add(out, '000102030c0d0e0f')
+  call add(out, '8')
+  call add(out, '0809 2')
+endif
+call writefile(out, '$WORK/tpscopy.out')
+qa!
+EOF
+$PY -c "open('$WORK/pscopy.bin','wb').write(bytes(range(16)))"
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tpscopy.vim" < /dev/null
+check "a copy truncates, then appends, in the right order" \
+    "000102030c0d0e0f" "$(sed -n 1p "$WORK/tpscopy.out")"
+check "and the result is exactly the two ranges" "8" \
+    "$(sed -n 2p "$WORK/tpscopy.out")"
+check "and truncating again replaces rather than appends" "0809 2" \
+    "$(sed -n 3p "$WORK/tpscopy.out")"
+
 # The fallback reader checks that what came back is hex before letting it
 # reach the dump. That check has to survive a PAGE-SIZED run, which is where
 # the obvious spelling of it does not: '^\%(\x\x\)*$' is a quantified

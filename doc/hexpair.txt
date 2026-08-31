@@ -945,14 +945,29 @@ a shrink slides the tail back and cuts the file.  Each write reads back
 what it wrote and refuses to call it done if the bytes are not there;
 g:hexpair_verify_writes turns that check off.
 
-SetLength is worth naming: shrinking a file IN PLACE is something this
-plugin cannot do on any other platform, because neither Vim nor xxd can
-shorten a file except by writing it afresh (|hexpair-splice|).  .NET can,
-so past 2 GiB the expensive case is the cheap one - the bytes after the
-page move, and the file is cut.
+SetLength INVERTS this plugin's own cost model, which is worth saying
+plainly because it surprises: past 2 GiB on Windows the operation that is
+most expensive everywhere else is the cheapest one here.  Neither Vim nor
+xxd can shorten a file except by writing it afresh, so a shrinking write
+copies the whole file on every other platform (|hexpair-paged-write|).
+.NET truncates in place, so a 120 GiB file shrinks by moving the bytes
+after the page and cutting the rest.  Growing is a tail slide rather than
+a rewrite for the same reason, and both directions stay in place here
+whatever the cost model would otherwise have picked.
 
-Still refused there: `:w {file}` and `:saveas`, which copy the WHOLE file
-through readblob().
+`:w {file}` and `:saveas` work too: the three copies that build a saved
+file - head, page, tail - go the same way, with the chunking INSIDE one
+process, since that is the operation that walks a whole file.
+
+                                                  *hexpair-windows-pwsh*
+PowerShell is NOT used on Linux, macOS or the BSDs, and that is deliberate
+rather than an omission.  PowerShell 7 (pwsh) runs there and the same
+FileStream calls would behave identically - but there is nothing to fix: a
+`long` is 64 bits on those platforms, so xxd seeks correctly and is faster
+than starting a process per operation.  A pwsh path detected at runtime
+would buy no correctness and cost a process start on every read.  This
+fallback exists where xxd is BROKEN, not where another tool happens to be
+available.
 
 Linux, macOS and the BSDs are LP64: a `long` is 64 bits, so xxd's seek is,
 and their struct stat.st_size is a 64-bit off_t, so readblob() would be

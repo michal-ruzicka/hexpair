@@ -77,80 +77,19 @@ and this project adheres to
   answering one in the other's language should not be a mistake.
 
 ### Fixed
-- **A page turn past 2 GiB on Windows took ~30 seconds.** The dump was
-  being formatted byte by byte in VimScript, because `xxd` could not be
-  asked for those offsets — 131072 iterations a page, 3.5 s here and far
-  worse there. But `xxd`'s limit is its *seek*, not its formatting: it now
-  reads the dump out of the temp file PowerShell fetched the bytes into,
-  from offset 0, with only the offset column renumbered in Vim. The same
-  page load also read the range twice, once for the dump and once for the
-  page's hex, which on a path whose cost is process startup was half the
-  total. 3530 ms of formatting became 48 ms, and two reads became one.
-- **The Windows fallback reader refused its own output on a full page.**
-  The check that what came back is really hex was written as
-  `'^\%(\x\x\)*$'`, a quantified group over the whole run — which on a
-  page-sized string is `E363: Pattern uses more memory than
-  'maxmempattern'`. It passes on anything short, which is why it survived
-  to the first real page. It is `\X` plus an even-length test now: the same
-  question in one linear scan.
-- **On Windows, everything past 2 GiB was read from the wrong place.** `xxd`
-  carries its seek offset in a `long` throughout - `strtol()` into
-  `long seekoff`, then `fseek()` - and on Windows a `long` is 32 bits. Worse,
-  `strtol()` *saturates*: an offset past 2 GiB does not fail, it silently
-  becomes `2147483647` and `xxd` reads a page from there. That is why a
-  120 GiB file compared with a 77 GiB one showed bytes as matching on pages
-  wholly past the shorter file's end - both files were being read at 2 GiB,
-  where the shorter one does have data - while the identical hexpair on the
-  identical files was right under WSL, where a `long` is 64 bits. Reads past
-  that limit now go through PowerShell, whose `FileStream.Seek` takes an
-  `Int64` (`readblob()` was tried first and cannot do it either: Vim's
-  `read_blob()` reads the file size into a plain 32-bit `struct stat` on
-  Windows and returns an empty blob *and success* for a large file, which
-  looks like a Vim bug) —
-  including the page you actually look at, which is a second `xxd` call with
-  the same clamp: every page past 2 GiB showed the bytes at 2 GiB, so paging
-  back from the end of a 120 GiB file showed one page over and over. That
-  dump is built in VimScript there, since handing xxd the bytes with `-o`
-  would not help either — its display offset is an `unsigned long`, so the
-  offset column would wrap at 4 GiB even given the right bytes.
-- **Writing past 2 GiB on Windows works, through the same route.** `xxd -r`
-  has the same 32-bit limit, so every byte-moving step goes through
-  PowerShell: an overwrite seeks and writes, a grow extends with
-  `SetLength` and slides the tail, a shrink slides the tail back and cuts
-  the file. Each write reads back what it wrote before calling it done
-  (`g:hexpair_verify_writes = 0` opts out). **Shrinking in place is new
-  ground**: Vim and `xxd` cannot shorten a file except by rewriting it, so
-  everywhere else a shrinking write copies the whole thing — `.NET`'s
-  `SetLength` truncates, so past 2 GiB the expensive case is the cheap one.
-  `:w {file}` and `:saveas` are still refused there: they copy the whole
-  file through `readblob()`.
-- **`:saveas` left the buffer modified, and the view editing the old
-  file.** The bytes were written, but Vim leaves `'modified'` to the
-  autocommand for an `acwrite` buffer and this one only cleared it on the
-  piped-input path. Worse, the view went on believing it edited the file it
-  came from, so every write after a `:saveas` was taken for "save a copy
-  elsewhere" and rewrote the whole file instead of patching a page — on a
-  large file, an expensive way to be wrong. `:saveas` now adopts the file
-  it wrote, exactly as it does everywhere else in Vim, and `:file {name}`
-  followed by `:w` does the same. `:w {file}` is unchanged: still a copy,
-  still leaving the buffer alone.
-- **A page past the end of the file being compared with showed nothing as
-  differing.** Reported on a 120 GiB file compared with a much smaller one:
-  every byte of such a page differs - there is nothing over there to match -
-  but the marking, the count and the text view all fell silent instead.
-  Three guards asked `s:DiffHex()` and read its empty string as "no
-  comparison is running", when for a page beyond the other file's end it
-  means "that file has no bytes here". They now ask
-  `HexPairPagedDiffActive()`, one predicate over the diff *file*, which is
-  the only thing that can tell the two apart.
-- **A failed Vim launch from the Explorer context menu closed too fast to
-  read.** `vimhex.cmd`/`vimhexdiff.cmd`/`gvimhex.cmd`/`gvimhexdiff.cmd` all
-  run through `cmd.exe /c` when launched from a context-menu verb, which
-  closes its console the instant the batch ends - too fast to read the
-  one-line error `cmd.exe` prints when `VIMHEX_VIM` (`gvim`/`vim` by
-  default) is not on `PATH`. They now check `errorlevel` right after
-  starting Vim and, only on a nonzero exit, print why and `pause` before
-  closing; a normal launch returns control almost at once and is unaffected.
+- **On native Windows, everything past 2 GiB was read and written at the
+  wrong offset.** `xxd` keeps its seek offset in a C `long` — `strtol()`
+  into `long seekoff`, then `fseek()` — and a `long` is 32 bits on Windows,
+  which is LLP64. Worse, `strtol()` *saturates*: an offset past the limit
+  does not fail, it silently becomes `2147483647` and `xxd` reads, or
+  writes, a page from there. So a 120 GiB file compared with a 77 GiB one
+  showed bytes as matching on pages wholly past the shorter file's end —
+  both were being read at 2 GiB, where the shorter one does have data —
+  while the same hexpair on the same files was right under WSL, where a
+  `long` is 64 bits. `xxd -r` and `xxd -o` share the limit, so the page you
+  look at, the bytes a diff compares and the bytes a `:w` puts back were
+  all affected. Everything past that limit now goes through PowerShell —
+  see **Windows and the 2 GiB limit** in `README.md`.
 - **A `^M` at the end of every line of a page, on Windows.** `xxd` opens a
   dump in text mode there (`xxd.c`: `BIN_ASSIGN(fpo = stdout, revert)` for
   the stream, `BIN_WRITE(revert)` for a named output file), so every dump

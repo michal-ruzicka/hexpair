@@ -377,15 +377,29 @@ and then cuts the file. Every write reads back what it wrote and refuses to
 call it done if the bytes are not there — set `g:hexpair_verify_writes = 0`
 if you would rather have the speed.
 
-That last one is worth its own line: **shrinking a file in place is
-something the plugin cannot do anywhere else.** Vim and `xxd` have no way
-to shorten a file except to write it out afresh, so on every other platform
-a shrinking write copies the whole thing. `.NET`'s `SetLength` truncates,
-so here the expensive case is the cheap one — a 120 GiB file shrinks by
-moving the bytes after the edited page, not by copying 120 GiB.
+That last one inverts the plugin's own cost model, which is worth stating
+plainly because it is surprising: **on Windows past 2 GiB, the operation
+that is most expensive everywhere else is the cheapest one here.** Neither
+Vim nor `xxd` can shorten a file except by writing it out afresh, so on
+every other platform a shrinking write copies the entire file — the cost
+table further down says so. `.NET`'s `SetLength` truncates in place, so
+here a 120 GiB file shrinks by moving the bytes after the edited page and
+cutting the rest, and never copies 120 GiB. Growing is likewise a tail
+slide rather than a rewrite. Both directions therefore stay in place past
+this limit whatever the cost model would have picked.
 
-The one thing still refused past 2 GiB is `:w {file}` and `:saveas`, which
-copy the *whole* file through `readblob()` — the function Windows breaks.
+`:w {file}` and `:saveas` work there too: the three copies they build a
+saved file out of — the head, the page, the tail — go the same way, with
+the chunking *inside* one PowerShell process, since that is the operation
+that walks a whole file.
+
+**Why PowerShell is not used on Linux, macOS or the BSDs.** PowerShell 7
+(`pwsh`) runs there and the same `FileStream` calls would behave the same
+way — but there is nothing to fix. `long` is 64 bits on those platforms, so
+`xxd` seeks correctly, and it is *faster* than starting a process per
+operation. Adding a detected-at-runtime `pwsh` path would buy no
+correctness and cost startup on every read. The rule is that this fallback
+exists where `xxd` is broken, not where another tool happens to exist.
 
 **Everywhere else is fine.** Linux, macOS and the BSDs are LP64: `long` is
 64 bits, so `xxd`'s seek is; and their `struct stat.st_size` is a 64-bit
