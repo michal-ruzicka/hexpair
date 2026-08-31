@@ -316,14 +316,29 @@ endfunction
 " ended long before.
 let s:pagesizemax = 2147483647
 
+" xxd's own ceiling on -c, from xxd.c: `#define COLS 256`, and a -c above
+" it exits with "invalid number of columns". Checked here so that the
+" answer is about the setting rather than a command that failed for
+" reasons the message does not connect to it.
+let s:bytesperlinemax = 256
+
 function! HexPairPagedSizeError(size, bytesperline) abort
   " Checked first, and explicitly rather than by the modulo below: Vim
   " answers `512 % 0` with 0 rather than an error, so a zero width sails
   " through "is a multiple of" and only falls over later, in xxd -c 0 and
   " in every column sum on the page.
-  if a:bytesperline <= 0
-    return printf('hexpair: g:hexpair_bytes_per_line (%d) must be a '
-          \ . 'positive number of bytes per dump line', a:bytesperline)
+  "
+  " The range is the whole requirement - the width itself has to divide
+  " nothing, and odd ones like 23 are as good as 16. What has to divide is
+  " the PAGE, which the next check states, and saying both here is the
+  " point: "positive" alone leaves the reader wondering what else is
+  " wanted of the number.
+  if a:bytesperline <= 0 || a:bytesperline > s:bytesperlinemax
+    return printf('hexpair: g:hexpair_bytes_per_line (%d) must be between '
+          \ . '1 and %d - xxd''s own limit for -c. Any value in that range '
+          \ . 'works and it need not divide anything, but '
+          \ . 'g:hexpair_page_size must be a multiple of it.',
+          \ a:bytesperline, s:bytesperlinemax)
   endif
   if a:size <= 0 || a:size % a:bytesperline != 0
     return printf('hexpair: g:hexpair_page_size (%d) must be a positive '

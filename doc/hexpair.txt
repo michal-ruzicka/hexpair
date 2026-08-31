@@ -538,13 +538,23 @@ g:hexpair_bytes_per_line
                         Example for wide terminals: >
                             let g:hexpair_bytes_per_line = 32
 <
-                        Must be positive, and |g:hexpair_page_size| must
-                        be a multiple of it.  A zero is checked for by
-                        name rather than caught by that multiple rule,
-                        because Vim answers `512 % 0` with 0 rather than
-                        an error - so a zero would otherwise pass the
-                        check and fail later, in `xxd -c 0` and in every
-                        column sum on the page.
+                        Must be between 1 and 256, and
+                        |g:hexpair_page_size| must be a multiple of it.
+                        That range is the whole requirement: the width
+                        itself divides nothing, and an odd one like 23 is
+                        as good as 16.
+
+                        256 is xxd's own ceiling (xxd.c: `#define COLS
+                        256`), not a number chosen here; a larger -c
+                        makes xxd exit with "invalid number of columns",
+                        which would otherwise reach you as a command that
+                        failed for reasons nothing connects to the
+                        setting.  A zero is checked for by name rather
+                        than caught by the multiple rule, because Vim
+                        answers `512 % 0` with 0 rather than an error - so
+                        a zero would otherwise pass that check and fail
+                        later, in `xxd -c 0` and in every column sum on
+                        the page.
 
                         Any width works everywhere, including past 2 GiB
                         on Windows (|hexpair-windows-2gib|): xxd is told

@@ -105,7 +105,10 @@ and this project adheres to
   the "page size must be a multiple of it" check, because Vim answers
   `512 % 0` with `0` rather than an error, and a negative one passed for
   the same reason — both then failed later and obscurely, in `xxd -c 0` and
-  in every column sum on the page. Both are now refused by name.
+  in every column sum on the page. So did anything over 256, which is
+  `xxd`'s own ceiling for `-c` and made it exit with "invalid number of
+  columns". The check is now the range 1 to 256, and says so, along with
+  the one thing that *does* have to divide: the page size.
 - **`g:hexpair_page_size` had no upper bound.** It is capped at
   2147483647 bytes: a page's length reaches `xxd -l` (a C `long`, 32-bit on
   Windows) and PowerShell's `[int]`, and a larger one would overflow both

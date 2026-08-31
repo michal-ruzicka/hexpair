@@ -788,11 +788,17 @@ let negative = HexPairPagedSizeError(-16, 16)
 " sum on the page.
 let zerowide = HexPairPagedSizeError(512, 0)
 let negwide  = HexPairPagedSizeError(512, -4)
+" 256 is xxd's own ceiling (xxd.c: #define COLS 256), so it is the boundary
+" and not a number picked here - and above it xxd exits with "invalid
+" number of columns", which would otherwise surface as a command that
+" failed for reasons the message never connects to the setting.
+let widemax  = HexPairPagedSizeError(256, 256)
+let toowide  = HexPairPagedSizeError(512, 257)
 " And a page bigger than a 32-bit length, which xxd's -l and PowerShell's
 " [int] would both take without complaining and get wrong.
 let toobig   = HexPairPagedSizeError(5 * 1024 * 1024 * 1024, 16)
 let atlimit  = HexPairPagedSizeError(2147483632, 16)
-call writefile([string(ok), notmult, negative, zerowide, negwide, toobig, string(atlimit)], '$WORK/t26.out')
+call writefile([string(ok), notmult, negative, zerowide, negwide, toobig, string(atlimit), string(widemax), toowide], '$WORK/t26.out')
 qa!
 EOF
 "$HEXPAIR_VIM" -es -u NONE -S "$WORK/t26.vim"
@@ -804,16 +810,21 @@ check "page size not positive" \
     "hexpair: g:hexpair_page_size (-16) must be a positive multiple of g:hexpair_bytes_per_line (16)" \
     "$(sed -n 3p "$WORK/t26.out")"
 check "a zero bytes-per-line is caught, not read as a multiple" \
-    "hexpair: g:hexpair_bytes_per_line (0) must be a positive number of bytes per dump line" \
+    "hexpair: g:hexpair_bytes_per_line (0) must be between 1 and 256 - xxd's own limit for -c. Any value in that range works and it need not divide anything, but g:hexpair_page_size must be a multiple of it." \
     "$(sed -n 4p "$WORK/t26.out")"
 check "and a negative one" \
-    "hexpair: g:hexpair_bytes_per_line (-4) must be a positive number of bytes per dump line" \
+    "hexpair: g:hexpair_bytes_per_line (-4) must be between 1 and 256 - xxd's own limit for -c. Any value in that range works and it need not divide anything, but g:hexpair_page_size must be a multiple of it." \
     "$(sed -n 5p "$WORK/t26.out")"
 check "a page over the 32-bit length limit is refused" \
     "hexpair: g:hexpair_page_size (5368709120) is over the 2147483647-byte limit - a page's length is handed to xxd's -l and to PowerShell as a 32-bit number, and a larger one would overflow instead of failing. Pages are meant to be small; the default is 128 KiB." \
     "$(sed -n 6p "$WORK/t26.out")"
 # Just under it is legal, so the cap is a boundary and not a mood.
 check "and one just under it is not" "''" "$(sed -n 7p "$WORK/t26.out")"
+check "xxd's own 256-column ceiling is allowed" "''" \
+    "$(sed -n 8p "$WORK/t26.out")"
+check "and one column past it is not" \
+    "hexpair: g:hexpair_bytes_per_line (257) must be between 1 and 256 - xxd's own limit for -c. Any value in that range works and it need not divide anything, but g:hexpair_page_size must be a multiple of it." \
+    "$(sed -n 9p "$WORK/t26.out")"
 
 # --- Test 27: hex-digit width boundary clamping (fabricated total, no real -
 # multi-GiB fixture needed - the bounds/page-count functions are pure) -----

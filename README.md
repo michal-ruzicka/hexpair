@@ -410,7 +410,9 @@ begin and not finish.
 
 `g:hexpair_bytes_per_line` needs no thought here: `xxd` is told `-c N` on
 either side of the line, and the offset column Vim renumbers advances by
-`N`. `g:hexpair_page_size` is capped at 2147483647 bytes, which is a
+`N`. It must be between 1 and 256 — 256 being `xxd`'s own ceiling rather
+than one chosen here — and that range is the whole requirement, since the
+width divides nothing itself. `g:hexpair_page_size` is capped at 2147483647 bytes, which is a
 correctness boundary rather than a tidy number — a page's length reaches
 `xxd -l` (a C `long`, 32-bit on Windows) and PowerShell's `[int]` (32-bit
 everywhere), and a larger one would overflow both *silently*. Anything
