@@ -37,13 +37,13 @@ does not fit in memory — a disk image, a core dump, a database — is no diffe
 from a small one. Editing an 8 TiB file costs the same ~20 MiB of memory as 
 editing an 8 KiB one.
 
-> **On native Windows, editing stops at 2 GiB — reading does not.** `xxd`
-> keeps its seek offset in a C `long`, 32 bits on Windows, so past 2 GiB it
-> reads and writes the wrong place. Reading falls back to PowerShell, whose
-> `FileStream.Seek` takes an `Int64`, so viewing, searching and comparing a
-> huge file still work; **writing there is refused**, because the same limit
-> applies to `xxd -r` and putting the bytes in the wrong place is worse than
-> declining. **WSL has neither limit.**
+> **On native Windows, past 2 GiB the work is done by PowerShell rather
+> than `xxd`.** `xxd` keeps its seek offset in a C `long`, 32 bits there, so
+> past that point it reads and writes the wrong place; `.NET`'s `FileStream`
+> seeks with an `Int64`, so reading, searching, comparing, overwriting,
+> growing, shrinking and `:w {file}` all work. It costs one process start
+> per operation — and buys one thing back, since shrinking a file becomes
+> cheaper there than anywhere else. **WSL has neither limit.**
 > See [Windows and the 2 GiB limit](#windows-and-the-2-gib-limit).
 
 **The hex*pair* name:** hex and text, always paired. *Within a line* —
@@ -340,9 +340,9 @@ file's own comments and in `:help hexpair-vimhex`.
 
 ### Windows and the 2 GiB limit
 
-**Files over 2 GiB cannot be read or written on native Windows.** hexpair
-detects this and says so; it does not show you bytes from the wrong place.
-The cause is entirely outside the plugin, in two places at once:
+**Files over 2 GiB work on native Windows, but not through `xxd`.** Every
+operation past that offset goes through PowerShell instead, because the
+limit is outside this plugin and in two places at once:
 
 - **`xxd` seeks with a C `long`.** `strtol()` into `long seekoff`, then
   `fseek()` — and on Windows a `long` is 32 bits, because Windows is LLP64
@@ -392,6 +392,29 @@ this limit whatever the cost model would have picked.
 saved file out of — the head, the page, the tail — go the same way, with
 the chunking *inside* one PowerShell process, since that is the operation
 that walks a whole file.
+
+**What runs where.** The rule is one line: *a range is `xxd`'s only if
+`xxd` can reach all of it*. Callers therefore test the **end** of what they
+are about to touch, so a range that starts below 2 GiB and crosses it takes
+the slow path whole — checking the start would hand `xxd` a range it can
+begin and not finish.
+
+| Operation | Everywhere else, and below 2 GiB on Windows | Past 2 GiB on native Windows |
+|---|---|---|
+| Read a page, compare, search | `xxd -s -l` | PowerShell seeks and writes the bytes to a temp file; `xxd` reads *that* |
+| Draw the page | `xxd -g 1 -c N` | the same, with the offset column renumbered in Vim (`-o` is 32-bit too) |
+| Overwrite, same length | `xxd -r` | PowerShell seek + write, **read back and verified** |
+| Grow | extend, slide the tail, patch | `SetLength`, slide the tail, patch — always in place |
+| Shrink | **rewrite the whole file** | patch, slide the tail, `SetLength` truncate — **in place** |
+| `:w {file}`, `:saveas` | `readblob` + `writefile` | one PowerShell process per range copied |
+
+**What it costs.** Below 2 GiB, nothing changes anywhere: `xxd` does what it
+always did. Past it, each operation is one PowerShell start — a few hundred
+milliseconds — so a page turn is noticeably slower than a local one but far
+from slow, while a file-wide search pays it per block and is genuinely slow.
+Against that, the shrink row above is the plugin getting *faster* than it is
+anywhere else, and `readblob()` being unusable costs nothing that is not
+already paid.
 
 **Why PowerShell is not used on Linux, macOS or the BSDs.** PowerShell 7
 (`pwsh`) runs there and the same `FileStream` calls would behave the same

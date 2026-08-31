@@ -3332,6 +3332,42 @@ check "and the result is exactly the two ranges" "8" \
 check "and truncating again replaces rather than appends" "0809 2" \
     "$(sed -n 3p "$WORK/tpscopy.out")"
 
+# Which side of the 2 GiB line a range falls on is decided by its END, not
+# its start, so a range that STRADDLES the line belongs to the slow path
+# whole. Checking the start instead would hand xxd a range it can begin but
+# not finish - the one case that looks fine and is not - and it is the sort
+# of thing that would be got right once and quietly regress.
+#
+# On anything but Windows every range is xxd's, so the same four questions
+# have a different and equally definite set of answers; both are asserted
+# rather than one being skipped.
+cat > "$WORK/tbound.vim" <<EOF
+$(printf "$HEX")
+let lim = 2147483647
+let out = []
+call add(out, HexPairPagedRangeIsXxdsForTest(0, 1024) . '')
+call add(out, HexPairPagedRangeIsXxdsForTest(lim - 1024, 512) . '')
+" starts below, ends above: the straddle
+call add(out, HexPairPagedRangeIsXxdsForTest(lim - 100, 4096) . '')
+call add(out, HexPairPagedRangeIsXxdsForTest(lim + 1, 4096) . '')
+call writefile(out, '$WORK/tbound.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tbound.vim" < /dev/null
+if [ "$IS_WIN" = 1 ]; then
+    want_low=1; want_near=1; want_straddle=0; want_high=0
+else
+    want_low=1; want_near=1; want_straddle=1; want_high=1
+fi
+check "a range well inside the limit is xxd's" "$want_low" \
+    "$(sed -n 1p "$WORK/tbound.out")"
+check "and one that ends just inside it still is" "$want_near" \
+    "$(sed -n 2p "$WORK/tbound.out")"
+check "a range that STRADDLES the limit is not, on Windows" "$want_straddle" \
+    "$(sed -n 3p "$WORK/tbound.out")"
+check "and one wholly past it never is" "$want_high" \
+    "$(sed -n 4p "$WORK/tbound.out")"
+
 # The fallback reader checks that what came back is hex before letting it
 # reach the dump. That check has to survive a PAGE-SIZED run, which is where
 # the obvious spelling of it does not: '^\%(\x\x\)*$' is a quantified

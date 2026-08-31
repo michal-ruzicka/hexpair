@@ -959,6 +959,31 @@ whatever the cost model would otherwise have picked.
 file - head, page, tail - go the same way, with the chunking INSIDE one
 process, since that is the operation that walks a whole file.
 
+                                                  *hexpair-windows-what-runs*
+What runs where.  One rule: a range is xxd's only if xxd can reach ALL of
+it, so every caller tests the END of what it is about to touch.  A range
+that starts below 2 GiB and crosses it takes the slow path whole; checking
+the start would hand xxd a range it can begin and not finish. >
+
+  operation              elsewhere, and <2 GiB       past 2 GiB on Windows
+  ---------------------  --------------------------  ---------------------
+  read page/diff/search  xxd -s -l                   PowerShell seeks into
+                                                     a temp; xxd reads that
+  draw the page          xxd -g 1 -c N               same, offsets
+                                                     renumbered in Vim
+  overwrite, same size   xxd -r                      PowerShell, verified
+                                                     by reading it back
+  grow                   extend, slide tail, patch   SetLength, slide, patch
+  shrink                 REWRITE THE WHOLE FILE      slide, SetLength - in
+                                                     place
+  :w {file}, :saveas     readblob + writefile        one process per range
+<
+Below 2 GiB nothing changes on any platform: xxd does what it always did.
+Past it each operation costs one PowerShell start, a few hundred
+milliseconds - a page turn is slower but usable, a file-wide scan pays it
+per block and is slow.  Against that, the shrink row is this plugin being
+FASTER on Windows than anywhere else.
+
                                                   *hexpair-windows-pwsh*
 PowerShell is NOT used on Linux, macOS or the BSDs, and that is deliberate
 rather than an omission.  PowerShell 7 (pwsh) runs there and the same

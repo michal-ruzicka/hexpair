@@ -64,6 +64,17 @@ and this project adheres to
   bytes show as `--`, so an absent byte cannot be misread as a byte that
   happens to be `00`.
 
+- **Files over 2 GiB on native Windows**, which `xxd` cannot reach at all
+  (see *Fixed*). Every operation past that offset — reading, searching,
+  comparing, overwriting, growing, shrinking, `:w {file}` — goes through
+  PowerShell, at the cost of one process start each. **Shrinking is
+  actually cheaper there than anywhere else**: neither Vim nor `xxd` can
+  shorten a file except by rewriting it, so a shrinking write copies the
+  whole file on every other platform, while `.NET`'s `SetLength` truncates
+  in place. `README.md`'s *Windows and the 2 GiB limit* has the table of
+  what runs where. Every write past the limit reads back what it wrote
+  before reporting success; `g:hexpair_verify_writes = 0` opts out.
+
 ### Changed
 - **`vimhexdiff` opens maximized** (`:simalt ~x`, guarded by
   `has('gui_running')`) and sets `shortmess+=F`. Two hex views side by side

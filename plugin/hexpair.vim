@@ -2429,6 +2429,15 @@ function! s:XxdCanSeek(off) abort
   return a:off <= s:xxdseekmax || !has('win32')
 endfunction
 
+" The rule every caller applies, exposed so the suite can pin it: a range is
+" xxd's only if xxd can reach ALL of it. Callers therefore pass the END of
+" what they are about to touch, never the start - a range beginning below
+" the limit and crossing it belongs to the slow path, which is the one case
+" that checking the start would get wrong.
+function! HexPairPagedRangeIsXxdsForTest(off, len) abort
+  return s:XxdCanSeek(a:off + a:len)
+endfunction
+
 " The whole of a file as flat lowercase hex. Shared by both readers: xxd -p
 " over a file it does not have to seek in, which is the fast part of xxd and
 " the part that was never in question.
@@ -2446,9 +2455,15 @@ function! s:FileHex(file, off, len) abort
   if a:len <= 0
     return ''
   endif
-  " Past what xxd can seek to, PowerShell fetches the bytes and xxd reads
-  " them out of a temp file - see s:SeekReadRaw().
-  if !s:XxdCanSeek(a:off)
+  " a:off + a:len, not a:off: the question every guard here asks is "can
+  " xxd reach the WHOLE range", and a read that starts below the limit and
+  " crosses it is exactly the case where checking only the start would say
+  " yes. Reading forward across the line is very likely fine - the seek is
+  " what is 32-bit, and fread simply advances - but "very likely" is not
+  " something to decide on a platform this cannot be tested on, and the
+  " cost of being conservative is that a handful of boundary reads take
+  " the slower path.
+  if !s:XxdCanSeek(a:off + a:len)
     return s:SeekReadHex(a:file, a:off, a:len)
   endif
   try
@@ -2807,7 +2822,10 @@ function! s:ShrinkInPlace(raw, newlen) abort
   let size = s:TailSize()
   let delta = b:hexpair_page_len - a:newlen
 
-  call s:SeekWriteRaw(b:hexpair_page_file, base, a:raw)
+  " s:PatchInPlace(), not s:SeekWriteRaw() directly: it picks the writer by
+  " offset, so a page below the limit in a file above it is still written
+  " by xxd. Only the parts that have to be PowerShell's are.
+  call s:PatchInPlace(a:raw)
 
   let moved = 0
   while moved < size
