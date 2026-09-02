@@ -7224,7 +7224,7 @@ function! s:UnhexPlain(force) abort
     " buffer that never entered hex mode has nothing to come back from,
     " while a paged one came through the door that has no way back.
     if !get(b:, 'hexpair_page_active', 0)
-      throw 'hexpair: hex mode is not active in this buffer'
+      throw 'hexpair: hex mode is not active'
     endif
     let f = get(b:, 'hexpair_page_file', '')
     throw 'hexpair: this hex view was opened as hex (:HexPairOpen or '

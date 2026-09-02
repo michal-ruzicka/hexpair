@@ -20,18 +20,24 @@ and this project adheres to
   buffer toggles from plain, and hands them back rather than guessing. The
   buffer is re-read from disk, not converted — a page is not the file, and
   a page's unwritten edits would be lost, so without `!` the command refuses
-  and `!` discards them. The one case it cannot serve — a file opened **as**
-  hex by `:HexPairOpen` or `vimhex`, which may have had no text view at all
-  and whose file may be far too large to load — it refuses and says so,
-  naming the file to `:edit` instead. See `:help :HexPairUnhex`.
+  and `!` discards them. What it cannot serve it refuses, each with its own
+  message: a file opened **as** hex by `:HexPairOpen` or `vimhex`, which may
+  have had no text view at all and whose file may be far too large to load
+  for one (it names the file to `:edit` instead); a view paged from content
+  with no file of its own; and one whose file has changed on disk since the
+  page was read. See `:help :HexPairUnhex`.
 - **`:HexPairInspect` now says what the character _is_.** A `name` row for
   every code point you cannot see — the C0 and C1 controls, `DEL`, and the
   space and format characters a hex editor meets constantly — a `block` row
   naming the Unicode block, which answers *what script even is this*, and a
   `bom` row when the bytes at the cursor are a byte order mark, which the
-  UTF-8 rows cannot say because `ff fe` is not UTF-8. No full character
-  names: that needs `UnicodeData.txt`, which is a different order of thing
-  from a table of ranges. See `:help hexpair-inspect-naming`.
+  UTF-8 rows cannot say because `ff fe` is not UTF-8. The byte order mark is
+  the one named character with no `block` row: `U+FEFF` sits in *Arabic
+  Presentation Forms-B* only because Unicode lays blocks out by contiguity
+  and `FE70..FEFF` closes the BMP, and a format character belongs to no
+  script, so the row would only assert one where there is none. No full
+  character names: that needs `UnicodeData.txt`, which is a different order
+  of thing from a table of ranges. See `:help hexpair-inspect-naming`.
 - **`:HexPairInspect` works in an ordinary buffer**, with no hex view
   anywhere near it - what is this character, is that a NBSP, does this file
   start with a BOM. It says when the bytes it is showing are Vim's rather
@@ -114,13 +120,14 @@ and this project adheres to
   prompts sit under neighbouring keys (`<Leader>b` and `<Leader>g`), and
   answering one in the other's language should not be a mistake.
 
-### Changed
-- **The Vim 8.0 floor is now built and run by CI, not asserted.** The suite
-  asks the Vim it is pointed at whether it can splice and checks that those
-  writes are *refused* where it cannot, so a run against a Vim 8.0.0000
-  build passes in full instead of producing forty failures to be read by
-  eye. That ritual had gone undone twice, and each time something had
-  quietly stopped working on the version the plugin promises to support.
+- **The Vim requirement is stated exactly, and proved.** It is Vim 8.0 at
+  any patch level — the old wording asked for patch 8.0.0794, which has not
+  been true since `count()` over a string left the plugin — plus Vim
+  9.0.0795 with `+num64` for the three writes that change a file's length.
+  It is no longer a claim: CI builds Vim 8.0.0000 from source on every push
+  and runs the whole suite against it, where it passes in full because the
+  suite asks that Vim what it can do and checks that the rest is *refused*.
+  The floor had rotted twice while checking it was a manual ritual.
 
 ### Fixed
 - **The splice named the wrong Vim patch, by a major release.** Shortening a
@@ -131,16 +138,6 @@ and this project adheres to
   told it could do such a write and then failed with `E118: Too many
   arguments for function: readblob` part way through the copy. The gate, the
   message and the documented requirement all say 9.0.0795 now.
-- **`:HexPairInspect` reported a byte order mark as belonging to *Arabic
-  Presentation Forms-B*.** `U+FEFF` really is assigned to that block in
-  `Blocks.txt`, but only because Unicode lays out blocks by contiguity and
-  `FE70..FEFF` is the range that happens to close the BMP — so the block row
-  read as *this byte is Arabic*, which it is not: it is a format character
-  that belongs to no script. The `name` and `bom` rows already say what it
-  is, so the `block` row is now omitted for the byte order mark and nothing
-  else. No other named character is affected: the other format characters
-  the inspector names sit in *General Punctuation* or a block whose name is
-  their home, and their block reads as true.
 - **`xxd` was located only when a page was opened**, so any other route
   into the readers died with `E121: Undefined variable` instead of a
   message naming `xxd`. It is resolved on demand now, and a missing `xxd`

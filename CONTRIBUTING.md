@@ -22,7 +22,7 @@ reports and patches are welcome via the project's
 |---|---|
 | `.github/` | GitHub Actions CI workflow (`workflows/build.yml`) |
 | `dist/` | Packaged release tarballs (gitignored) |
-| `plugin/hexpair.vim` | The base plugin (whole-buffer toggle); its header carries `Version:` and `Date:` — the single source of truth parsed by the packaging scripts |
+| `plugin/hexpair.vim` | The whole plugin, one script scope — hex mode is always paged, and `plugin/hexpair_paged.vim` was folded back into this file. Its header carries `Version:` and `Date:` — the single source of truth parsed by the packaging scripts |
 | `ftplugin/xxd.vim` | Dump-editing defaults for `filetype=xxd`, bundled with the plugin |
 | `doc/hexpair.txt` | Vim help documentation (`:help hexpair`) |
 | `demo/` | The animation at the top of `README.md` and what records it (see *The README demo*); not part of a release tarball |
@@ -35,7 +35,7 @@ reports and patches are welcome via the project's
 | `make-unicode-blocks.py` | Regenerates the Unicode block table inside `plugin/hexpair.vim` from `Blocks.txt`, which it pins by version and SHA-256. The data inspector names a code point's block with it; Vim has no Unicode database of its own. Development-only, not in the tarball |
 | `make-context-entry-reg.py` | Generates the two `.reg` files above (they carry `REG_EXPAND_SZ` values, which `.reg` can only write as `hex(2):` plus UTF-16LE bytes). Takes an optional install path. Development-only, not in the tarball |
 | `icons/` | The three context-menu icons and what draws them: `build.py` renders `hexpair-{open,pick,with}.ico` from `design.py` via `rasticon.py`, a from-scratch PNG/ICO encoder. Only the `.ico` files are bundled in a release tarball; the generators are development-only |
-| `test/` | Headless regression tests (`run-tests.sh`, see *Testing*) and the large-file checks, which the suite cannot replace: they build a multi-gigabyte file and edit it past 2 GiB, the only way to exercise what Windows does there. Run by hand. `check-large-file.cmd` (`.ps1`) is the native-Windows one and needs nothing Windows does not ship — PowerShell being what hexpair itself uses past 2 GiB; `check-large-file.sh` is the POSIX one, for Linux, WSL, and the Vim that Git Bash launches, and needs `python3` |
+| `test/` | Headless regression tests (`run-tests.sh`, see *Testing*) and the large-file checks, which the suite cannot replace: they build a multi-gigabyte file and edit it past 2 GiB, the only way to exercise what Windows does there. Run by hand, and by CI as a step of its own on each platform, with a budget of its own. `check-large-file.cmd` (`.ps1`) is the native-Windows one and needs nothing Windows does not ship — PowerShell being what hexpair itself uses past 2 GiB; `check-large-file.sh` is the POSIX one, for Linux, WSL, and the Vim that Git Bash launches, and needs `python3` |
 | `.gitattributes` | Line-ending normalization rules |
 | `.gitignore` | Excludes `build/`, `dist/` and the demo MP4 from version control |
 | `pack-release` | POSIX wrapper around `pack-release.py` |
@@ -61,6 +61,22 @@ Every behavioural change must come with a test that fails before the
 change and passes after it. The suite is intentionally dependency-free
 beyond `vim`, `xxd` and `python3` (fixture generation), so it runs
 identically on a developer machine and in CI.
+
+It also runs on the **oldest Vim the plugin supports**, and that is not a
+figure of speech: CI builds Vim 8.0.0000 from source and runs the whole
+suite against it, where it passes in full. The suite asks the Vim it is
+pointed at what that Vim can do — `HexPairPagedSpliceSupported()`, the
+plugin's own predicate — and `check_splice()` stands down where a check
+needs a write that changes a file's length, which needs `readblob()` with
+an offset (patch 9.0.0795) and is refused without it. Four checks in their
+place require that refusal.
+
+So: **a new check that shortens a file, writes to another file, or grows a
+page with more than half the file behind it goes through `check_splice()`,
+not `check()`.** Everything else is `check()` and must work on Vim 8.0 —
+no `trim()`, no Blob literal, no `count()` over a string, and no `"\ `
+comment on a continuation line (that last one has a static check of its
+own, since every Vim the suite can run accepts it).
 
 ## The README demo
 
@@ -238,11 +254,21 @@ claim.
 ## CI
 
 The GitHub Actions workflow (`.github/workflows/build.yml`) runs on
-every push and pull request. It executes the test suite on Linux and on
-Windows — the same `test/run-tests.sh`, under Git Bash against the Vim
-project's own Windows build, because Windows is the platform the
-portability rules exist for — then both packaging scripts, and compares
-the resulting hashes.
+every push and pull request, in four jobs:
+
+| Job | What it is for |
+|---|---|
+| `test-and-pack-linux` | The suite, the large-file check, and the tarball |
+| `test-oldest-vim` | The same suite against a Vim 8.0.0000 built from source — the version floor, proved rather than claimed |
+| `test-and-pack-windows` | The same again under Git Bash against the Vim project's own Windows build, because Windows is the platform the portability rules exist for |
+| `reproducibility-check` | The two tarballs' hashes, which must be identical |
+
+`test-oldest-vim` exists because the floor rotted twice while it was a
+manual ritual, and each time something had quietly stopped working on the
+version the plugin promises to support. It pins the `v8.0.0000` tag by its
+**commit id** rather than by the archive tarball's digest — GitHub
+regenerates those and their hashes have moved under people before — and
+takes about a minute to build.
 
 That Vim is pinned by version *and* SHA-256 (`VIM_VERSION` /
 `VIM_SHA256` in the workflow), downloaded from the

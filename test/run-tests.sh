@@ -1180,6 +1180,27 @@ check "an unhexed buffer toggles to hex again" "[1, 1]" \
 check "and comes back the same way the second time" \
     "[0, '', -1, 'first line']" "$(sed -n 2p "$WORK/unhex9.out")"
 
+# Both views reach it, and they are not the same buffer state: the hex view
+# holds a dump, the windowed text view holds the page's raw bytes, and the
+# banner is recognised differently in each. The write path had a bug of
+# exactly this shape - one route tested, the other not - so the way back is
+# asked for from the text view too.
+cat > "$WORK/unhex11.vim" <<EOF
+source $PLUGIN
+let g:hexpair_page_size = 512
+HexPairToggle
+HexPairToggle
+let view = get(b:, 'hexpair_view', '-')
+HexPairUnhex
+call writefile([string([view, &l:binary, &l:buftype, get(b:, 'hexpair_page_active', -1), line('\$')]), string(getline(1, '\$'))], '$WORK/unhex11.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE "$WORK/unhex1.txt" -S "$WORK/unhex11.vim" < /dev/null
+check "the text view comes back to plain the same way the hex view does" \
+    "['text', 0, '', -1, 3]" "$(sed -n 1p "$WORK/unhex11.out")"
+check "with the file's own text in it" \
+    "['first line', 'second line', 'third line']" "$(sed -n 2p "$WORK/unhex11.out")"
+
 
 # A buffer that never entered hex mode has nothing to come back from, which
 # is not the same thing as a view opened as hex - and was told so with the
@@ -1872,6 +1893,7 @@ cp "$ROOT/doc/hexpair.txt" "$WORK/doctags/"
 check "helptags accepts the help file" "ok" "$(sed -n 1p "$WORK/th1.out")"
 check "helptags found the plugin's tags" "1" \
     "$(test "$(sed -n 2p "$WORK/th1.out")" -gt 30 && echo 1 || echo 0)"
+
 # --- And every |reference| in the help goes somewhere -----------------------
 # :helptags only checks that the tags this file DEFINES are unique; a
 # reference to one that does not exist anywhere is silently a dead end, and
@@ -1905,20 +1927,6 @@ else
     CHECKS=$((CHECKS + 1))
 fi
 rm -f "$WORK/trt.vim" "$WORK/trt.out"
-
-# --- No comment form the supported Vim does not have -----------------------
-# The floor is Vim 8.0, where `"\ ` - a comment on a line-continuation - does
-# not exist yet: inside a continued expression it does not parse, and the
-# whole statement dies with it (E15). It is also the ONLY comment that works
-# inside a continued list literal, which is exactly why it got used, for the
-# generated block table's markers - and killed every `block` row of the
-# inspector on Vim 8.0 for as long as nobody ran one. So the rule is that a
-# continued literal carries no comment at all and anything that has to be
-# marked is marked outside it, and this is a static check because every Vim
-# this suite can be pointed at accepts the form.
-check "no line-continuation comment, which Vim 8.0 does not have" "0" \
-    "$(cat "$ROOT/plugin/hexpair.vim" "$ROOT/ftplugin/xxd.vim" \
-        "$ROOT/hexpair.vimrc" | grep -c '^[[:space:]]*"\\')"
 
 # --- No comment form the supported Vim does not have -----------------------
 # The floor is Vim 8.0, where `"\ ` - a comment on a line-continuation - does
