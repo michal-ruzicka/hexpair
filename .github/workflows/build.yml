@@ -55,6 +55,65 @@ jobs:
             dist/*.tar
             linux.sha256
 
+  # The oldest Vim the plugin claims to work on, built and actually run.
+  #
+  # This job exists because the claim rotted twice while it was a manual
+  # ritual: a recipe in CLAUDE.md, a build by hand, and a list of expected
+  # failures to be compared by eye. Nobody ran it for a year, and the second
+  # time nobody ran it the inspector's whole block table was dead on this
+  # Vim - correct on every Vim CI did run, so nothing said a word. A version
+  # floor is only as true as its last run.
+  #
+  # It is cheap: about a minute to build, and the suite knows what this Vim
+  # cannot do (writes that change a file's length need readblob() with an
+  # offset, patch 9.0.0795) and checks that they are refused instead. So the
+  # result here is the same "All tests passed" as everywhere else, and any
+  # new use of a function or a syntax younger than 8.0 fails the build
+  # rather than waiting to be discovered by a user on RHEL 8, which ships
+  # exactly this series.
+  test-oldest-vim:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      # Pinned by COMMIT, not by the archive tarball's digest: GitHub
+      # regenerates those and their hashes have changed under people before,
+      # while a commit id cannot. This is the v8.0.0000 tag.
+      VIM_TAG: v8.0.0000
+      VIM_COMMIT: bb76f24af2010943387ce696a7092175b4ecccf2
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install what the build needs
+        # xxd from the distribution, not from this tree: Vim 8.0's own
+        # xxd.c has K&R prototypes that no current GCC compiles, and a user
+        # on such a Vim would have the distribution's xxd too.
+        run: sudo apt-get update && sudo apt-get install -y libncurses-dev xxd
+      - name: Build Vim ${{ env.VIM_TAG }}
+        run: |
+          git clone --depth 1 --branch "$VIM_TAG" \
+              https://github.com/vim/vim.git "$RUNNER_TEMP/vim"
+          cd "$RUNNER_TEMP/vim"
+          got=$(git rev-parse HEAD)
+          if [ "$got" != "$VIM_COMMIT" ]; then
+              echo "$VIM_TAG is $got, expected $VIM_COMMIT" >&2
+              exit 1
+          fi
+          # -std=gnu89 is NOT optional on a current compiler: configure's own
+          # "is uint32_t 32 bits" probe is a K&R main() that calls exit()
+          # with no <stdlib.h>, which a modern default standard rejects - and
+          # configure reports that as "WRONG! uint32_t not defined correctly"
+          # rather than as a compiler error.
+          CFLAGS="-O1 -w -std=gnu89" ./configure --with-features=normal \
+              --disable-gui --without-x --disable-nls --with-tlib=ncurses
+          # From src/: 8.0's top-level Makefile has no `vim` target, and
+          # plain `make` stops at xxd/xxd.c (see above).
+          make -C src -j"$(nproc)" vim
+          ./src/vim --version | head -2
+      - name: Run the regression suite
+        run: |
+          HEXPAIR_VIM=$RUNNER_TEMP/vim/src/vim \
+          VIMRUNTIME=$RUNNER_TEMP/vim/runtime \
+              test/run-tests.sh
+
   test-and-pack-windows:
     runs-on: windows-latest
     timeout-minutes: 60

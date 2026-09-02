@@ -93,6 +93,36 @@ if "$HEXPAIR_VIM" -es -u NONE -S "$WORK/plat.vim" < /dev/null 2>/dev/null \
 fi
 rm -f "$WORK/plat.vim" "$WORK/plat.out"
 
+# Can the Vim under test splice? Only shortening a file, ':w {file}' and a
+# grow with more than half the file behind it need readblob()'s offset and
+# size arguments, and the plugin refuses just those writes where they are
+# missing (|hexpair-paged|). The checks that exercise them therefore cannot
+# run on the Vim 8.0 floor this plugin supports, and a run there used to be
+# forty failures to be read by name rather than a result - which is how the
+# floor rotted twice without anyone noticing.
+#
+# Asked of the PLUGIN's own predicate, not of a patch number restated here:
+# the whole point is that the suite and the gate cannot disagree about what
+# this Vim can do.
+cat > "$WORK/splice.vim" <<EOF
+source $PLUGIN
+call writefile([HexPairPagedSpliceSupported() ? '1' : '0'], '$WORK/splice.out')
+qa!
+EOF
+HAS_SPLICE=1
+if "$HEXPAIR_VIM" -es -u NONE -S "$WORK/splice.vim" < /dev/null 2>/dev/null \
+    && [ -s "$WORK/splice.out" ]; then
+    HAS_SPLICE=$(sed -n 1p "$WORK/splice.out")
+fi
+rm -f "$WORK/splice.vim" "$WORK/splice.out"
+
+# Say so once, rather than in every skipped line's reason.
+if [ "$HAS_SPLICE" != 1 ]; then
+    echo "note: this Vim cannot splice (readblob() with an offset needs patch"
+    echo "      9.0.0795); the checks for writes that change a file's length are"
+    echo "      skipped, and the refusal they meet is checked in their place."
+fi
+
 FAIL=0
 # Counted and named, for the summary at the end: a CI log is read from
 # the bottom and is often truncated in the middle, so "which ones failed"
@@ -108,6 +138,27 @@ FAILED=
 # file. Fold both spellings; everything else stays exact.
 check_path() { # name expected actual
     check "$1" "$(printf '%s' "$2" | tr '\\' '/')" "$(printf '%s' "$3" | tr '\\' '/')"
+}
+
+# A check for something only a Vim that CAN splice is able to do: a write
+# that shortens a file, ':w {file}', a grow with more than half the file
+# behind it. Where readblob()'s offset argument is missing the plugin
+# refuses exactly those writes and leaves the file alone, which is the
+# documented behaviour and not a failure to report - so this says so and
+# passes, and the refusal itself is checked in its own block, once. Same
+# name, same position in the count, whichever Vim the suite is pointed at.
+check_splice() { # name expected actual
+    if [ "$HAS_SPLICE" = 1 ]; then
+        check "$1" "$2" "$3"
+    else
+        CHECKS=$((CHECKS + 1))
+        echo "ok   - (skipped: this Vim cannot splice) $1"
+    fi
+}
+
+check_splice_path() { # name expected actual
+    check_splice "$1" "$(printf '%s' "$2" | tr '\\' '/')" \
+        "$(printf '%s' "$3" | tr '\\' '/')"
 }
 
 check() { # name expected actual
@@ -175,7 +226,7 @@ open(os.path.join(w, 'unhex2.txt'), 'wb').write(b'one\r\ntwo\r\nthree\r\n')
 open(os.path.join(w, 'unhex3.txt'), 'wb').write(b'a b c\nx y z\n')
 # paged-mode fixture: 5000 bytes, byte i has value i % 256 - at 512
 # bytes/page that is 10 pages, the last one short (392 bytes)
-for name in ('paged21.bin', 'paged22.bin', 'paged23.bin', 'paged31.bin', 'paged32.bin', 'undo1.bin', 'layout1.bin', 'jump1.bin', 'paste1.bin', 'abandon1.bin', 'ulocal1.bin', 'src1.bin', 'off1.bin', 'multi.bin', 'multi2.bin', 'same1.bin', 'vis1.bin', 'pos1.bin', 'ip1.bin', 'ip2.bin', 'ip3.bin', 'w1.bin', 'w2.bin', 'w3.bin', 'w4.bin', 'w5.bin', 'sp1.bin', 'sp2.bin', 'sp3.bin', 'sp4.bin', 'tv1.bin', 'tv2.bin', 'tv3.bin', 'tv4.bin'):
+for name in ('paged21.bin', 'paged22.bin', 'paged23.bin', 'paged31.bin', 'paged32.bin', 'undo1.bin', 'layout1.bin', 'jump1.bin', 'paste1.bin', 'abandon1.bin', 'ulocal1.bin', 'src1.bin', 'off1.bin', 'multi.bin', 'multi2.bin', 'same1.bin', 'vis1.bin', 'pos1.bin', 'ip1.bin', 'ip2.bin', 'ip3.bin', 'w1.bin', 'w2.bin', 'w3.bin', 'w4.bin', 'w5.bin', 'sp1.bin', 'sp2.bin', 'sp3.bin', 'sp4.bin', 'tv1.bin', 'tv2.bin', 'tv3.bin', 'tv4.bin', 'gate1.bin', 'gate2.bin'):
     with open(os.path.join(w, name), 'wb') as f:
         f.write(bytes(i % 256 for i in range(5000)))
 # whole-page scan fixtures: big enough for ONE default-size page to hold
@@ -775,10 +826,10 @@ EOF
 "$HEXPAIR_VIM" -es -u NONE -S "$WORK/t25.vim"
 check "gate message empty when supported"     "''" "$(sed -n 1p "$WORK/t25.out")"
 check "gate message set when unsupported" \
-    "hexpair: rewriting the file to change its length needs Vim patch 8.2.4906 or later with +num64 (readblob(), 64-bit Numbers for large file offsets); this Vim does not qualify - nothing was written. An edit that keeps the page's length, or that inserts bytes with no more than half the file after them, does not need it." \
+    "hexpair: rewriting the file to change its length needs Vim patch 9.0.0795 or later with +num64 (readblob(), 64-bit Numbers for large file offsets); this Vim does not qualify - nothing was written. An edit that keeps the page's length, or that inserts bytes with no more than half the file after them, does not need it." \
     "$(sed -n 2p "$WORK/t25.out")"
 check "gate message names the operation the caller passed" \
-    "hexpair: writing the whole file somewhere else needs Vim patch 8.2.4906 or later with +num64 (readblob(), 64-bit Numbers for large file offsets); this Vim does not qualify - nothing was written. An edit that keeps the page's length, or that inserts bytes with no more than half the file after them, does not need it." \
+    "hexpair: writing the whole file somewhere else needs Vim patch 9.0.0795 or later with +num64 (readblob(), 64-bit Numbers for large file offsets); this Vim does not qualify - nothing was written. An edit that keeps the page's length, or that inserts bytes with no more than half the file after them, does not need it." \
     "$(sed -n 3p "$WORK/t25.out")"
 
 # --- Test 26: g:hexpair_page_size validation --------------------------------
@@ -1056,9 +1107,9 @@ qa!
 EOF
 cp "$WORK/unhex1.txt" "$WORK/unhex7.txt"
 "$HEXPAIR_VIM" -es -u NONE "$WORK/unhex7.txt" -S "$WORK/unhex7.vim" < /dev/null
-check "a view saved elsewhere unhexes to the file it now holds" \
+check_splice "a view saved elsewhere unhexes to the file it now holds" \
     "[1, 'unhex7-saved.txt', '', 0, -1]" "$(sed -n 1p "$WORK/unhex7.out")"
-check "and that file's own text is what is in the buffer" \
+check_splice "and that file's own text is what is in the buffer" \
     "['first line', 'second line', 'third line']" "$(sed -n 2p "$WORK/unhex7.out")"
 # 'readonly' the user set before the toggle is set again: the paged view
 # clears it (a page is edited even where the file is not written by Vim),
@@ -1268,10 +1319,10 @@ call writefile([string([&l:modified, b:hexpair_page_totalpages]), getline(1)], '
 qa!
 EOF
 "$HEXPAIR_VIM" -es -b -u NONE "$WORK/wipe.bin" -S "$WORK/te3.vim" < /dev/null
-check "an emptied page writes an empty file" "0" "$(file_size "$WORK/wipe.bin")"
-check "and leaves a view saying the file is empty" "[0, 0]" \
+check_splice "an emptied page writes an empty file" "0" "$(file_size "$WORK/wipe.bin")"
+check_splice "and leaves a view saying the file is empty" "[0, 0]" \
     "$(sed -n 1p "$WORK/te3.out")"
-check_path "with the banner to match" "\" hexpair: $WORK/wipe.bin is empty" \
+check_splice_path "with the banner to match" "\" hexpair: $WORK/wipe.bin is empty" \
     "$(sed -n 2p "$WORK/te3.out")"
 
 # --- Undo does not reach across a page boundary ----------------------------
@@ -1455,19 +1506,19 @@ call writefile([state, string([&l:modified]), string(untouched)], '$WORK/tw5.out
 qa!
 EOF
 "$HEXPAIR_VIM" -es -u NONE -S "$WORK/tw5.vim" < /dev/null
-check "':w other' leaves the buffer and its own file alone" "[1, 1]" \
+check_splice "':w other' leaves the buffer and its own file alone" "[1, 1]" \
     "$(sed -n 1p "$WORK/tw5.out")"
-check "and the edit did not reach the original" "['00010203', 5000]" \
+check_splice "and the edit did not reach the original" "['00010203', 5000]" \
     "$(sed -n 3p "$WORK/tw5.out")"
-check "the copy is the whole file, not just the page" "5000" \
+check_splice "the copy is the whole file, not just the page" "5000" \
     "$(file_size "$WORK/elsewhere.bin")"
-check "with the page's edit in it" \
+check_splice "with the page's edit in it" \
     "00000200: de ad 02 03" "$("$HEXPAIR_XXD" -s 512 -l 4 -g 1 "$WORK/elsewhere.bin" | cut -c1-21)"
-check "and everything outside the page copied verbatim" \
+check_splice "and everything outside the page copied verbatim" \
     "$(hash_range "$WORK/w5.bin" 1024 -1)" "$(hash_range "$WORK/elsewhere.bin" 1024 -1)"
-check "':w' afterwards still writes the page to its own file" "[0]" \
+check_splice "':w' afterwards still writes the page to its own file" "[0]" \
     "$(sed -n 2p "$WORK/tw5.out")"
-check "which is where the edit ended up too" \
+check_splice "which is where the edit ended up too" \
     "00000200: de ad 02 03" "$("$HEXPAIR_XXD" -s 512 -l 4 -g 1 "$WORK/w5.bin" | cut -c1-21)"
 
 # --- ':saveas' and ':file' move the view to the new file -------------------
@@ -1512,20 +1563,20 @@ cp "$WORK/w5.bin" "$WORK/w5b.bin"
 cp "$WORK/w5.bin" "$WORK/w5c.bin"
 W5B_ORIG=$(hash_range "$WORK/w5b.bin" 0 -1)
 "$HEXPAIR_VIM" -es -u NONE -S "$WORK/tw5b.vim" < /dev/null
-check "':saveas' clears 'modified' and adopts the file" "[0, 1]" \
+check_splice "':saveas' clears 'modified' and adopts the file" "[0, 1]" \
     "$(sed -n 1p "$WORK/tw5b.out")"
-check "and a ':w' after it patches that file, still unmodified" "[0, 5000]" \
+check_splice "and a ':w' after it patches that file, still unmodified" "[0, 5000]" \
     "$(sed -n 2p "$WORK/tw5b.out")"
-check "with the last edit in it" \
+check_splice "with the last edit in it" \
     "00000200: ca fe 02 03" \
     "$("$HEXPAIR_XXD" -s 512 -l 4 -g 1 "$WORK/saved.bin" | cut -c1-21)"
 # The file it was saved AWAY from must not have been touched: 'saveas' moves
 # the view, it does not write both.
 check "and the file it came from left alone" "$W5B_ORIG" \
     "$(hash_range "$WORK/w5b.bin" 0 -1)"
-check "':file' alone writes nothing and keeps the original file" "[1, 1]" \
+check_splice "':file' alone writes nothing and keeps the original file" "[1, 1]" \
     "$(sed -n 3p "$WORK/tw5b.out")"
-check "and the ':w' after it adopts the new name" "[0, 1]" \
+check_splice "and the ':w' after it adopts the new name" "[0, 1]" \
     "$(sed -n 4p "$WORK/tw5b.out")"
 
 # --- Piped input can only be saved with ':w {file}' - and then adopts it ---
@@ -1549,14 +1600,14 @@ call writefile([string(plain), after, string([&l:modified])], '$WORK/tw6.out')
 qa!
 EOF
 "$HEXPAIR_VIM" -es -u NONE -S "$WORK/tw6.vim" < /dev/null
-check "a plain ':w' on piped input says there is no file"  "1" "$(sed -n 1p "$WORK/tw6.out")"
-check "':w file' saves it and the view adopts the file" "[0, 1, 1]" \
+check_splice "a plain ':w' on piped input says there is no file"  "1" "$(sed -n 1p "$WORK/tw6.out")"
+check_splice "':w file' saves it and the view adopts the file" "[0, 1, 1]" \
     "$(sed -n 2p "$WORK/tw6.out")"
-check "the saved file has all of the piped content, edited" \
+check_splice "the saved file has all of the piped content, edited" \
     "00000000: ee 69 70 65 64 20 6c 69 6e 65 20 6f 6e 65 0a 70  .iped line one.p" \
     "$("$HEXPAIR_XXD" -s 0 -l 16 -g 1 "$WORK/frompipe.bin")"
-check "and a later plain ':w' now patches that file" "[0]" "$(sed -n 3p "$WORK/tw6.out")"
-check "which it did" "00000000: ee" "$("$HEXPAIR_XXD" -s 0 -l 1 -g 1 "$WORK/frompipe.bin" | cut -c1-12)"
+check_splice "and a later plain ':w' now patches that file" "[0]" "$(sed -n 3p "$WORK/tw6.out")"
+check_splice "which it did" "00000000: ee" "$("$HEXPAIR_XXD" -s 0 -l 1 -g 1 "$WORK/frompipe.bin" | cut -c1-12)"
 
 # --- A growing write splices the file ---------------------------------------
 SP1_HEAD=$(hash_range "$WORK/sp1.bin" 0 512)
@@ -1571,14 +1622,14 @@ call writefile([string([&l:modified, b:hexpair_page_total, line('.'), col('.')])
 qa!
 EOF
 "$HEXPAIR_VIM" -es -u NONE -S "$WORK/ts3a.vim" < /dev/null
-check "grow: the file is three bytes longer, cursor still on its byte" \
+check_splice "grow: the file is three bytes longer, cursor still on its byte" \
     "[0, 5003, 2, 20]" "$(sed -n 1p "$WORK/ts3a.out")"
-check "grow: the inserted bytes open the page" \
+check_splice "grow: the inserted bytes open the page" \
     "00000200: aa bb cc 00 01 02 03 04 05 06 07 08 09 0a 0b 0c  ................" \
     "$(sed -n 2p "$WORK/ts3a.out")"
-check "grow: the file really grew"   "5003"      "$(file_size "$WORK/sp1.bin")"
+check_splice "grow: the file really grew"   "5003"      "$(file_size "$WORK/sp1.bin")"
 check "grow: the head is unchanged"  "$SP1_HEAD" "$(hash_range "$WORK/sp1.bin" 0 512)"
-check "grow: the tail is unchanged, just moved" "$SP1_TAIL" \
+check_splice "grow: the tail is unchanged, just moved" "$SP1_TAIL" \
     "$(hash_range "$WORK/sp1.bin" 515 -1)"
 
 # --- A shrinking write splices the file -------------------------------------
@@ -1593,12 +1644,63 @@ call writefile([string([&l:modified, b:hexpair_page_total, b:hexpair_page_len])]
 qa!
 EOF
 "$HEXPAIR_VIM" -es -u NONE -S "$WORK/ts3b.vim" < /dev/null
-check "shrink: the file is sixteen bytes shorter" "[0, 4984, 512]" \
+check_splice "shrink: the file is sixteen bytes shorter" "[0, 4984, 512]" \
     "$(cat "$WORK/ts3b.out")"
-check "shrink: the file really shrank" "4984"      "$(file_size "$WORK/sp2.bin")"
+check_splice "shrink: the file really shrank" "4984"      "$(file_size "$WORK/sp2.bin")"
 check "shrink: the head is unchanged"  "$SP2_HEAD" "$(hash_range "$WORK/sp2.bin" 0 512)"
-check "shrink: the tail is unchanged, just moved" "$SP2_TAIL" \
+check_splice "shrink: the tail is unchanged, just moved" "$SP2_TAIL" \
     "$(hash_range "$WORK/sp2.bin" 512 -1)"
+
+# --- What a Vim that cannot splice does instead ------------------------------
+# The other side of check_splice(). Everything above that it skipped is
+# skipped because the write is REFUSED there, and a refusal that nothing
+# checks is indistinguishable from a write that quietly did nothing - so
+# this asks for the two operations directly and requires the refusal, the
+# gate's own message, and a file that still has every byte it had. It is
+# the only place the failure branch of the gate is exercised end to end;
+# HexPairPagedGateMessage() is otherwise only ever called with a 1 by a Vim
+# this suite can run.
+GATE1_ALL=$(hash_range "$WORK/gate1.bin" 0 -1)
+GATE2_ALL=$(hash_range "$WORK/gate2.bin" 0 -1)
+if [ "$HAS_SPLICE" = 1 ]; then
+    echo "ok   - (skipped: this Vim can splice) a shrinking write is refused where readblob() cannot seek"
+    echo "ok   - (skipped: this Vim can splice) and the file keeps every byte it had"
+    echo "ok   - (skipped: this Vim can splice) ':w {file}' is refused the same way, naming what it was doing"
+    echo "ok   - (skipped: this Vim can splice) and writes no file"
+    CHECKS=$((CHECKS + 4))
+else
+    cat > "$WORK/tgate.vim" <<EOF
+$(printf "$PAGEDW")
+HexPairOpen $WORK/gate1.bin 2
+2delete _
+let shrink = ''
+try
+  write
+catch
+  let shrink = v:exception
+endtry
+edit! $WORK/gate2.bin
+HexPairOpen $WORK/gate2.bin 2
+let elsewhere = ''
+try
+  write $WORK/gate-copy.bin
+catch
+  let elsewhere = v:exception
+endtry
+call writefile([shrink, elsewhere], '$WORK/tgate.out')
+qa!
+EOF
+    "$HEXPAIR_VIM" -es -u NONE -S "$WORK/tgate.vim" < /dev/null
+    check "a shrinking write is refused where readblob() cannot seek" \
+        "hexpair: rewriting the file to change its length needs Vim patch 9.0.0795 or later with +num64 (readblob(), 64-bit Numbers for large file offsets); this Vim does not qualify - nothing was written. An edit that keeps the page's length, or that inserts bytes with no more than half the file after them, does not need it." \
+        "$(sed -n 1p "$WORK/tgate.out")"
+    check "and the file keeps every byte it had" "$GATE1_ALL" \
+        "$(hash_range "$WORK/gate1.bin" 0 -1)"
+    check "':w {file}' is refused the same way, naming what it was doing" "1" \
+        "$(grep -c 'writing the whole file somewhere else needs Vim patch 9.0.0795' "$WORK/tgate.out")"
+    check "and writes no file" "0" \
+        "$(test -e "$WORK/gate-copy.bin" && echo 1 || echo 0)"
+fi
 
 # --- The temp file is gone after a successful splice ------------------------
 # Nothing of ours may be left in tempname()'s directory once the write has
@@ -1617,7 +1719,7 @@ call writefile([string([len(glob(dir . '/*', 0, 1)) - before, &l:modified])], '$
 qa!
 EOF
 "$HEXPAIR_VIM" -es -u NONE -S "$WORK/ts3c.vim" < /dev/null
-check "a successful splice leaves no temp files behind" "[0, 0]" \
+check_splice "a successful splice leaves no temp files behind" "[0, 0]" \
     "$(cat "$WORK/ts3c.out")"
 
 # --- A splice that cannot replace the file keeps the recovery copy ----------
@@ -1672,7 +1774,7 @@ EOF
     "$HEXPAIR_VIM" -es -u NONE -S "$WORK/ts3d.vim" < /dev/null
     check "a page of a file this user cannot write is read-only" \
         "[1, 'refused', 0]" "$(sed -n 1p "$WORK/ts3d.out")"
-    check "a failed splice keeps a recovery copy" "['failed', 1, 1]" \
+    check_splice "a failed splice keeps a recovery copy" "['failed', 1, 1]" \
         "$(sed -n 2p "$WORK/ts3d.out")"
     check "a failed splice leaves the file alone" "$SP4_ALL" \
         "$(hash_range "$WORK/sp4.bin" 0 -1)"
@@ -1690,10 +1792,10 @@ qa!
 EOF
 sed -i 's/, s:nothing//' "$WORK/ts3e.vim"
 "$HEXPAIR_VIM" -es -u NONE -S "$WORK/ts3e.vim" < /dev/null
-check_path "emptying the file leaves a banner saying so" \
+check_splice_path "emptying the file leaves a banner saying so" \
     "\" hexpair: $WORK/sp5.bin is empty" "$(sed -n 1p "$WORK/ts3e.out")"
-check "emptying the file leaves no pages" "[0, 2, 0]" "$(sed -n 2p "$WORK/ts3e.out")"
-check "the emptied file really is empty"  "0" "$(file_size "$WORK/sp5.bin")"
+check_splice "emptying the file leaves no pages" "[0, 2, 0]" "$(sed -n 2p "$WORK/ts3e.out")"
+check_splice "the emptied file really is empty"  "0" "$(file_size "$WORK/sp5.bin")"
 
 # --- The resize prompt says what it is about to do --------------------------
 # confirm() cannot run under this harness, so the message it asks is
@@ -1770,6 +1872,20 @@ cp "$ROOT/doc/hexpair.txt" "$WORK/doctags/"
 check "helptags accepts the help file" "ok" "$(sed -n 1p "$WORK/th1.out")"
 check "helptags found the plugin's tags" "1" \
     "$(test "$(sed -n 2p "$WORK/th1.out")" -gt 30 && echo 1 || echo 0)"
+
+# --- No comment form the supported Vim does not have -----------------------
+# The floor is Vim 8.0, where `"\ ` - a comment on a line-continuation - does
+# not exist yet: inside a continued expression it does not parse, and the
+# whole statement dies with it (E15). It is also the ONLY comment that works
+# inside a continued list literal, which is exactly why it got used, for the
+# generated block table's markers - and killed every `block` row of the
+# inspector on Vim 8.0 for as long as nobody ran one. So the rule is that a
+# continued literal carries no comment at all and anything that has to be
+# marked is marked outside it, and this is a static check because every Vim
+# this suite can be pointed at accepts the form.
+check "no line-continuation comment, which Vim 8.0 does not have" "0" \
+    "$(cat "$ROOT/plugin/hexpair.vim" "$ROOT/ftplugin/xxd.vim" \
+        "$ROOT/hexpair.vimrc" | grep -c '^[[:space:]]*"\\')"
 
 # --- A real page STRADDLING 4 GiB, where the offset column widens mid-page --
 # Pages are plain fixed-size slices, so nothing stops one from spanning the
@@ -2267,7 +2383,7 @@ call writefile([string([&l:modified, b:hexpair_page_total])], '$WORK/tip3.out')
 qa!
 EOF
 "$HEXPAIR_VIM" -es -u NONE -S "$WORK/tip3.vim" < /dev/null
-check "a delete shrinks the file"        "[0, 4984]" "$(cat "$WORK/tip3.out")"
+check_splice "a delete shrinks the file"        "[0, 4984]" "$(cat "$WORK/tip3.out")"
 check "its head survives the rewrite"    "$IP3_HEAD" "$(hash_range "$WORK/ip3.bin" 0 2048)"
 
 # ===========================================================================
@@ -2343,15 +2459,15 @@ call writefile([string([&l:modified])], '$WORK/ttv3.out')
 qa!
 EOF
 "$HEXPAIR_VIM" -es -u NONE -S "$WORK/ttv3.vim" < /dev/null
-check "a growing text-view write clears 'modified'" "[0]" "$(cat "$WORK/ttv3.out")"
-check "the file grew by the one byte inserted" "5001" "$(file_size "$WORK/tv3.bin")"
+check_splice "a growing text-view write clears 'modified'" "[0]" "$(cat "$WORK/ttv3.out")"
+check_splice "the file grew by the one byte inserted" "5001" "$(file_size "$WORK/tv3.bin")"
 check "everything before the page is byte-identical" "$TV3_HEAD" \
     "$(hash_range "$WORK/tv3.bin" 0 512)"
-check "everything after it is byte-identical, just moved" "$TV3_TAIL" \
+check_splice "everything after it is byte-identical, just moved" "$TV3_TAIL" \
     "$(hash_range "$WORK/tv3.bin" 1025 -1)"
-check "the rest of the page moved up intact" "$TV3_REST" \
+check_splice "the rest of the page moved up intact" "$TV3_REST" \
     "$(hash_range "$WORK/tv3.bin" 523 502)"
-check "the inserted byte is where the edit put it" \
+check_splice "the inserted byte is where the edit put it" \
     "0000020a: 5a 0a 0b                                         Z.." \
     "$("$HEXPAIR_XXD" -s 522 -l 3 -g 1 "$WORK/tv3.bin")"
 

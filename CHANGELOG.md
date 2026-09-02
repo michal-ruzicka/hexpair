@@ -114,7 +114,23 @@ and this project adheres to
   prompts sit under neighbouring keys (`<Leader>b` and `<Leader>g`), and
   answering one in the other's language should not be a mistake.
 
+### Changed
+- **The Vim 8.0 floor is now built and run by CI, not asserted.** The suite
+  asks the Vim it is pointed at whether it can splice and checks that those
+  writes are *refused* where it cannot, so a run against a Vim 8.0.0000
+  build passes in full instead of producing forty failures to be read by
+  eye. That ritual had gone undone twice, and each time something had
+  quietly stopped working on the version the plugin promises to support.
+
 ### Fixed
+- **The splice named the wrong Vim patch, by a major release.** Shortening a
+  file, `:w {file}` and a grow with more than half the file behind it need
+  `readblob()` with an *offset and a size*, which is patch **9.0.0795** —
+  plain whole-file `readblob()` is 8.2.2343, and 8.2.4906, which the gate
+  asked for, is an unrelated MS-Windows patch. Any Vim between the two was
+  told it could do such a write and then failed with `E118: Too many
+  arguments for function: readblob` part way through the copy. The gate, the
+  message and the documented requirement all say 9.0.0795 now.
 - **`:HexPairInspect` reported a byte order mark as belonging to *Arabic
   Presentation Forms-B*.** `U+FEFF` really is assigned to that block in
   `Blocks.txt`, but only because Unicode lays out blocks by contiguity and

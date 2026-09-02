@@ -1199,7 +1199,7 @@ own bytes are hashed when it is read and again before it is patched.
 for scripts.
 
 Only a write that **shortens** a file, and `:w {file}`, need a newer Vim
-than the rest of the plugin: `+num64` and patch 8.2.4906+, for
+than the rest of the plugin: `+num64` and patch 9.0.0795+, for
 `readblob()`, checked when such a write is attempted and refusing just
 that write. Viewing, navigating, same-length writes and inserts run on
 Vim 8.0 with nothing but `xxd`. Details: `:help hexpair-paged`.
@@ -1233,14 +1233,20 @@ exist to avoid — they read only the page they show.
 
 ## Requirements
 
-- Vim 8.0 with patch 8.0.0794 (`count()` over a string), which every
-  Vim 8.0 point release since 2017 has. Native packages need Vim 8
-  anyway; a manual installation needs the patch level. Shortening a
-  file, `:w {file}`, and inserting bytes with more than half the file
-  after them additionally need patch 8.2.4906 and `+num64`, checked at
-  the moment such a write is attempted - see
-  [above](#pages). The baseline is tested: the suite runs against a
-  Vim 8.0.0000 build, where everything but those three works.
+- **Vim 8.0**, any patch level — 8.0.0000 itself will do. That covers
+  RHEL 8 and its rebuilds, which ship `vim` 8.0.1763 and are supported
+  into 2029.
+- **Shortening a file, `:w {file}`, and inserting bytes with more than
+  half the file after them** additionally need **Vim 9.0.0795** with
+  `+num64` — that is the patch that gave `readblob()` an offset and a
+  size. It is checked at the moment such a write is attempted, and only
+  that write is refused, with a message saying so; everything else keeps
+  working. See [above](#pages).
+- The floor is not a promise, it is a build: CI compiles Vim 8.0.0000
+  from source on every push and runs the whole suite against it, which
+  passes there exactly as it does on a current Vim — the checks for the
+  three operations above are replaced by checks that they are refused and
+  the file is left alone.
 - The `xxd` utility, which ships with Vim. It is looked up on `PATH`
   first and then in the Vim runtime directory (`$VIMRUNTIME`), so on
   Windows the bundled `xxd.exe` is found even when it is not on `PATH`.

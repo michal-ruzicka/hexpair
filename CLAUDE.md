@@ -239,10 +239,17 @@ make-unicode-blocks.py - regenerates the Unicode block table inside
                       at package time and never on a user's machine. Its
                       output is committed. Bumping the version means
                       updating NOTICE.md's URL, digest and version too.
-                      **The markers are `"\ ` comment continuations, not
-                      plain `"` comments** - they sit INSIDE a continued
-                      list literal, where a plain comment line ends the
-                      continuation and the rest becomes nonsense.
+                      **The markers sit OUTSIDE the list literal**, and
+                      the `let` that opens it is generated between them, so
+                      they are ordinary `"` comments. They were `"\ `
+                      comment continuations INSIDE the literal, which is the
+                      only comment form that works there - and which Vim 8.0
+                      does not have: the whole literal failed to parse
+                      (E15), so every `block` row of the inspector was dead
+                      on the version this plugin claims to support. A plain
+                      comment inside the literal would end the continuation,
+                      so the fix is to move the markers out, not to change
+                      the comment form in place.
 icons/                three custom icons for the entries above, and
                       what generates them:
                       - rasticon.py: a from-scratch vector rasterizer
@@ -685,11 +692,26 @@ come back**; each names the test that would catch it.
 | A buffer that had never been near hex mode was told `:HexPairUnhex` could not help it because it "was opened as hex (:HexPairOpen or vimhex)" - two entry points the reader had not used | "a buffer that never entered hex mode is told that, not told about :HexPairOpen" |
 | A toggle whose page read failed dropped the plain-view snapshot, though `s:PageSource()` had already re-read the buffer `++bin`: the file was left showing as raw bytes with nothing able to put it back, and the next toggle would have recorded that binary state as the plain one | "and the buffer it left in binary can still be unhexed" - reached with an `xxd` that only ever fails, on PATH |
 | `:HexPairUnhex` restored `'readonly'` from the snapshot over the answer the `:edit` had just worked out from the file, so a file whose write permission had been taken away came back writable | "a file that became read-only is not handed back writable" |
+| The generated block table's markers were `"\ ` comment continuations INSIDE the list literal, a form Vim 8.0 does not have - so `s:Blocks()` failed with E15 there and every `block` row of the inspector with it. Nothing noticed because CI runs a current Vim, and the 8.0 run below had not been done since the table landed | the baseline run below: 40 failures, all in the splice and save-as scripts, and no `E...` anywhere - which is what "the floor is a claim that has to be RUN" is for |
+| The splice gate asked for patch **8.2.4906**, which is an MS-Windows transparent-background patch. `readblob()`'s offset and size arguments are **9.0.0795**; plain `readblob()` is 8.2.2343. So every Vim in 8.2.4906..9.0.0794 was TOLD it could splice and then hit `E118: Too many arguments` inside `s:CopyRange()` - and during the copy back that is a target left half written, which is the one outcome the splice's ordering argument exists to prevent | the three `gate message ...` checks pin the wording, which now names 9.0.0795; the constant itself is checkable only by reading Vim's `version9.txt`, and the comment on `HexPairPagedGateMessage()` records what it says |
 
-**The Vim version floor is a claim that has to be run.** The plugin says
-everything but the splice works on Vim 8.0; it did not, for a year, and
-nothing noticed because CI only ever ran a current Vim. Build the oldest
-one and point the suite at it:
+**The Vim version floor is a claim that has to be run — and CI runs it
+now.** The plugin says everything but the splice works on Vim 8.0; it did
+not, for a year, and nothing noticed because CI only ever ran a current
+Vim. It then broke again, the same way, when the inspector's block table
+arrived carrying `"\ ` comment continuations. Both times the recipe below
+existed and nobody followed it. So the `test-oldest-vim` job in
+`.github/workflows/build.yml` builds v8.0.0000 from source on every push
+and runs the whole suite against it, and the suite **passes there**: it
+asks the Vim under test whether it can splice
+(`HexPairPagedSpliceSupported()`, global for exactly this) and
+`check_splice()` stands down at the forty checks that need one, while four
+checks in their place require the refusal, its message and an untouched
+file. Same check count on every Vim, so the count tripwire below still
+works.
+
+Read this section for what the build costs, not for how to interpret a
+list of failures — there is no list any more, only a pass or a fail.
 
 ```sh
 curl -sSLO https://github.com/vim/vim/archive/refs/tags/v8.0.0000.tar.gz
@@ -711,23 +733,23 @@ cd src && make -j4 vim   # from src/, not the top level: 8.0's top-level
 cd ..
 HEXPAIR_VIM=$PWD/src/vim VIMRUNTIME=$PWD/runtime test/run-tests.sh
 ```
- The expected result
-is 33 failures, all of them inside the splice and save-as scripts —
-shortening a file, `:w {file}`, and a grow whose tail is more than half
-the file — each refused with the `readblob()` gate message, plus the
-assertions that follow such a refusal in the same script. Anything else
-failing there is a regression in the baseline; the count itself moves
-whenever a test is added to one of those scripts, so read the names, not
-the number. The suite itself must stay 8.0-clean
-too: no `trim()`, no Blob literal, no `count()` over a string.
 
-Last run before v2.3.0: 447 ok, 33 failures, all of them those — and no
-`E...` from Vim anywhere in the output, which is the other half of what
-"refused cleanly" means. A refusal shows up in the log as the file being
-*unchanged* (`expected: 4984 / actual: 5000`), not as an error; the gate
-message itself is not in the output because nothing echoes it there, so
-do not go looking for it as the sign the gate fired — the three
-`gate message ...` checks near the top are what pin its wording.
+CI pins that tag by its COMMIT (`bb76f24af2010943387ce696a7092175b4ecccf2`)
+and shallow-clones it, rather than pinning the archive tarball's digest:
+GitHub regenerates those and their hashes have moved under people before.
+
+The suite itself must stay 8.0-clean, which is now enforced rather than
+remembered: no `trim()`, no Blob literal, no `count()` over a string, and
+no `"\ ` comment on a continuation line (that last one has a static check
+of its own, since every Vim this suite can run accepts it).
+
+**Who is actually on Vim 8.0**, since the floor costs something to keep:
+RHEL 8 and its rebuilds (AlmaLinux, Rocky, Oracle Linux) ship `vim`
+8.0.1763, still the current package in 8.10, and are supported into 2029.
+The floor is not sentiment. Note the difference between "the 8.0 series"
+and "8.0.0000": `"\ ` needs 8.1.0369, so the block-table bug hit every
+real 8.0 too, and testing 8.0.0000 is the strict superset that makes the
+claim simple to state.
 
 **Linting is worth doing by hand, and is not worth automating** (the
 maintainer's call, and the numbers back it): `vint` over the two
@@ -1116,13 +1138,15 @@ This resolves two questions raised while planning this stage:
 
 ### Vim version gate — narrowed
 
-Re-examined during this redesign: `readblob()` (patch 8.2.4906) is
-only actually needed by the Stage 4 **splice** write (growing/
-shrinking a page). Reading pages (either population path), Stage 3's
+Re-examined during this redesign: `readblob()` with an offset and a size
+(patch **9.0.0795** - NOT 8.2.4906, which this gate named for a long time
+and which is an unrelated MS-Windows patch; plain whole-file `readblob()`
+is 8.2.2343) is only actually needed by the Stage 4 **splice** write
+(growing/shrinking a page). Reading pages (either population path), Stage 3's
 same-length write, and Windowed-text-view all work on the same Vim 8.0
 baseline the rest of the plugin already requires. So the blanket
 load-time version gate Stage 1 introduced (refusing to load the whole
-paged feature below patch 8.2.4906) becomes unnecessarily strict once
+paged feature below the readblob() patch) becomes unnecessarily strict once
 paging is the *only* hex mode — it would raise the plugin's minimum
 Vim version for basic hex viewing, which used to work on Vim 8.0.
 **Stage 4 changes the gate to a runtime check performed only at the

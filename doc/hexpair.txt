@@ -1129,12 +1129,17 @@ anything shares the xxd half of this; hexpair does not detect that, being
 gated on Windows.
 
 Only a write that SHORTENS a file, and `:w {file}`, need a Vim newer than
-the plugin's usual baseline: patch 8.2.4906 with a 64-bit Number type
-(+num64, standard on modern builds), for readblob().  It is checked when
-such a write is attempted and refuses just that write.  Everything else -
+the plugin's usual baseline: patch 9.0.0795 with a 64-bit Number type
+(+num64, standard on modern builds).  That is the patch that gave
+readblob() an offset and a size; plain readblob(), which reads a whole
+file and is no use here, is older.  It is checked when such a write is
+attempted and refuses just that write, saying so.  Everything else -
 viewing pages, navigating them, writes that keep a page's length, and
 writes that lengthen one - runs on Vim 8.0 like the rest of the plugin,
-needing nothing but `xxd`.
+needing nothing but `xxd`, and that is tested rather than asserted: the
+regression suite is run against a Vim 8.0.0000 build on every push, where
+it passes in full, the checks for the three operations above being
+replaced by checks that they are refused and the file left alone.
 
 Open a file directly in paged mode, without loading it as a normal
 buffer first - straight from the command line: >
