@@ -24,17 +24,32 @@ differences marked](demo/hexpair-demo.gif)
 
 **It is not the best hex editor in the world**, and does not try to be. **But it
 is always a _single command_ away wherever you already
-have in Vim** — no system install, no package manager, nothing to get approved.
+have Vim** — no system install, no package manager, nothing to get approved.
 Everything runs on `xxd`, which ships with Vim itself, and portable
 VimScript: no `sed`, `tr`, `dd` or anything else, so it behaves the same
-on Linux, on native Windows (where `xxd.exe` is found inside the Vim
-installation even when it is not on `PATH`) and inside WSL.
+on Linux, macOS and the BSDs, on native Windows (where `xxd.exe` is found
+inside the Vim installation even when it is not on `PATH`) and inside WSL —
+with one platform note about files over 2 GiB on native Windows, below.
 
 And it is **good enough for real work on real, even _very_ big, files:** 
 because it shows one page at a time and writes one page at a time, a file that 
 does not fit in memory — a disk image, a core dump, a database — is no different 
 from a small one. Editing an 8 TiB file costs the same ~20 MiB of memory as 
 editing an 8 KiB one.
+
+> **A note about `xxd` on native Windows.** `xxd` keeps its seek offset in a
+> C `long`, which is 32 bits there, so past 2 GiB it reads and writes the
+> wrong place. Hexpair does the seeking with PowerShell beyond that point
+> instead, and everything works — reading, searching, comparing,
+> overwriting, growing, shrinking, `:w {file}`. What changes is the cost: a
+> process start per operation.
+>
+> **This is a limitation of `xxd` on one platform, not of hexpair and not
+> of the file.** On Linux, macOS, the BSDs and inside WSL a `long` is 64
+> bits and `xxd` seeks natively, so files of any size work the ordinary
+> way — the ceiling is 2⁶³−1 bytes, eight exbibytes, which is not a limit
+> anyone is going to meet.
+> See [Windows and the 2 GiB limit](#windows-and-the-2-gib-limit).
 
 **The hex*pair* name:** hex and text, always paired. *Within a line* —
 the byte under the cursor and its character light up together, whichever
@@ -110,8 +125,13 @@ code, releases and issue tracker.
   and `:highlight HexPairModified` says what yours came out as.
 - **Compare with another file.** `:HexPairDiff other.bin` marks every byte
   of the page that differs from the same offset of `other.bin`, and
-  `:HexPairDiffNext` walks the whole file for the next disagreement. The
-  bundled `vimhexdiff a b` opens both files side by side that way.
+  `:HexPairDiffNext` walks the whole file for the next disagreement.
+  `:HexPairDiffShow` says what that file actually holds at the cursor — or
+  over a Visual selection — including when it holds *nothing* there,
+  because it ends before this offset. That last case is one a marking
+  cannot express: every byte of such a page differs, and the reason is not
+  on screen. The bundled `vimhexdiff a b` opens both files side by side
+  that way.
 - **Marks that survive page turns.** `:HexPairMark header` remembers a
   byte of the *file*, not a line of a buffer — and the byte it stands on
   is underlined on the page (`HexPairMark`), so a place worth coming back
@@ -153,9 +173,9 @@ code, releases and issue tracker.
   instantly, reading only the page it shows and never loading the rest. `:w` writes the page back: overwriting values patches it
   **in place**, so the rest of the file is never read or written
   whatever its size; inserting bytes moves only what follows them, also
-  in place; and only deleting them rewrites the file. Either change of
-  length says what it will cost and asks first. See
-  [below](#paged-large-file-mode).
+  in place; and only deleting them rewrites the file — except past 2 GiB
+  on native Windows, where that is in place too. Either change of length
+  says what it will cost and asks first. See [Pages](#pages).
 
 ## Installation
 
@@ -202,6 +222,7 @@ you would rather pick your own keys:
 ```vim
 " Views
 nmap <Leader>h <Plug>(HexPairToggle)        " hex page view <-> windowed text view
+nmap <Leader>U <Plug>(HexPairUnhex)         " back to the plain, unpaged buffer (a toggled file only)
 nmap <Leader>< <Plug>(HexPairGoHex)         " cursor to the HEX column, same byte
 nmap <Leader>> <Plug>(HexPairGoAscii)       " cursor to the ASCII column, same byte
 nmap <Leader>- <Plug>(HexPairSwap)          " cursor to the opposite column
@@ -237,6 +258,8 @@ nmap <Leader>e <Plug>(HexPairModifiedNext)  " next run of bytes you edited
 nmap <Leader>E <Plug>(HexPairModifiedPrev)  " previous one
 nmap <Leader>] <Plug>(HexPairDiffNext)      " next change against that file
 nmap <Leader>[ <Plug>(HexPairDiffPrev)      " previous one
+nmap <Leader>D <Plug>(HexPairDiffShow)      " what that file has here
+xmap <Leader>D <Plug>(HexPairDiffShow)      " ... for a whole selection
 nmap <Leader>c <Plug>(HexPairFindClear)     " stop marking the matches
 nmap <Leader>C <Plug>(HexPairDiffClear)     " stop comparing, clear the marking
 
@@ -312,6 +335,8 @@ and it gives you `vimhex`:
 vimhex bigfile.bin              # the first page
 vimhex bigfile.bin 3            # page 3
 vimhex bigfile.bin '$'          # the last page, without counting them
+vimhex bigfile.bin '$-5'        # five pages back from the end
+vimhex bigfile.bin '@$-0x100'   # 0x100 bytes back from the last one
 vimhex bigfile.bin @0x4a2000    # the page holding that byte
 cat bigfile.bin | vimhex -      # piped input
 ```
@@ -321,6 +346,320 @@ cat bigfile.bin | vimhex -      # piped input
 it later. Set `VIMHEX_VIM` to pick a particular Vim. Details are in the
 file's own comments and in `:help hexpair-vimhex`.
 
+### Windows and the 2 GiB limit
+
+**Files over 2 GiB work on native Windows, but not through `xxd`.** Every
+operation past that offset goes through PowerShell instead, because the
+limit is outside this plugin and in two places at once:
+
+- **`xxd` seeks with a C `long`.** `strtol()` into `long seekoff`, then
+  `fseek()` — and on Windows a `long` is 32 bits, because Windows is LLP64
+  (only pointers and `long long` widen in a 64-bit build; `long` does not).
+  Worse, `strtol()` *saturates* instead of failing, so an offset past the
+  limit silently becomes `2147483647` and `xxd` reads from there. `xxd -r`,
+  which is how bytes get written at an offset, has the same limit.
+- **Vim's `readblob()` — the obvious fallback — has it too.** `read_blob()`
+  in `blob.c` declares a plain `struct stat` and calls plain `fstat()`,
+  where the rest of Vim uses `stat_T`, defined in `vim.h` as
+  `struct _stat64` on Windows with a comment saying exactly why. `st_size`
+  is a 32-bit `_off_t` in the plain one, so for a large file the computed
+  length goes negative and `read_blob()` returns an **empty blob and
+  success** — no error to catch. That looks like a Vim bug rather than a
+  design decision.
+
+**Reading past 2 GiB therefore goes through PowerShell**, whose
+`FileStream.Seek` takes an `Int64`. It is an external tool, which this
+plugin otherwise refuses to depend on — but it is Windows-only, Windows
+ships it, and the choice is against not reading the file at all rather than
+against `xxd`. **PowerShell only does the seek**: it writes the page's raw
+bytes to a temp file and `xxd` reads the dump and the hex out of *that*,
+where it has no seeking to do and is as fast as ever. What remains is one
+process start per page turn — a few hundred milliseconds. A file-wide
+search past 2 GiB pays it per block and is correspondingly slow.
+
+**Writing past 2 GiB works too**, through the same route. `xxd -r` has the
+same 32-bit limit, so every byte-moving step goes through PowerShell
+instead: an overwrite seeks and writes, a grow extends the file with
+`SetLength` and slides the tail along, and a shrink slides the tail back
+and then cuts the file. Every write reads back what it wrote and refuses to
+call it done if the bytes are not there — set `g:hexpair_verify_writes = 0`
+if you would rather have the speed.
+
+That last one inverts the plugin's own cost model, which is worth stating
+plainly because it is surprising: **on Windows past 2 GiB, the operation
+that is most expensive everywhere else is the cheapest one here.** Neither
+Vim nor `xxd` can shorten a file except by writing it out afresh, so on
+every other platform a shrinking write copies the entire file — the cost
+table further down says so. `.NET`'s `SetLength` truncates in place, so
+here a 120 GiB file shrinks by moving the bytes after the edited page and
+cutting the rest, and never copies 120 GiB. Growing is likewise a tail
+slide rather than a rewrite. Both directions therefore stay in place past
+this limit whatever the cost model would have picked.
+
+`:w {file}` and `:saveas` work there too: the three copies they build a
+saved file out of — the head, the page, the tail — go the same way, with
+the chunking *inside* one PowerShell process, since that is the operation
+that walks a whole file.
+
+**What runs where.** The rule is one line: *a range is `xxd`'s only if
+`xxd` can reach all of it*. Callers therefore test the **end** of what they
+are about to touch, so a range that starts below 2 GiB and crosses it takes
+the slow path whole — checking the start would hand `xxd` a range it can
+begin and not finish.
+
+| Operation | Everywhere else, and below 2 GiB on Windows | Past 2 GiB on native Windows |
+|---|---|---|
+| Read a page, compare, search | `xxd -s -l` | PowerShell seeks and writes the bytes to a temp file; `xxd` reads *that* |
+| Draw the page | `xxd -g 1 -c N` | the same, with the offset column renumbered in Vim (`-o` is 32-bit too) |
+| Overwrite, same length | `xxd -r` | PowerShell seek + write, **read back and verified** |
+| Grow | extend, slide the tail, patch | `SetLength`, slide the tail, patch — always in place |
+| Shrink | **rewrite the whole file** | patch, slide the tail, `SetLength` truncate — **in place** |
+| `:w {file}`, `:saveas` | `readblob` + `writefile` | one PowerShell process per range copied |
+
+`g:hexpair_bytes_per_line` needs no thought here: `xxd` is told `-c N` on
+either side of the line, and the offset column Vim renumbers advances by
+`N`. It must be between 1 and 256 — 256 being `xxd`'s own ceiling rather
+than one chosen here — and that range is the whole requirement, since the
+width divides nothing itself. `g:hexpair_page_size` is capped at 2147483647 bytes, which is a
+correctness boundary rather than a tidy number — a page's length reaches
+`xxd -l` (a C `long`, 32-bit on Windows) and PowerShell's `[int]` (32-bit
+everywhere), and a larger one would overflow both *silently*. Anything
+approaching it is impractical long before: a page is held as hex at two
+characters a byte, so a 2 GiB page wants some 8 GiB of Vim.
+
+**What it costs.** Below 2 GiB, nothing changes anywhere: `xxd` does what it
+always did. Past it, each operation is one PowerShell start — a few hundred
+milliseconds — so a page turn is noticeably slower than a local one but far
+from slow, while a file-wide search pays it per block and is genuinely slow.
+Against that, the shrink row above is the plugin getting *faster* than it is
+anywhere else, and `readblob()` being unusable costs nothing that is not
+already paid.
+
+**Why PowerShell is not used on Linux, macOS or the BSDs.** PowerShell 7
+(`pwsh`) runs there and the same `FileStream` calls would behave the same
+way — but there is nothing to fix. `long` is 64 bits on those platforms, so
+`xxd` seeks correctly, and it is *faster* than starting a process per
+operation. Adding a detected-at-runtime `pwsh` path would buy no
+correctness and cost startup on every read. The rule is that this fallback
+exists where `xxd` is broken, not where another tool happens to exist.
+
+**Everywhere else is fine.** Linux, macOS and the BSDs are LP64: `long` is
+64 bits, so `xxd`'s seek is; and their `struct stat.st_size` is a 64-bit
+`off_t`, so `readblob()` is too. **WSL is a Linux build**, so a large file
+on a Windows machine is a `wsl vim` away. A 32-bit build of anything has
+the same limit as Windows for the `xxd` half, which hexpair does not
+currently detect — it is gated on being Windows.
+
+So on native Windows hexpair is a full hex editor at any size. Past 2 GiB
+what changes is how the bytes are moved and what it costs, not what can be
+done — and the shrink row above is the one place where the Windows path is
+the *faster* one.
+
+### Windows: `vimhex` and `vimhexdiff` outside Vim
+
+`vimhex.cmd` and `vimhexdiff.cmd` are the same two commands for `cmd.exe`,
+taking the same arguments as the shell functions above:
+
+```bat
+vimhex bigfile.bin              REM the first page
+vimhex bigfile.bin 3            REM page 3
+vimhex bigfile.bin $            REM the last page, without counting them
+vimhex bigfile.bin $-5          REM five pages back from the end
+vimhex bigfile.bin @$-0x100     REM 0x100 bytes back from the last one
+vimhex bigfile.bin @0x4a2000    REM the page holding that byte
+type bigfile.bin | vimhex -     REM piped input
+vimhexdiff old.img new.img      REM the two side by side
+```
+
+They default to the console `vim`. Set `VIMHEX_VIM` for another one —
+`gvim` for the GUI, or a full path such as
+`C:\Program Files\Vim\vim91\gvim.exe`.
+
+`gvimhex.cmd` and `gvimhexdiff.cmd` are the same two commands again,
+defaulting to `gvim` instead — for double-clicking a file, or wiring into
+the Explorer context menu below, where there is no console for `vim` to run
+in and no way to pass `VIMHEX_VIM` in anyway. They delegate to
+`vimhex.cmd`/`vimhexdiff.cmd` rather than duplicating their argument
+parsing, so keep all four files together; a `VIMHEX_VIM` already set in
+your environment overrides `gvim` there too.
+
+**Where to put them.** They only need to be on `PATH`, and the plugin's own
+directory is the tidiest place to point at, because then updating the plugin
+updates the commands:
+
+```
+%USERPROFILE%\vimfiles\pack\plugins\start\hexpair
+```
+
+Add it through *Settings → System → About → Advanced system settings →
+Environment Variables* (or `rundll32 sysdm.cpl,EditEnvironmentVariables`),
+editing **Path** under *User variables*. Do not do it with
+`setx PATH "%PATH%;..."`: `%PATH%` there is the system and user paths already
+joined together, so that writes the whole lot into your user `Path` and
+truncates it at 1024 characters.
+
+Copying the four files into a directory you already have on `PATH` works
+just as well — they find Vim through `PATH` or `VIMHEX_VIM` rather than
+through where they sit themselves. `gvimhex.cmd`/`gvimhexdiff.cmd` do
+depend on where `vimhex.cmd`/`vimhexdiff.cmd` sit, though: copy all four
+together, not a pair on their own.
+
+#### From the Explorer context menu
+
+Two ready-made files ship with the plugin for this: `vimhex-contex-entry.add.reg`
+adds one **`vimhex` submenu** in a single import, and
+`vimhex-contex-entry.remove.reg` takes it out again. **For a default install
+there is nothing to edit** — double-click it, or run
+`reg import vimhex-contex-entry.add.reg`. The paths in it are written against
+`%USERPROFILE%\vimfiles\pack\plugins\start\hexpair`, the package directory the
+install instructions above use.
+
+```
+vimhex ▸  gvimhex this                  the file you right-clicked, in hex
+          ──────────────────────────
+          gvimhexdiff select as left    this is the left-hand side
+          gvimhexdiff select as right   this is the right-hand side
+```
+
+The folder is a verb carrying `ExtendedSubCommandsKey` and no `\command` of
+its own; the key it names holds the children under its own `\shell`. That
+indirection is what keeps all of it inside `HKEY_CURRENT_USER`, needing no
+administrator rights — the older `SubCommands` scheme resolves its verbs
+against `HKLM`'s CommandStore, which does. Children appear in alphabetical
+order of their *key* name, hence the `10-`/`20-`/`30-` prefixes, and the
+horizontal rule is `"CommandFlags"=dword:00000020` (`ECF_SEPARATORBEFORE`)
+on the item below it.
+
+**The two diff entries are symmetric — select either side first.** Each one
+records its side and stops there; whichever completes the pair opens the
+comparison and clears both selections, so the next diff starts clean.
+Selecting the same side twice just overwrites it. There is no order to get
+wrong, which is also why there is no "you have not picked a left file yet"
+error to run into.
+
+**A console window flashes while the `.cmd` runs**, and with a Windows
+Terminal window already open it can take the focus from the file manager you
+invoked the menu in. That is accepted rather than worked around, deliberately:
+hiding it needs either the Windows Script Host — whose "run this command with
+a hidden window" pattern is one of the shapes antivirus heuristics look for,
+and which Microsoft is removing from Windows — or an unsigned stub `.exe`,
+which is usually worse for antivirus rather than better. The trade was
+weighed and the flash won.
+
+On Windows 11 this is a "legacy" context menu, so it lives under *Show more
+options* (Shift+F10 opens that directly). File managers that use the classic
+menu — Total Commander among them — show it straight away.
+
+Installed somewhere else? Re-generate the pair rather than editing them:
+
+```sh
+python3 make-context-entry-reg.py "D:\your\path\hexpair"
+```
+
+Re-generating is the supported route because the values are `REG_EXPAND_SZ`,
+the one registry string type whose `%USERPROFILE%` is expanded when the shell
+reads it — a plain `REG_SZ` would send Explorer looking for a folder literally
+named `%USERPROFILE%`. The `.reg` text format can only write that type as
+`hex(2):` followed by the string's UTF-16LE bytes, which is why these two
+files are generated and carry a "do not edit by hand" banner. What the first
+entry decodes to:
+
+```
+[HKEY_CURRENT_USER\Software\Classes\*\shell\vimhex]
+"MUIVerb"="vimhex"
+"Icon"    = %USERPROFILE%\...\hexpair\icons\hexpair-open.ico
+"ExtendedSubCommandsKey"="hexpair.ContextMenu"
+
+[HKEY_CURRENT_USER\Software\Classes\hexpair.ContextMenu\shell\10-open]
+"MUIVerb"="gvimhex this"
+"Icon"    = %USERPROFILE%\...\hexpair\icons\hexpair-open.ico
+(command) = cmd.exe /c ""%USERPROFILE%\...\hexpair\gvimhex.cmd" "%1""
+```
+
+The expansion order is what makes this safe: the shell expands the
+environment variables when it reads the value, and only then substitutes
+`%1`. Once every `%VAR%` is consumed as a pair, the single remaining `%` is
+the one in `%1`, so it cannot be mis-paired into a bogus variable name.
+
+Under `HKEY_CURRENT_USER` it needs no administrator rights and touches
+nobody else's account; deleting the `hexpair` key removes the entry again,
+or import `vimhex-contex-entry.remove.reg`. It calls `gvimhex.cmd`, so it
+opens the GUI without any `VIMHEX_VIM` set — a verb has no way to pass one
+in. A console window appears for as long as the `.cmd` runs, which is a
+fraction of a second — the only way to avoid it entirely is a GUI stub
+executable, which this plugin does not ship. If that window appears and
+disappears again *without* gVim ever showing up, something failed too fast
+to read — `gvimhex.cmd`/`gvimhexdiff.cmd` (and `vimhex.cmd`/`vimhexdiff.cmd`)
+now pause and print why before closing whenever the launch itself fails,
+most commonly because `gvim`/`vim` is not on `PATH`; the fix that needs no
+`.reg` re-edit is setting `VIMHEX_VIM` to its full path in your user
+environment.
+
+The three `.ico` files are generated, not hand-drawn — a small V mark in
+Vim's own green, plus a `0x` badge (bottom-right) marking these as
+hexpair's, and on the diff pair a bigger badge (bottom-left) of two window
+panes, echoing `vimhexdiff`'s own actual `vsplit`: blue on the left, orange
+on the right, the side that entry represents shown at full colour and the
+other dimmed, since at 16px neither text nor an arrow reads reliably but
+colour still does. `icons/build.py` renders them (`icons/design.py`,
+`icons/rasticon.py` — a from-scratch PNG/ICO encoder, no image library);
+only the `.ico` output ships in the release tarball, the generator stays a
+development file.
+
+**Two selected files is not science fiction, but it is not one click
+either.** Explorer runs a context-menu command *once per selected file*,
+each invocation getting its own `%1`; there is no `%2`. Getting all of a
+selection into a single invocation needs a `DropTarget` or `ExplorerCommand`
+COM handler — a registered in-process server, which is a different kind of
+project from a batch file. So `vimhexdiff.cmd` (and `gvimhexdiff.cmd`) does
+what every diff tool on Windows does instead, in two clicks:
+
+The other two entries in the submenu are the same shape, differing only in
+the icon, the caption and the `/left` or `/right` argument handed to
+`gvimhexdiff.cmd`:
+
+```
+[HKEY_CURRENT_USER\Software\Classes\hexpair.ContextMenu\shell\20-left]
+"MUIVerb"="gvimhexdiff select as left"
+"CommandFlags"=dword:00000020        ← the separator above this item
+(command) = … "…\gvimhexdiff.cmd" "/left" "%1"
+
+[HKEY_CURRENT_USER\Software\Classes\hexpair.ContextMenu\shell\30-right]
+"MUIVerb"="gvimhexdiff select as right"
+(command) = … "…\gvimhexdiff.cmd" "/right" "%1"
+```
+
+Right-click one file and *select as left*, the other and *select as right* —
+**in whichever order suits you**. Each records its side in
+`%LOCALAPPDATA%\hexpair\diff-left.txt` or `diff-right.txt` and stops there;
+whichever completes the pair opens the comparison and clears both, so the
+next diff starts from a clean slate rather than silently reusing a stale
+selection. Selecting the same side twice overwrites it — changing your mind
+about one half says nothing about the other.
+
+Both files are checked before the comparison opens, and if one of them has
+been moved or deleted in the meantime the message names it by *side* — left
+or right — and clears only *that* selection. The other one is kept, whether
+it is the selection you just made or the one already remembered, so you are
+never asked to re-pick a file nothing went wrong with; selecting a new
+partner for it runs the comparison straight away. The file you just clicked
+is checked too, since a file manager showing a listing it has not refreshed
+will hand the entry a path that is no longer there. The same two steps work
+from `cmd.exe`:
+
+```bat
+vimhexdiff /left old.img
+vimhexdiff /right new.img
+```
+
+**The diff opens maximized**, in gVim — two hex views side by side want the
+full width, and a narrow window was also what made Vim stop for a hit-enter
+prompt on each file it opened: a long path plus the file size makes that
+message longer than one line, which is exactly what triggers the prompt.
+`vimhexdiff` therefore sets `shortmess+=F` (which drops the message
+outright) and maximizes with the Win32 GUI's own `:simalt ~x`, guarded by
+`has('gui_running')` so console Vim is unaffected.
+
 A buffer hexpair has touched is in one of two views, and `:HexPairToggle`
 moves between them:
 
@@ -329,14 +668,25 @@ moves between them:
 | **Hex page** | the page as an xxd dump — offset, hex and ASCII columns — between two banner lines |
 | **Windowed text** | the same page's raw bytes as text, between the same banner lines |
 
-There is deliberately **no way back** to the plain buffer: once a buffer
-holds one page instead of the whole file, showing it as the file again
-would be a lie, and a plain `:w` would truncate the file down to that
-page. Close and reopen the file for the ordinary view.
+For a file you opened normally (`vim file.md`) and then toggled to hex with
+`:HexPairToggle`, `:HexPairUnhex` is the way back: it re-opens the whole
+file as the ordinary, unpaged, non-binary view it was before, with the
+`'binary'`, `'fileencoding'`, `'fileformat'` and the other options it had
+then, and the cursor where it was. The buffer is re-read, not converted,
+because a page is not the file and dressing it up as one would be a lie.
+
+A file opened **as** hex (`:HexPairOpen`, `vimhex`) has no plain buffer to
+go back to — it may have had no text view at all, and its file may be far
+too large to load for the purpose — so `:HexPairUnhex` refuses it and says
+so, naming the file to `:edit` instead. A paged view that was never backed
+by a file (e.g. piped into Vim) is refused for the same reason. In neither
+case would a plain `:w` help: it would truncate the file down to that one
+page.
 
 | Command | Description |
 |---|---|
 | `:HexPairToggle` | Move between the hex page view and the windowed text view |
+| `:HexPairUnhex[!]` | A buffer that toggled from a plain buffer: back to the ordinary, unpaged, non-binary view, re-opened with the options it had before; `!` discards unwritten edits to the page. A buffer opened as hex has no plain view to return to, and this says so |
 | `:HexPairGoHex` / `:HexPairGoAscii` / `:HexPairSwap` | Move the cursor between the HEX and ASCII columns, staying on the same byte |
 | `:HexPairRefresh` | Regenerate the offset and ASCII columns from the current hex payload, without writing |
 | `:HexPairOpen {file} [page]` | Open `{file}` paged, without loading it; `[page]` takes `$` and `+N`/`-N` too |
@@ -354,6 +704,7 @@ page. Close and reopen the file for the ordinary view.
 | `:HexPairReplaceAllInPage {pattern} / {bytes}` | ... over every match on the page in view |
 | `:HexPairDiff[!] [file]` | Compare with `{file}`, marking the bytes that differ; `!` stops |
 | `:HexPairDiffNext` / `:HexPairDiffPrev` | Walk to the next/previous byte where the two files differ |
+| `:HexPairDiffShow` | What the compared file holds at the cursor, or over a Visual selection — including that it has nothing there |
 | `:HexPairMark {name}` / `:HexPairGoMark[!] {name}` / `:HexPairMarks` / `:HexPairMarkDelete {name}` | Remember a byte of the file, jump back to it, list them, drop one |
 | `:HexPairSplit [page]` / `:HexPairVSplit [page]` | A second view of the same file in a new window, showing `[page]` (default: this view's) |
 
@@ -379,7 +730,55 @@ hexpair: byte 66 (0x42) of 512: 41 42 43 44 45 46 47 48
   utf-8    U+0041 'A' (1 byte)
   utf-16   U+4241 '䉁' (2 bytes)       U+4142 '䅂' (2 bytes)
   utf-32   U+44434241 - past U+10FFFF  U+41424344 - past U+10FFFF
+  block    Basic Latin
 ```
+
+**The last rows say what the character _is_.** They describe the UTF-8
+reading, which is the one with no byte order to choose. `name` appears for
+a code point you cannot see — every C0 and C1 control, `DEL`, and the space
+and format characters a hex editor meets constantly; `block` is the Unicode
+block, which answers *what script even is this*; and `bom` appears when the
+bytes at the cursor are a byte order mark, which is the one thing the UTF-8
+rows cannot say, since `ff fe` is not UTF-8 at all. The byte order mark is
+the one named character that gets no `block` row: `U+FEFF` is assigned to
+*Arabic Presentation Forms-B* only because Unicode lays out blocks by
+contiguity and `FE70..FEFF` is the range that happens to close the BMP. It
+is a format character that belongs to no script, so a block row would only
+add a script where there is none — the name row already says what it is.
+So an `ESC` at the start of a UTF-16LE file ends:
+
+```
+  utf-8    U+001B (1 byte)
+  name     ESC (escape), a C0 control
+  bom      utf-16le byte order mark
+```
+
+There is deliberately no full character name — the `LATIN SMALL LETTER E
+WITH ACUTE` kind. That needs `UnicodeData.txt`, two megabytes of names for
+a hundred and fifty thousand characters, which is a different order of
+thing from a table of ranges and does not belong inside a Vim plugin. The
+block table is Unicode 16.0.0, generated by `make-unicode-blocks.py` from
+the file it pins by digest — by hand, when the Unicode version is bumped;
+nothing is generated at package time or on your machine. It is derived from
+the Unicode Character Database under the Unicode License V3, whose notice
+`NOTICE.md` carries in full.
+
+**It works outside a hex view too.** `<Leader>i` in an ordinary buffer of
+ordinary text answers the same questions — *what is this character, is that
+a NBSP, does this file start with a BOM* — with two differences it tells you
+about. The bytes are **Vim's, not the file's**: a paged view holds what is
+on disk because hexpair opened it `++bin`, while an ordinary buffer holds
+what Vim read it into, so a file read as latin1 into a UTF-8 Vim is latin1
+on disk and UTF-8 in memory. A `note` row says so whenever the two can
+differ:
+
+```
+  note     Vim's bytes, not the file's: 'fileencoding' is latin1, this Vim holds utf-8
+  note     a line break reads 0a here; 'fileformat' is dos, so the file has 0d 0a
+```
+
+And nothing is marked on screen there, since the marking belongs to the
+highlighting a paged buffer has and an ordinary one does not.
 
 The bytes it read are marked on the page as well (`HexPairInspect`, which
 follows `Visual` by default), in both columns, for as long as the cursor
@@ -800,7 +1199,7 @@ own bytes are hashed when it is read and again before it is patched.
 for scripts.
 
 Only a write that **shortens** a file, and `:w {file}`, need a newer Vim
-than the rest of the plugin: `+num64` and patch 8.2.4906+, for
+than the rest of the plugin: `+num64` and patch 9.0.0795+, for
 `readblob()`, checked when such a write is attempted and refusing just
 that write. Viewing, navigating, same-length writes and inserts run on
 Vim 8.0 with nothing but `xxd`. Details: `:help hexpair-paged`.
@@ -834,14 +1233,20 @@ exist to avoid — they read only the page they show.
 
 ## Requirements
 
-- Vim 8.0 with patch 8.0.0794 (`count()` over a string), which every
-  Vim 8.0 point release since 2017 has. Native packages need Vim 8
-  anyway; a manual installation needs the patch level. Shortening a
-  file, `:w {file}`, and inserting bytes with more than half the file
-  after them additionally need patch 8.2.4906 and `+num64`, checked at
-  the moment such a write is attempted - see
-  [above](#pages). The baseline is tested: the suite runs against a
-  Vim 8.0.0000 build, where everything but those three works.
+- **Vim 8.0**, any patch level — 8.0.0000 itself will do. That covers
+  RHEL 8 and its rebuilds, which ship `vim` 8.0.1763 and are supported
+  into 2029.
+- **Shortening a file, `:w {file}`, and inserting bytes with more than
+  half the file after them** additionally need **Vim 9.0.0795** with
+  `+num64` — that is the patch that gave `readblob()` an offset and a
+  size. It is checked at the moment such a write is attempted, and only
+  that write is refused, with a message saying so; everything else keeps
+  working. See [above](#pages).
+- The floor is not a promise, it is a build: CI compiles Vim 8.0.0000
+  from source on every push and runs the whole suite against it, which
+  passes there exactly as it does on a current Vim — the checks for the
+  three operations above are replaced by checks that they are refused and
+  the file is left alone.
 - The `xxd` utility, which ships with Vim. It is looked up on `PATH`
   first and then in the Vim runtime directory (`$VIMRUNTIME`), so on
   Windows the bundled `xxd.exe` is found even when it is not on `PATH`.
@@ -856,6 +1261,11 @@ Project notes for AI-assisted development live in
 large-file mode**.
 
 ## License
+
+The Unicode block table inside `plugin/hexpair.vim` is derived from the
+Unicode Character Database and carries its own notice — see `NOTICE.md`,
+which is bundled in every release. It does not change the terms of the
+plugin.
 
 Distributed under the same terms as Vim itself (the Vim License) — see
 [LICENSE.md](LICENSE.md). Release notes are in

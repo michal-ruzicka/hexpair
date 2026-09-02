@@ -1,8 +1,8 @@
 " hexpair.vim - Hex viewing with hex<->ASCII pair highlighting
 " Maintainer:  Michal Růžička <ruzicka.mich@gmail.com>
 " URL:         https://github.com/michal-ruzicka/hexpair
-" Version:     2.2.0
-" Date:        2026-08-28
+" Version:     2.3.0
+" Date:        2026-09-02
 " License:     Vim License - same terms as Vim itself (see LICENSE.md
 "              or :help license); SPDX-License-Identifier: Vim
 "
@@ -22,8 +22,8 @@
 " :w writes just the page back: an edit that kept its length patches it
 " in place, one that changed the length splices the file.
 "
-" Views:            :HexPairToggle, :HexPairGoHex, :HexPairGoAscii,
-"                   :HexPairSwap, :HexPairRefresh
+" Views:            :HexPairToggle, :HexPairUnhex, :HexPairGoHex,
+"                   :HexPairGoAscii, :HexPairSwap, :HexPairRefresh
 " Pages:            :HexPairOpen, :HexPairPageNext, :HexPairPagePrev,
 "                   :HexPairPageGoto, :HexPairGoOffset, :HexPairPages,
 "                   :HexPairSplit, :HexPairVSplit
@@ -31,7 +31,8 @@
 " Finding bytes:    :HexPairFind, :HexPairFindText, :HexPairFindNext,
 "                   :HexPairFindPrev, :HexPairReplace,
 "                   :HexPairReplaceAllInPage
-" Comparing:        :HexPairDiff, :HexPairDiffNext, :HexPairDiffPrev
+" Comparing:        :HexPairDiff, :HexPairDiffShow, :HexPairDiffNext,
+"                   :HexPairDiffPrev
 " Marks:            :HexPairMark, :HexPairGoMark, :HexPairMarks,
 "                   :HexPairMarkDelete
 " Functions:        HexPairStatus() for 'statusline', HexPairOpenFile()
@@ -265,13 +266,23 @@ highlight default link HexPairInspect Visual
 " --------------------------------------------------------------------------
 "
 " ONLY the splice - a write that shortens the file, a growing one whose
-" tail is more than half of it, and ':w {file}' - needs readblob(), available
-" since patch 8.2.4906, and 64-bit Numbers for large absolute offsets
-" (+num64, standard on modern builds). Everything else - reading pages,
-" navigating them, the same-length in-place write and the in-place
-" insert - runs on the Vim 8.0 baseline the rest of the plugin requires,
-" so the check is made at the moment a splice is actually needed rather
-" than refusing to load the feature at all. Factored into a function of an
+" tail is more than half of it, and ':w {file}' - needs readblob() with an
+" OFFSET AND A SIZE, and 64-bit Numbers for large absolute offsets (+num64,
+" standard on modern builds). Everything else - reading pages, navigating
+" them, the same-length in-place write and the in-place insert - runs on
+" the Vim 8.0 baseline the rest of the plugin requires, so the check is
+" made at the moment a splice is actually needed rather than refusing to
+" load the feature at all.
+"
+" The patch number is 9.0.0795, and it is worth saying where it comes from,
+" because this gate named 8.2.4906 for a long time and that was wrong by a
+" major release. readblob() itself arrived in 8.2.2343 and reads the WHOLE
+" file; the arguments this code cannot do without were added by 9.0.0795
+" ("Problem: readblob() always reads the whole file", listed under Vim 9.0's
+" new features). 8.2.4906 is an unrelated patch about MS-Windows
+" transparent backgrounds. A Vim in between passed the gate and then died
+" on E118 inside the copy - which, during the copy BACK, is a target left
+" half written. Checked against Vim's own version9.txt, not from memory. Factored into a function of an
 " explicit boolean (rather than calling has() internally) so its
 " failure branch - which cannot be produced by an actual old Vim in
 " this project's test environment - can be tested by passing 0.
@@ -285,7 +296,7 @@ function! HexPairPagedGateMessage(supported, ...) abort
     return ''
   endif
   let what = a:0 ? a:1 : 'rewriting the file to change its length'
-  return printf('hexpair: %s needs Vim patch 8.2.4906 or later with ', what)
+  return printf('hexpair: %s needs Vim patch 9.0.0795 or later with ', what)
         \ . '+num64 (readblob(), 64-bit Numbers for large file offsets); '
         \ . 'this Vim does not qualify - nothing was written. An edit that '
         \ . "keeps the page's length, or that inserts bytes with no more "
@@ -295,19 +306,66 @@ endfunction
 " Checked where it matters: s:Splice(). has() cannot be faked, so the
 " message itself lives in the function above, which the suite tests
 " directly.
-function! s:SpliceSupported() abort
-  return has('patch-8.2.4906') && has('num64')
+"
+" Global for the other half of that: the suite has to ask the Vim it is
+" pointed at whether the splice checks below can run at all, and asking
+" THIS function rather than restating the patch number keeps the answer and
+" the gate from ever disagreeing.
+function! HexPairPagedSpliceSupported() abort
+  return has('patch-9.0.0795') && has('num64')
 endfunction
 
 " Global (not script-local) so it is directly testable: a positive
 " multiple of bytesperline is required, and both are passed explicitly
 " rather than read from g: internally, so tests do not need to fiddle
 " with global state to exercise the error branch.
+" The largest page this can work in, and not an arbitrary tidy number: the
+" byte-moving primitives hand a page's length to xxd's `-l` (a C long, so
+" 32-bit on Windows) and to PowerShell's [int] (32-bit everywhere). A page
+" over that would overflow both silently rather than fail, which is the
+" failure mode this whole area has already produced once.
+"
+" It is far larger than anything sensible - a page is held as hex, at two
+" characters a byte, and rendered as dump lines at nearly four, so a 2 GiB
+" page wants some 8 GiB of Vim. The cap is where CORRECTNESS ends; comfort
+" ended long before.
+let s:pagesizemax = 2147483647
+
+" xxd's own ceiling on -c, from xxd.c: `#define COLS 256`, and a -c above
+" it exits with "invalid number of columns". Checked here so that the
+" answer is about the setting rather than a command that failed for
+" reasons the message does not connect to it.
+let s:bytesperlinemax = 256
+
 function! HexPairPagedSizeError(size, bytesperline) abort
+  " Checked first, and explicitly rather than by the modulo below: Vim
+  " answers `512 % 0` with 0 rather than an error, so a zero width sails
+  " through "is a multiple of" and only falls over later, in xxd -c 0 and
+  " in every column sum on the page.
+  "
+  " The range is the whole requirement - the width itself has to divide
+  " nothing, and odd ones like 23 are as good as 16. What has to divide is
+  " the PAGE, which the next check states, and saying both here is the
+  " point: "positive" alone leaves the reader wondering what else is
+  " wanted of the number.
+  if a:bytesperline <= 0 || a:bytesperline > s:bytesperlinemax
+    return printf('hexpair: g:hexpair_bytes_per_line (%d) must be between '
+          \ . '1 and %d - xxd''s own limit for -c. Any value in that range '
+          \ . 'works and it need not divide anything, but '
+          \ . 'g:hexpair_page_size must be a multiple of it.',
+          \ a:bytesperline, s:bytesperlinemax)
+  endif
   if a:size <= 0 || a:size % a:bytesperline != 0
     return printf('hexpair: g:hexpair_page_size (%d) must be a positive '
           \ . 'multiple of g:hexpair_bytes_per_line (%d)',
           \ a:size, a:bytesperline)
+  endif
+  if a:size > s:pagesizemax
+    return printf('hexpair: g:hexpair_page_size (%d) is over the %d-byte '
+          \ . 'limit - a page''s length is handed to xxd''s -l and to '
+          \ . 'PowerShell as a 32-bit number, and a larger one would '
+          \ . 'overflow instead of failing. Pages are meant to be small; '
+          \ . 'the default is 128 KiB.', a:size, s:pagesizemax)
   endif
   return ''
 endfunction
@@ -361,6 +419,27 @@ endfunction
 " Resolve the xxd executable: PATH first, then the Vim runtime directory,
 " where xxd.exe ships on Windows even when it is not on PATH.
 " Returns '' if not found.
+" xxd, resolved once and remembered, and the ONLY way the rest of this file
+" names it. The variable used to be assigned by the two entry points alone,
+" on the assumption - written down in s:HexOfString(), which had its own
+" copy of this - that everything runs with a page open. Test hooks do not,
+" and a caller that arrived any other way got `E121: Undefined variable`
+" instead of a message about xxd. Found by test/probe-minimal.cmd, calling
+" the reader cold.
+"
+" It THROWS rather than returning empty: every caller is already inside the
+" try that turns a hexpair error into a refused operation with a message,
+" and an empty command interpolated into a printf is not.
+function! s:Xxd() abort
+  if !exists('s:xxd') || s:xxd ==# ''
+    let s:xxd = s:ResolveXxd()
+  endif
+  if s:xxd ==# ''
+    throw 'hexpair: xxd not found in PATH nor in $VIMRUNTIME'
+  endif
+  return s:xxd
+endfunction
+
 function! s:ResolveXxd() abort
   if executable('xxd')
     return 'xxd'
@@ -1490,8 +1569,34 @@ function! s:PageLabel() abort
         \ ? '[unnamed buffer]' : b:hexpair_page_file
 endfunction
 
+" The paged file's size, or an error saying why there isn't one.
+"
+" getfsize() answers -1 when it cannot see the file and -2 when the size
+" does not fit in a Number - which on a Vim without +num64 is EVERY file
+" over 2 GiB, the size this plugin exists for. Neither is a size, and
+" neither is zero: taken as "<= 0 means empty", a 5 GiB file opened on such
+" a Vim as an empty view, with the page count, the bounds and every offset
+" derived from it silently meaningless.
+"
+" Zero itself is a real answer and stays one - an empty file is openable and
+" says so (s:LoadEmpty).
+function! s:FileSize(file) abort
+  let size = getfsize(a:file)
+  if size == -2
+    throw printf('hexpair: this Vim cannot measure %s - getfsize() says the '
+          \ . 'size does not fit in a Number, which means a build without '
+          \ . '+num64 and a file over 2 GiB. :version says whether this one '
+          \ . 'has it.', a:file)
+  endif
+  if size < 0
+    throw printf('hexpair: cannot read the size of %s - is it still there?',
+          \ a:file)
+  endif
+  return size
+endfunction
+
 function! s:ResolvePage(file, pagesize, idx) abort
-  let total = getfsize(a:file)
+  let total = s:FileSize(a:file)
   let totalpages = HexPairPagedTotalPages(a:pagesize, total)
   let [base, len] = HexPairPagedBounds(a:idx, a:pagesize, total)
   if base < 0
@@ -1513,8 +1618,10 @@ endfunction
 " friends running past either end.
 function! s:LoadPage(pageidx) abort
   " No bytes means no pages - but the file is still perfectly openable,
-  " and saying so is more use than refusing to show it.
-  if getfsize(b:hexpair_page_file) <= 0
+  " and saying so is more use than refusing to show it. s:FileSize()
+  " throws for the answers that are not sizes at all, so this really is
+  " "empty" and not "unmeasurable" wearing the same clothes.
+  if s:FileSize(b:hexpair_page_file) <= 0
     call s:LoadEmpty()
     return 1
   endif
@@ -1522,6 +1629,90 @@ function! s:LoadPage(pageidx) abort
         \ s:ResolvePage(b:hexpair_page_file, b:hexpair_page_size, a:pageidx)
   if base < 0
     return 0
+  endif
+
+  let n = g:hexpair_bytes_per_line
+
+  " Read the page BEFORE anything about this buffer changes. Every
+  " assignment below says "this buffer is showing page N", and a write
+  " believes them: state that had moved on while the dump had not would
+  " offer the PREVIOUS page's bytes for patching in at this page's
+  " offset. So the one step that can fail goes first, and a failure
+  " leaves the buffer exactly as it was, still showing the page it was
+  " showing.
+  "
+  " xxd writes to a FILE that readfile() then reads, rather than the
+  " buffer being filtered through '%!'. Not a detail on Windows: xxd
+  " opens a dump in TEXT mode there (xxd.c: BIN_ASSIGN(fpo = stdout,
+  " revert) for the stream, BIN_WRITE(revert) for a named output file -
+  " binary only when reverting), so every dump line comes back
+  " CRLF-terminated. A filter read leaves what becomes of that CR to
+  " 'fileformats' auto-detection, which is the USER's option: with
+  " `set fileformats=unix` in a vimrc nothing strips it, and the dump
+  " arrives fringed with a ^M on every line. readfile() in text mode
+  " drops a CR before a NL whatever the options say - which is why the
+  " same dump built by s:ToHexView() never showed one, and why every
+  " other xxd call in this file already goes through a file.
+  " Past what xxd can seek to, build the dump here instead - see
+  " s:XxdCanSeek(). This is the page the user actually LOOKS at, so getting
+  " it from a clamped seek is not a subtle wrongness: every page past 2 GiB
+  " showed the bytes at 2 GiB, so paging backwards from the end of a 120 GiB
+  " file showed the same page over and over.
+  "
+  " It cannot be done by handing xxd the bytes with -o either: the display
+  " offset is an unsigned long in xxd too, so the offset column would wrap
+  " at 4 GiB even when the bytes were right.
+  "
+  " Past that limit PowerShell fetches the page's bytes ONCE, into a temp
+  " file, and xxd reads both the dump and the flat hex out of it - two
+  " things the page needs and which used to be two separate reads of the
+  " same range. Starting the process is the expensive part here, so doing
+  " it twice a page turn was half the cost of one.
+  let pagehex = ''
+  if !s:XxdCanSeek(base + len)
+    let raw = s:SeekReadRaw(b:hexpair_page_file, base, len)
+    let dumpfile = tempname()
+    try
+      if raw ==# ''
+        let dump = []
+      else
+        call s:Run(printf('%s -g 1 -c %d %s %s', s:Xxd(), n,
+              \ shellescape(raw), shellescape(dumpfile)))
+        " xxd numbered the temp file from zero, since that is where it
+        " starts. The offset column is the one thing it cannot be told
+        " (-o is an unsigned long too, so it would wrap at 4 GiB), so it
+        " is rewritten here - 8192 lines, 25 ms, against the 3.5 SECONDS
+        " that formatting the whole page in VimScript cost.
+        let dump = HexPairPagedRebaseDump(readfile(dumpfile), base, n)
+        let pagehex = s:HexFromFile(raw)
+      endif
+    finally
+      call delete(dumpfile)
+      if raw !=# ''
+        call delete(raw)
+      endif
+    endtry
+  else
+    let dumpfile = tempname()
+    try
+      call s:Run(printf('%s -s %d -l %d -g 1 -c %d %s %s', s:Xxd(),
+            \ base, len, n, shellescape(b:hexpair_page_file),
+            \ shellescape(dumpfile)))
+      let dump = readfile(dumpfile)
+    finally
+      call delete(dumpfile)
+    endtry
+  endif
+
+  " xxd runs through the shell, which can fail for reasons Vim never
+  " reports - leaving an empty or short dump presented as the page, and
+  " a later :w patching that into the file. The dump's shape is known
+  " exactly, so check it: one line per bytesperline bytes.
+  let expect = (len + n - 1) / n
+  if len(dump) != expect
+    throw printf('hexpair: reading page %d of %s produced %d lines, '
+          \ . 'expected %d - is xxd working?',
+          \ a:pageidx + 1, b:hexpair_page_file, len(dump), expect)
   endif
 
   let b:hexpair_page_index      = a:pageidx
@@ -1533,10 +1724,15 @@ function! s:LoadPage(pageidx) abort
   " One read, two uses: the bytes are what the modified-byte highlight
   " compares against, and their hash is what a write checks the page
   " against (s:CheckFresh()).
-  let b:hexpair_page_hex        = s:PageHex(base, len)
+  " On the slow path the bytes were read once above and pagehex already
+  " holds them; re-reading here would be a second process for the same
+  " range. On the fast path xxd is cheap enough that the plain read wins
+  " over threading a value through.
+  let b:hexpair_page_hex        = s:XxdCanSeek(base + len)
+        \ ? s:PageHex(base, len) : pagehex
   let b:hexpair_page_digest     = b:hexpair_page_hex ==# '' || !exists('*sha256')
         \ ? '' : sha256(b:hexpair_page_hex)
-  let b:hexpair_n               = g:hexpair_bytes_per_line
+  let b:hexpair_n               = n
   " Where the page's FIRST line starts its hex column; later lines
   " derive their own (s:PagedLineLayout()), which differs only on a
   " page that straddles an offset-width change.
@@ -1544,48 +1740,16 @@ function! s:LoadPage(pageidx) abort
   " Snapshotted like b:hexpair_n, and for the same reason: every mapping
   " between a line number and a byte offset counts on it.
   let b:hexpair_page_header     = g:hexpair_ruler ? 2 : 1
+  let b:hexpair_banner_top      = s:BannerTop(a:pageidx, totalpages, base,
+        \ len, total, s:PageLabel())
+  let b:hexpair_banner_bottom   = s:BannerBottom(a:pageidx, totalpages)
 
   " Replacing the page must not be an undoable edit: undo history that
   " survived a page turn would let a single |u| put the bytes of a
   " DIFFERENT part of the file into a buffer that now claims to be this
   " page - and a :w would then patch them in at this page's offset.
-  " |clear-undo|: making the change with 'undolevels' at -1 discards the
-  " history; restoring the option afterwards resumes normal undo, so
-  " edits made to the page itself stay undoable. Buffer-local, not
-  " global: 'undolevels' is global-local, and a buffer-local value would
-  " otherwise keep winning over the global one and the history survive.
-  let save_ul = &l:undolevels
-  setlocal noreadonly modifiable
-  try
-    setlocal undolevels=-1
-    silent %delete _
-    silent execute '%!' . s:xxd . printf(' -s %d -l %d -g 1 -c %d %s',
-          \ base, len, b:hexpair_n, shellescape(b:hexpair_page_file))
-    let b:hexpair_banner_top = s:BannerTop(a:pageidx, totalpages, base,
-          \ len, total, s:PageLabel())
-    let b:hexpair_banner_bottom = s:BannerBottom(a:pageidx, totalpages)
-    call append(0, b:hexpair_banner_top)
-    if b:hexpair_page_header > 1
-      call append(1, s:RulerLine(b:hexpair_page_hexstart, b:hexpair_n))
-    endif
-    call append(line('$'), b:hexpair_banner_bottom)
-  finally
-    let &l:undolevels = save_ul
-  endtry
-
-  " xxd runs through the shell, which can fail for reasons Vim never
-  " reports - leaving an empty or short buffer presented as the page,
-  " and a later :w patching that into the file. The dump's shape is
-  " known exactly, so check it: one line per bytesperline bytes, plus the
-  " header (banner, and the ruler when there is one) and the closing
-  " banner.
-  let expect = (len + b:hexpair_n - 1) / b:hexpair_n
-        \ + b:hexpair_page_header + 1
-  if line('$') != expect
-    throw printf('hexpair: reading page %d of %s produced %d lines, '
-          \ . 'expected %d - is xxd working?',
-          \ a:pageidx + 1, b:hexpair_page_file, line('$'), expect)
-  endif
+  " s:SetLines() is what discards it, and says how.
+  call s:SetLines(s:HexViewLines(dump))
 
   " The other file's bytes for THIS page, when there is one to compare
   " against; a page turn moves the window on both files at once.
@@ -1872,7 +2036,7 @@ function! s:HasOffsetOption() abort
     " otherwise runs on the 8.0 baseline the rest of the plugin does.
     call writefile(['A'], probe, 'b')
     call s:Run(printf('%s -g 1 -c 16 -o 16 %s %s',
-          \ s:xxd, shellescape(probe), shellescape(out)))
+          \ s:Xxd(), shellescape(probe), shellescape(out)))
     let lines = readfile(out)
     let s:has_o = !empty(lines) && lines[0] =~# '^00000010: 41'
   catch
@@ -1891,24 +2055,18 @@ endfunction
 " offsets that xxd -r seeks by.
 function! s:CanonicalDump(src, base, out) abort
   if s:HasOffsetOption()
-    call s:Run(printf('%s -g 1 -c %d -o %d %s %s', s:xxd,
+    call s:Run(printf('%s -g 1 -c %d -o %d %s %s', s:Xxd(),
           \ b:hexpair_n, a:base, shellescape(a:src), shellescape(a:out)))
     return
   endif
-  " Fallback for an xxd without -o: dump from zero and rewrite the offset
-  " column, one printf per line. %x widens past eight digits exactly as
-  " xxd does, so the fallback produces the same text xxd -o would.
-  call s:Run(printf('%s -g 1 -c %d %s %s', s:xxd,
+  " Fallback for an xxd without -o: dump from zero and renumber. The same
+  " job the Windows path past 2 GiB does, so it is the same function -
+  " there were two copies of this loop, which is one more than the number
+  " of places the format can be got right in.
+  call s:Run(printf('%s -g 1 -c %d %s %s', s:Xxd(),
         \ b:hexpair_n, shellescape(a:src), shellescape(a:out)))
-  let lines = readfile(a:out)
-  let i = 0
-  while i < len(lines)
-    let colon = stridx(lines[i], ':')
-    let lines[i] = printf('%08x', a:base + i * b:hexpair_n)
-          \ . strpart(lines[i], colon)
-    let i += 1
-  endwhile
-  call writefile(lines, a:out)
+  call writefile(HexPairPagedRebaseDump(readfile(a:out), a:base,
+        \ b:hexpair_n), a:out)
 endfunction
 
 " A fingerprint of the bytes this page covers, as they are on disk right
@@ -1927,19 +2085,517 @@ endfunction
 " the read fails or the range is empty - every caller treats that as
 " "cannot tell", never as "no bytes". The range may run past the end of
 " the file, in which case what comes back is what there was.
+" The largest offset xxd can seek to, where its own arithmetic is a signed
+" 32-bit long. xxd.c carries the seek in a `long` throughout - `long seekoff`,
+" filled by strtol(), handed to fseek() - and on Windows a long is 32 bits
+" (both MSVC and MinGW are LLP64), so every one of those three steps tops out
+" at 2 GiB - 1. strtol() SATURATES rather than wraps, so an offset past the
+" limit does not fail: it silently becomes 2147483647 and xxd cheerfully
+" reads a page from there.
+"
+" That is the whole of the bug this exists for. On a 120 GiB file compared
+" with a 77 GiB one, every read past 2 GiB came from 2 GiB instead - both
+" files - so a page that should have been wholly past the shorter file's end
+" was compared against real bytes it happened to have there, and came out
+" partly "the same". Under WSL, where a long is 64 bits, the identical
+" hexpair on the identical files was right.
+let s:xxdseekmax = 2147483647
+
+" A byte range as flat lowercase hex, read by Vim rather than by xxd.
+"
+" string() of a Blob is '0z' and then the bytes in uppercase hex - with a
+" '.' every four of them, which is the one thing that has to come back out.
+" That is a great deal faster than formatting the bytes one at a time, and
+" it is checked against the xxd path byte for byte by the suite rather than
+" assumed.
+"
+" Needs readblob()'s offset and size arguments (patch 9.0.0795), the same
+" Vim the splice already asks for. Without it there is no way to read here
+" at all, and saying so is far better than xxd's silent wrong answer.
+" xxd's dump lines for a temp file, renumbered as if it had been read at
+" a:base.
+"
+" Needed because xxd cannot be TOLD the offset: -o adds a display offset,
+" but it holds that in an unsigned long as well, so on Windows the column
+" would wrap at 4 GiB even given the right bytes. Renumbering here is the
+" only part of the dump that has to be done outside xxd - 8192 lines, about
+" 25 ms, where formatting the whole page byte by byte in VimScript cost 3.5
+" seconds and was what made a page turn on a large file take half a minute.
+"
+" The offset column is everything before the FIRST ':', which is the same
+" rule the rest of the plugin reads it by (invariant 1) and is safe against
+" a ':' in the text column, since that comes later in the line. Widths take
+" care of themselves: %08x pads to eight digits and grows past them on its
+" own, which is exactly what xxd does at 4 GiB and again at 64 GiB.
+"
+" Global and pure, so it is testable without a 2 GiB file - which is the
+" only way it gets tested at all.
+function! HexPairPagedRebaseDump(lines, base, n) abort
+  let base = a:base
+  let n = a:n
+  return map(copy(a:lines),
+        \ 'printf("%08x", base + v:key * n) . strpart(v:val, stridx(v:val, ":"))')
+endfunction
+
+
+" The suite's way in to the fallback reader. The offsets that pick it in
+" earnest are past 2 GiB, which is not a fixture anybody wants to generate,
+" so the test asks for the same small range both ways and holds them against
+" each other. That runs for real in Windows CI, where PowerShell is what
+" answers - which is the only place this path can be exercised at all.
+function! HexPairPagedSeekReadHexForTest(file, off, len) abort
+  return s:SeekReadHex(a:file, a:off, a:len)
+endfunction
+
+" And the xxd side of the same comparison.
+function! HexPairPagedFileHexForTest(file, off, len) abort
+  return s:FileHex(a:file, a:off, a:len)
+endfunction
+
+" The writer, likewise. Small offsets here, so it runs where PowerShell is -
+" Windows CI - and exercises the same code a 120 GiB file would, minus the
+" 2 GiB nobody is going to generate to test with.
+function! HexPairPagedSeekWriteRawForTest(dst, off, src) abort
+  return s:SeekWriteRaw(a:dst, a:off, a:src)
+endfunction
+
+" The two that make a length change possible, likewise. Between them and
+" the writer above they are every byte-moving operation the grow and shrink
+" paths perform, so exercising them at small offsets exercises what a
+" resize of a 120 GiB file does - minus the 2 GiB nobody will generate.
+function! HexPairPagedSeekSetLengthForTest(file, newlen) abort
+  return s:SeekSetLength(a:file, a:newlen)
+endfunction
+
+function! HexPairPagedSeekMoveRangeForTest(file, from, len, to) abort
+  return s:SeekMoveRange(a:file, a:from, a:len, a:to)
+endfunction
+
+" And the copy ':w {file}' builds a saved file out of.
+function! HexPairPagedSeekCopyRangeForTest(src, off, len, dst, truncate) abort
+  return s:SeekCopyRange(a:src, a:off, a:len, a:dst, a:truncate)
+endfunction
+
+" Reading a byte range that xxd cannot seek to, on Windows.
+"
+" PowerShell does the SEEK and nothing else: .NET's FileStream.Seek takes an
+" Int64, which is the one thing missing here. Everything after that is xxd's
+" job again, over a temp file starting at offset 0 - because xxd's limit is
+" its SEEK, not its formatting, and formatting 128 KiB in VimScript instead
+" cost 3.5 seconds a page against xxd's 14 milliseconds.
+"
+" readblob() was the obvious fallback and is not one: read_blob() in Vim's
+" blob.c declares a plain `struct stat` and calls plain fstat(), where the
+" rest of Vim uses stat_T (`struct _stat64` on Windows - vim.h says why).
+" st_size is a 32-bit _off_t there, so for a large file the length it
+" computes goes negative and read_blob() returns an EMPTY BLOB AND SUCCESS,
+" with nothing to catch. That is a Vim bug; until it is fixed, PowerShell is
+" what is left. It is an external tool, which this plugin otherwise refuses
+" to depend on - but it is Windows-only, Windows ships it, and the choice is
+" against not reading the file at all rather than against xxd.
+"
+" Everything goes through the ENVIRONMENT and a temp file rather than the
+" command line: a path with a space, a quote or an & does not survive being
+" quoted through Vim's 'shell' into PowerShell's own parser, and that is the
+" same trick vimhex.cmd and hexpair.bashrc already use. -Command rather than
+" -File also sidesteps the execution policy, which applies to script files
+" and not to a command string. The script uses single quotes only and no &
+" or %, so there is nothing in it for shellescape() or cmd.exe to mangle.
+"
+" The read is a LOOP: FileStream.Read may return fewer bytes than asked for,
+" and a page that quietly stopped half way is the failure this path exists
+" to prevent. The bytes are written raw - no hex conversion here, which
+" would double the data and cost more than the read.
+let s:psreadscript =
+      \   '$ErrorActionPreference = ''Stop'';'
+      \ . '$fs = [IO.File]::OpenRead($env:HEXPAIR_PS_SRC);'
+      \ . '$want = [int]$env:HEXPAIR_PS_LEN;'
+      \ . '$buf = New-Object byte[] $want;'
+      \ . '$got = 0;'
+      \ . 'try {'
+      \ .   '[void]$fs.Seek([int64]$env:HEXPAIR_PS_OFF, ''Begin'');'
+      \ .   'while ($got -lt $want) {'
+      \ .     '$n = $fs.Read($buf, $got, $want - $got);'
+      \ .     'if ($n -le 0) { break };'
+      \ .     '$got += $n'
+      \ .   '}'
+      \ . '} finally { $fs.Close() };'
+      \ . '$out = [IO.File]::Create($env:HEXPAIR_PS_OUT);'
+      \ . 'try { $out.Write($buf, 0, $got) } finally { $out.Close() }'
+
+" Probed once per session, and asked of the thing itself rather than of
+" $PATH: what matters is that it starts and runs a command, which
+" executable('powershell') does not answer.
+" How PowerShell is started, in one place because six call sites used to
+" spell it out and a difference between them would be invisible.
+"
+" -InputFormat None guards a known hazard, and is NOT a fix for anything
+" observed here - say so, because the comment that used to stand in its
+" place claimed otherwise and was wrong. Vim's system() redirects the
+" child's stdin, and PowerShell started with -Command and a redirected
+" stdin will, under the default -InputFormat Text, read it; a stream
+" nothing ever closes is then a wait with no end. Cheap to prevent,
+" invisible from a shell where stdin is a console, so it stays.
+" -NonInteractive stops it prompting, and -NoProfile keeps a user's
+" profile out of a call that has to behave the same for everyone.
+let s:psinvoke = 'powershell -NoProfile -NonInteractive -InputFormat None '
+      \ . '-Command '
+
+function! s:HasPowerShell() abort
+  if exists('s:has_powershell')
+    return s:has_powershell
+  endif
+  call system(s:psinvoke . 'exit 0')
+  let s:has_powershell = !v:shell_error
+  return s:has_powershell
+endfunction
+
+" How much of [off, off+len) the file actually holds. A partial read is the
+" RIGHT answer past the end of a file - it is how the diff learns the other
+" file stops there - so it cannot be treated as a failure on its own.
+function! s:AvailableBytes(file, off, len) abort
+  let total = getfsize(a:file)
+  return total <= a:off ? 0 : (total - a:off < a:len ? total - a:off : a:len)
+endfunction
+
+" The byte range in a temp file of its own, which the caller deletes. '' when
+" there is nothing there.
+function! s:SeekReadRaw(file, off, len) abort
+  let want = s:AvailableBytes(a:file, a:off, a:len)
+  if want <= 0
+    return ''
+  endif
+  if !s:HasPowerShell()
+    throw printf('hexpair: byte %d of %s is past the 2 GiB xxd can seek to '
+          \ . 'on this platform, and PowerShell - which could read it - did '
+          \ . 'not run. This file needs WSL, or a Vim and xxd without the '
+          \ . '32-bit limit.', a:off + 1, a:file)
+  endif
+
+  call s:Debug('powershell read: %d bytes at %d of %s', a:len, a:off, a:file)
+  let raw = tempname()
+  let $HEXPAIR_PS_SRC = a:file
+  let $HEXPAIR_PS_OUT = raw
+  let $HEXPAIR_PS_OFF = a:off
+  let $HEXPAIR_PS_LEN = a:len
+  try
+    call s:Run(s:psinvoke . shellescape(s:psreadscript))
+  finally
+    let $HEXPAIR_PS_SRC = ''
+    let $HEXPAIR_PS_OUT = ''
+    let $HEXPAIR_PS_OFF = ''
+    let $HEXPAIR_PS_LEN = ''
+  endtry
+
+  " Short when the file is not: something went wrong quietly, and a page of
+  " nothing presented as the file is what this path exists to prevent.
+  let got = getfsize(raw)
+  if got < want
+    call delete(raw)
+    throw printf('hexpair: reading byte %d of %s came back short - asked '
+          \ . 'for %d bytes, got %d.', a:off + 1, a:file, want, got)
+  endif
+  return raw
+endfunction
+
+" ... and as flat lowercase hex, which is xxd's -p over that temp file. No
+" seek is involved, so xxd is exactly as usable here as anywhere else.
+function! s:SeekReadHex(file, off, len) abort
+  let raw = s:SeekReadRaw(a:file, a:off, a:len)
+  if raw ==# ''
+    return ''
+  endif
+  try
+    return s:HexFromFile(raw)
+  finally
+    call delete(raw)
+  endtry
+endfunction
+
+" Writing a byte range that xxd cannot seek to, on Windows.
+"
+" The mirror of s:SeekReadRaw(): .NET's FileStream.Seek takes an Int64 for
+" writing as well as for reading, so the same tool that got the bytes out
+" can put them back. FileMode.Open, not Create: the file must already exist
+" and must not be truncated - this overwrites a range inside it and changes
+" nothing else, which is the whole reason it is allowed at all.
+"
+" ONLY same-length overwrites use this. A write that changes the file's
+" length needs the tail moved or the file spliced, and those are several
+" more operations, each of which would put bytes somewhere on the strength
+" of arithmetic nobody here can test on Windows. They stay refused.
+let s:pswritescript =
+      \   '$ErrorActionPreference = ''Stop'';'
+      \ . '$src = [IO.File]::ReadAllBytes($env:HEXPAIR_PS_SRC);'
+      \ . '$fs = [IO.File]::Open($env:HEXPAIR_PS_DST, ''Open'', ''Write'');'
+      \ . 'try {'
+      \ .   '[void]$fs.Seek([int64]$env:HEXPAIR_PS_OFF, ''Begin'');'
+      \ .   '$fs.Write($src, 0, $src.Length)'
+      \ . '} finally { $fs.Close() }'
+
+" Put the bytes of a:src over a:dst starting at a:off, and then READ THEM
+" BACK and check.
+"
+" The read-back is not belt and braces, it is the point. This path cannot be
+" exercised where it is developed - it needs Windows and a file over 2 GiB -
+" and the failure it guards against is a page written at the wrong offset in
+" a file too large to notice it in. Verifying turns that into an error
+" message. It costs one more process start on a path that already pays one,
+" and g:hexpair_verify_writes turns it off for anyone who would rather have
+" the speed.
+function! s:SeekWriteRaw(dst, off, src) abort
+  if !s:HasPowerShell()
+    throw printf('hexpair: writing at byte %d of %s needs PowerShell here - '
+          \ . 'xxd seeks with a 32-bit offset on this platform - and it did '
+          \ . 'not run. Nothing was written.', a:off + 1, a:dst)
+  endif
+  call s:Debug('powershell write: %s over %s at %d', a:src, a:dst, a:off)
+  let $HEXPAIR_PS_SRC = a:src
+  let $HEXPAIR_PS_DST = a:dst
+  let $HEXPAIR_PS_OFF = a:off
+  try
+    call s:Run(s:psinvoke . shellescape(s:pswritescript))
+  finally
+    let $HEXPAIR_PS_SRC = ''
+    let $HEXPAIR_PS_DST = ''
+    let $HEXPAIR_PS_OFF = ''
+  endtry
+
+  if !get(g:, 'hexpair_verify_writes', 1)
+    return
+  endif
+  let want = s:HexFromFile(a:src)
+  let got = s:SeekReadHex(a:dst, a:off, strlen(want) / 2)
+  if got !=# want
+    throw printf('hexpair: the write at byte %d of %s did not read back as '
+          \ . 'what was written - the file may now be wrong at that offset. '
+          \ . 'Check it before writing again. (g:hexpair_verify_writes = 0 '
+          \ . 'turns this check off.)', a:off + 1, a:dst)
+  endif
+endfunction
+
+" Setting a file's length, and moving a range inside it, at offsets xxd
+" cannot seek to. The other half of s:SeekWriteRaw().
+"
+" SetLength is worth more here than anywhere else: it both extends and
+" TRUNCATES, so on this platform a shrinking write does not have to rewrite
+" the file. The rest of the plugin has to, because "nothing in Vim or xxd
+" can shorten a file except writing it afresh" - which is true of Vim and
+" xxd and not of .NET. On a 120 GiB file that is the difference between
+" moving a few pages and copying 120 GiB.
+let s:pssetlenscript =
+      \   '$ErrorActionPreference = ''Stop'';'
+      \ . '$fs = [IO.File]::Open($env:HEXPAIR_PS_DST, ''Open'', ''Write'');'
+      \ . 'try { $fs.SetLength([int64]$env:HEXPAIR_PS_LEN) }'
+      \ . 'finally { $fs.Close() }'
+
+" One move, fully buffered: the whole range is read before any of it is
+" written, so a source and destination that overlap - which is the normal
+" case when a tail slides by less than a block - cannot eat their own tail.
+" The caller chunks and orders the moves (s:GrowInPlace goes backwards from
+" the end for that reason); this only has to be right about one of them.
+let s:psmovescript =
+      \   '$ErrorActionPreference = ''Stop'';'
+      \ . '$len = [int]$env:HEXPAIR_PS_LEN;'
+      \ . '$buf = New-Object byte[] $len;'
+      \ . '$fs = [IO.File]::Open($env:HEXPAIR_PS_DST, ''Open'', ''ReadWrite'');'
+      \ . 'try {'
+      \ .   '[void]$fs.Seek([int64]$env:HEXPAIR_PS_OFF, ''Begin'');'
+      \ .   '$got = 0;'
+      \ .   'while ($got -lt $len) {'
+      \ .     '$n = $fs.Read($buf, $got, $len - $got);'
+      \ .     'if ($n -le 0) { break };'
+      \ .     '$got += $n'
+      \ .   '};'
+      \ .   'if ($got -lt $len) { throw ''short read moving a range'' };'
+      \ .   '[void]$fs.Seek([int64]$env:HEXPAIR_PS_TO, ''Begin'');'
+      \ .   '$fs.Write($buf, 0, $len)'
+      \ . '} finally { $fs.Close() }'
+
+function! s:SeekSetLength(file, newlen) abort
+  if !s:HasPowerShell()
+    throw printf('hexpair: resizing %s needs PowerShell here - xxd seeks '
+          \ . 'with a 32-bit offset on this platform - and it did not run. '
+          \ . 'Nothing was written.', a:file)
+  endif
+  call s:Debug('powershell setlength: %s to %d', a:file, a:newlen)
+  let $HEXPAIR_PS_DST = a:file
+  let $HEXPAIR_PS_LEN = a:newlen
+  try
+    call s:Run(s:psinvoke . shellescape(s:pssetlenscript))
+  finally
+    let $HEXPAIR_PS_DST = ''
+    let $HEXPAIR_PS_LEN = ''
+  endtry
+  " The one thing that can be checked without reading gigabytes, and the
+  " one that says the resize happened at all.
+  let got = getfsize(a:file)
+  if got != a:newlen
+    throw printf('hexpair: %s should now be %d bytes and is %d. Check it '
+          \ . 'before writing again.', a:file, a:newlen, got)
+  endif
+endfunction
+
+function! s:SeekMoveRange(file, from, len, to) abort
+  if !s:HasPowerShell()
+    throw printf('hexpair: moving bytes inside %s needs PowerShell here - '
+          \ . 'xxd seeks with a 32-bit offset on this platform - and it did '
+          \ . 'not run. Nothing was written.', a:file)
+  endif
+  call s:Debug('powershell move: %d bytes from %d to %d in %s',
+        \ a:len, a:from, a:to, a:file)
+  let $HEXPAIR_PS_DST = a:file
+  let $HEXPAIR_PS_OFF = a:from
+  let $HEXPAIR_PS_TO = a:to
+  let $HEXPAIR_PS_LEN = a:len
+  try
+    call s:Run(s:psinvoke . shellescape(s:psmovescript))
+  finally
+    let $HEXPAIR_PS_DST = ''
+    let $HEXPAIR_PS_OFF = ''
+    let $HEXPAIR_PS_TO = ''
+    let $HEXPAIR_PS_LEN = ''
+  endtry
+endfunction
+
+" Copying a byte range from one file to another, at offsets xxd cannot seek
+" to and readblob() cannot read.
+"
+" ONE process for the whole range, with the chunking INSIDE it: this is the
+" operation that walks a whole file, so a process per block would be
+" thousands of them. s:CopyRange()'s Vim-side loop exists because
+" readblob() has to be called per block; here the loop belongs in the
+" script.
+"
+" Append or truncate, mirroring s:CopyRange()'s a:truncate, so the three
+" calls that build a saved file - head, page, tail - can keep their shape.
+let s:pscopyscript =
+      \   '$ErrorActionPreference = ''Stop'';'
+      \ . '$off = [int64]$env:HEXPAIR_PS_OFF;'
+      \ . '$left = [int64]$env:HEXPAIR_PS_LEN;'
+      \ . '$mode = if ($env:HEXPAIR_PS_TRUNC -eq ''1'')'
+      \ .   ' { [IO.FileMode]::Create } else { [IO.FileMode]::Append };'
+      \ . '$in = [IO.File]::OpenRead($env:HEXPAIR_PS_SRC);'
+      \ . '$out = New-Object IO.FileStream('
+      \ .   '$env:HEXPAIR_PS_DST, $mode, [IO.FileAccess]::Write);'
+      \ . 'try {'
+      \ .   '[void]$in.Seek($off, ''Begin'');'
+      \ .   '$buf = New-Object byte[] 1048576;'
+      \ .   'while ($left -gt 0) {'
+      \ .     '$take = [Math]::Min([int64]$buf.Length, $left);'
+      \ .     '$n = $in.Read($buf, 0, [int]$take);'
+      \ .     'if ($n -le 0) { throw ''short read copying a range'' };'
+      \ .     '$out.Write($buf, 0, $n);'
+      \ .     '$left -= $n'
+      \ .   '}'
+      \ . '} finally { $in.Close(); $out.Close() }'
+
+function! s:SeekCopyRange(src, off, len, dst, truncate) abort
+  if a:truncate && a:len == 0
+    call writefile([], a:dst, 'b')
+    return
+  endif
+  if !s:HasPowerShell()
+    throw printf('hexpair: copying %s needs PowerShell here - xxd seeks '
+          \ . 'with a 32-bit offset on this platform - and it did not run. '
+          \ . 'Nothing was written.', a:src)
+  endif
+  call s:Debug('powershell copy: %d bytes at %d of %s -> %s (truncate %d)',
+        \ a:len, a:off, a:src, a:dst, a:truncate)
+  let $HEXPAIR_PS_SRC = a:src
+  let $HEXPAIR_PS_DST = a:dst
+  let $HEXPAIR_PS_OFF = a:off
+  let $HEXPAIR_PS_LEN = a:len
+  let $HEXPAIR_PS_TRUNC = a:truncate ? '1' : '0'
+  try
+    call s:Run(s:psinvoke . shellescape(s:pscopyscript))
+  finally
+    let $HEXPAIR_PS_SRC = ''
+    let $HEXPAIR_PS_DST = ''
+    let $HEXPAIR_PS_OFF = ''
+    let $HEXPAIR_PS_LEN = ''
+    let $HEXPAIR_PS_TRUNC = ''
+  endtry
+endfunction
+
+" Can xxd be trusted to seek to a:off on this platform?
+"
+" Only Windows is excluded, and by platform rather than by probing, because
+" a probe is not available: strtol() saturating means a too-large offset and
+" a merely-past-the-end one are indistinguishable from the outside - both
+" produce nothing on a small file - so there is no cheap question whose
+" answer differs between a 32-bit and a 64-bit xxd. A 32-bit Unix build has
+" the same limit and is not covered here; it is recorded in CLAUDE.md rather
+" than guessed at.
+"
+" has('win32') and NOT also has('win64'): win32 is true for every Windows
+" Vim, "32 or 64 bits" in Vim's own words, and win64 is an extra feature on
+" top of it rather than an alternative to it - so asking for win64 as well
+" would be redundant, and asking for it INSTEAD would miss 32-bit builds.
+" The limit is a property of the platform's data model, not of the build:
+" Windows is LLP64, so a long stays 32 bits in a 64-bit Vim too, which is
+" why "am I on Windows" is the whole question.
+function! s:XxdCanSeek(off) abort
+  return a:off <= s:xxdseekmax || !has('win32')
+endfunction
+
+" The rule every caller applies, exposed so the suite can pin it: a range is
+" xxd's only if xxd can reach ALL of it. Callers therefore pass the END of
+" what they are about to touch, never the start - a range beginning below
+" the limit and crossing it belongs to the slow path, which is the one case
+" that checking the start would get wrong.
+function! HexPairPagedRangeIsXxdsForTest(off, len) abort
+  return s:XxdCanSeek(a:off + a:len)
+endfunction
+
+" The -1 half of s:FileSize() is testable anywhere; the -2 half needs a Vim
+" without +num64 AND a file over 2 GiB, so it is checked by reading, not by
+" running.
+function! HexPairPagedFileSizeForTest(file) abort
+  return s:FileSize(a:file)
+endfunction
+
+" The resize plan, which s:Write() acts on and s:ConfirmResize() describes.
+" Takes the page state as arguments rather than reading it, so the decision
+" can be asked about a 120 GiB file from a test that has no such file.
+function! HexPairPagedResizeIsInPlaceForTest(newlen, pagelen, base, total) abort
+  let b:hexpair_page_len = a:pagelen
+  let b:hexpair_page_base = a:base
+  let b:hexpair_page_total = a:total
+  return s:ResizeIsInPlace(a:newlen)
+endfunction
+
+" The whole of a file as flat lowercase hex. Shared by both readers: xxd -p
+" over a file it does not have to seek in, which is the fast part of xxd and
+" the part that was never in question.
+function! s:HexFromFile(file) abort
+  let out = s:Run(printf('%s -p %s', s:Xxd(), shellescape(a:file)))
+  " xxd -p prints hex and line breaks and nothing else, so the line breaks
+  " are all there is to remove - the CR because a Windows xxd ends its lines
+  " with one. Two passes over a single character each, rather than one over
+  " a collection: measured on the 2 MB of hex a 1 MiB block comes to, 16 ms
+  " against 51 ms, and a scan of a large file is thousands of those.
+  return substitute(substitute(out, '\n', '', 'g'), '\r', '', 'g')
+endfunction
+
 function! s:FileHex(file, off, len) abort
   if a:len <= 0
     return ''
   endif
+  " a:off + a:len, not a:off: the question every guard here asks is "can
+  " xxd reach the WHOLE range", and a read that starts below the limit and
+  " crosses it is exactly the case where checking only the start would say
+  " yes. Reading forward across the line is very likely fine - the seek is
+  " what is 32-bit, and fread simply advances - but "very likely" is not
+  " something to decide on a platform this cannot be tested on, and the
+  " cost of being conservative is that a handful of boundary reads take
+  " the slower path.
+  if !s:XxdCanSeek(a:off + a:len)
+    return s:SeekReadHex(a:file, a:off, a:len)
+  endif
   try
-    let out = s:Run(printf('%s -p -s %d -l %d %s', s:xxd, a:off, a:len,
+    let out = s:Run(printf('%s -p -s %d -l %d %s', s:Xxd(), a:off, a:len,
           \ shellescape(a:file)))
-    " xxd -p prints hex and line breaks and nothing else, so the line
-    " breaks are all there is to remove - the CR because a Windows xxd
-    " ends its lines with one. Two passes over a single character each,
-    " rather than one over a collection: measured on the 2 MB of hex a
-    " 1 MiB block comes to, 16 ms against 51 ms, and a scan of a large
-    " file is thousands of those.
     return substitute(substitute(out, '\n', '', 'g'), '\r', '', 'g')
   catch /^hexpair:/
     " A read that failed - a file that went away, an xxd that could not
@@ -2023,10 +2679,18 @@ endfunction
 " never be used here. Everything outside the page keeps its bytes and the
 " file keeps its length; cost is O(page), not O(file).
 function! s:PatchInPlace(raw) abort
+  " Past what xxd can seek to, PowerShell puts the bytes back - the mirror
+  " of how they were read. No dump is involved: the raw bytes go straight
+  " over the range they came from, which is also why this is the only write
+  " allowed there (see s:Write()).
+  if !s:XxdCanSeek(b:hexpair_page_base + b:hexpair_page_len)
+    call s:SeekWriteRaw(b:hexpair_page_file, b:hexpair_page_base, a:raw)
+    return
+  endif
   let dump = tempname()
   try
     call s:CanonicalDump(a:raw, b:hexpair_page_base, dump)
-    call s:Run(printf('%s -r %s %s', s:xxd,
+    call s:Run(printf('%s -r %s %s', s:Xxd(),
           \ shellescape(dump), shellescape(b:hexpair_page_file)))
   finally
     call delete(dump)
@@ -2087,11 +2751,36 @@ function! s:WriteTarget() abort
   return target
 endfunction
 
+" Is this write a ':saveas' (or a ':w' after ':file') rather than a
+" ':w {other}'?
+"
+" Inside BufWriteCmd <amatch> is the target either way, so it cannot tell
+" them apart - but ':saveas' RENAMES THE BUFFER BEFORE WRITING IT and
+" ':w {other}' does not, so the buffer's current name does. They mean
+" different things and must not be run the same way: ':w {other}' is "copy
+" what I am looking at over there and leave me alone", ':saveas' is "this
+" view edits that file from now on".
+"
+" bufname('%') and not b:hexpair_page_bufname: the cached one is what this
+" view was called when the page was loaded, which after a rename is exactly
+" the stale answer that made every later write take the wrong path.
+function! s:IsSaveAs(target) abort
+  let name = bufname('%')
+  return name !=# '' && s:SamePath(a:target, fnamemodify(name, ':p'))
+endfunction
+
 " Append a byte range of a:src to a:dst in bounded blocks, so memory use
 " does not follow the size of the file. a:truncate starts a:dst from
 " scratch, which is also how a shrinking file gets its new length: Vim
 " cannot truncate a file except by writing it.
 function! s:CopyRange(src, off, len, dst, truncate) abort
+  " Past what xxd can seek to, readblob() is what cannot read - it returns
+  " an empty blob and success for a large file on Windows - so the copy
+  " goes through PowerShell, which does the whole range in one process.
+  if !s:XxdCanSeek(a:off + a:len)
+    call s:SeekCopyRange(a:src, a:off, a:len, a:dst, a:truncate)
+    return
+  endif
   if a:truncate && a:len == 0
     call writefile([], a:dst, 'b')
     return
@@ -2136,11 +2825,28 @@ function! HexPairPagedResizeMessage(delta, total, moved) abort
         \ . "\nContinue?", a:moved, a:total, a:total, a:total + a:delta)
 endfunction
 
+" Will this resize move only the tail, or rewrite the whole file?
+"
+" ONE predicate, because s:Write() acts on the answer and s:ConfirmResize()
+" describes it, and a message that describes a different plan from the one
+" carried out is worse than no message: it was telling the user the whole
+" file would be rewritten while shortening a 120 GiB file in place, which
+" is both alarming and false.
+function! s:ResizeIsInPlace(newlen) abort
+  " Past what xxd can seek to, both directions go in place - there is no
+  " cost model to consult, because SetLength makes the shrink that is a
+  " whole-file rewrite everywhere else into a tail move and a cut.
+  if !s:XxdCanSeek(b:hexpair_page_total)
+    return 1
+  endif
+  return a:newlen > b:hexpair_page_len && s:TailShiftIsCheaper()
+endfunction
+
 function! s:ConfirmResize(newlen) abort
   if !g:hexpair_page_confirm
     return 1
   endif
-  let inplace = a:newlen > b:hexpair_page_len && s:TailShiftIsCheaper()
+  let inplace = s:ResizeIsInPlace(a:newlen)
   let msg = HexPairPagedResizeMessage(a:newlen - b:hexpair_page_len,
         \ b:hexpair_page_total, inplace ? s:TailSize() : b:hexpair_page_total)
   return confirm(msg, "&Write it\n&Cancel", 2, 'Question') == 1
@@ -2171,9 +2877,16 @@ endfunction
 
 " Move [a:from, a:from + a:len) of the paged file to a:to, in place.
 function! s:MoveRange(from, len, to, hex) abort
-  call s:Run(printf('%s -s %d -l %d -p %s %s', s:xxd, a:from, a:len,
+  " Past what xxd can seek to, PowerShell moves the bytes within the file
+  " directly - no hex round trip, and no temp file, since it can read and
+  " write through one handle.
+  if !s:XxdCanSeek(a:from + a:len) || !s:XxdCanSeek(a:to + a:len)
+    call s:SeekMoveRange(b:hexpair_page_file, a:from, a:len, a:to)
+    return
+  endif
+  call s:Run(printf('%s -s %d -l %d -p %s %s', s:Xxd(), a:from, a:len,
         \ shellescape(b:hexpair_page_file), shellescape(a:hex)))
-  call s:Run(printf('%s -r -p -s %d %s %s', s:xxd, a:to,
+  call s:Run(printf('%s -r -p -s %d %s %s', s:Xxd(), a:to,
         \ shellescape(a:hex), shellescape(b:hexpair_page_file)))
 endfunction
 
@@ -2198,10 +2911,17 @@ endfunction
 " means a full disk - the likely failure when a file is growing - fails
 " here, before a byte of the tail has been touched.
 function! s:ExtendBy(delta) abort
+  " SetLength does this in one call and without writing the bytes, which
+  " past 2 GiB is the only way to do it here at all.
+  if !s:XxdCanSeek(b:hexpair_page_total + a:delta)
+    call s:SeekSetLength(b:hexpair_page_file,
+          \ b:hexpair_page_total + a:delta)
+    return
+  endif
   let hex = tempname()
   try
     call writefile([repeat('00', a:delta)], hex)
-    call s:Run(printf('%s -r -p -s %d %s %s', s:xxd, b:hexpair_page_total,
+    call s:Run(printf('%s -r -p -s %d %s %s', s:Xxd(), b:hexpair_page_total,
           \ shellescape(hex), shellescape(b:hexpair_page_file)))
   finally
     call delete(hex)
@@ -2221,6 +2941,50 @@ endfunction
 " Keeping a copy would need room for the whole tail, which is precisely
 " what this path exists to avoid: the temporary space it uses is one
 " block's worth of hex, whatever the size of the file.
+" Shrinking a file in place: move the tail LEFT over the bytes the page no
+" longer needs, then cut the file to its new length.
+"
+" The rest of the plugin cannot do this and says so - "nothing in Vim or
+" xxd can shorten a file except writing it afresh", which is what s:Splice()
+" does. That is true of Vim and of xxd, and not of .NET: SetLength truncates.
+" So on this one platform, and only past the offsets xxd can reach, the
+" expensive case becomes the cheap one - a 120 GiB file shrinks by moving
+" the bytes after the page, not by copying 120 GiB.
+"
+" Order matters and is the whole correctness argument:
+"   1. the page's new (shorter) bytes go in at base - this cannot disturb
+"      the tail, which still starts further along than they now reach;
+"   2. the tail slides left over what is left of the old page, forwards
+"      from its start, so each block is read before anything overwrites it;
+"   3. only then is the file cut, so nothing is discarded until every byte
+"      that had to survive has been moved.
+" A failure at any step leaves a longer file than intended, never a shorter
+" one - the bytes are still there to try again with.
+function! s:ShrinkInPlace(raw, newlen) abort
+  let base = b:hexpair_page_base
+  let tail = base + b:hexpair_page_len
+  let size = s:TailSize()
+  let delta = b:hexpair_page_len - a:newlen
+
+  " s:PatchInPlace(), not s:SeekWriteRaw() directly: it picks the writer by
+  " offset, so a page below the limit in a file above it is still written
+  " by xxd. Only the parts that have to be PowerShell's are.
+  call s:PatchInPlace(a:raw)
+
+  let moved = 0
+  while moved < size
+    let chunk = size - moved
+    if chunk > s:blocksize
+      let chunk = s:blocksize
+    endif
+    let from = tail + moved
+    call s:SeekMoveRange(b:hexpair_page_file, from, chunk, from - delta)
+    let moved += chunk
+  endwhile
+
+  call s:SeekSetLength(b:hexpair_page_file, b:hexpair_page_total - delta)
+endfunction
+
 function! s:GrowInPlace(raw, newlen) abort
   let base = b:hexpair_page_base
   let tail = base + b:hexpair_page_len
@@ -2270,7 +3034,7 @@ endfunction
 " does not, the temp holds the complete new content and its path is
 " reported as the recovery copy instead.
 function! s:Splice(raw, newlen) abort
-  let msg = HexPairPagedGateMessage(s:SpliceSupported())
+  let msg = HexPairPagedGateMessage(HexPairPagedSpliceSupported())
   if !empty(msg)
     throw msg
   endif
@@ -2397,7 +3161,7 @@ function! s:PageBytes(raw) abort
       let off = s:IsBannerLine(getline('.')) ? b:hexpair_page_base
             \ : b:hexpair_page_base + scan.bytes + s:PagedCursorLineIndex()
       call writefile(scan.lines, hex)
-      call s:Run(printf('%s -r -p %s %s', s:xxd,
+      call s:Run(printf('%s -r -p %s %s', s:Xxd(),
             \ shellescape(hex), shellescape(a:raw)))
     else
       " The text view's bytes need no conversion at all - they are the
@@ -2431,7 +3195,7 @@ function! s:WriteWholeTo(target) abort
   if s:SamePath(a:target, b:hexpair_page_file)
     throw printf('hexpair: refusing to copy %s over itself', a:target)
   endif
-  let msg = HexPairPagedGateMessage(s:SpliceSupported(),
+  let msg = HexPairPagedGateMessage(HexPairPagedSpliceSupported(),
         \ 'writing the whole file somewhere else')
   if !empty(msg)
     throw msg
@@ -2453,23 +3217,33 @@ function! s:WriteWholeTo(target) abort
   endtry
 
   let total = getfsize(a:target)
-  if get(b:, 'hexpair_page_spill', '') ==# ''
-    " A file-backed view: this was a copy, so nothing about the buffer
-    " changes - exactly as Vim's own ':w {file}' leaves a buffer alone.
+  if get(b:, 'hexpair_page_spill', '') ==# '' && !s:IsSaveAs(a:target)
+    " A file-backed view being copied elsewhere by ':w {file}': nothing
+    " about the buffer changes - exactly as Vim's own ':w {file}' leaves a
+    " buffer alone. It also stays 'modified', because it is: what is on
+    " screen still differs from the file this view edits.
     echomsg printf('hexpair: "%s" %dB written; %s is unchanged',
           \ a:target, total, b:hexpair_page_file)
     return
   endif
 
-  " A view paged from piped input has just acquired a file. Adopt it, the
-  " way Vim's own ':w {file}' adopts a name for an unnamed buffer, so the
-  " next plain :w patches pages into it and the spill can go.
+  " Adopt the target. Two ways here: a view paged from piped input that has
+  " just acquired a file, and a ':saveas' - and they want the same thing,
+  " "this view edits that file from now on", so the next plain :w patches
+  " pages into it and any spill can go.
   call s:DropSpill()
-  silent execute 'file ' . fnameescape(a:target)
+  " ':saveas' has already renamed the buffer; renaming it again to the same
+  " name is pointless and would only be another chance to get it wrong.
+  if !s:SamePath(a:target, bufname('%'))
+    silent execute 'file ' . fnameescape(a:target)
+  endif
   let b:hexpair_page_file = fnamemodify(a:target, ':p')
   let b:hexpair_page_bufname = bufname('%') ==# ''
         \ ? '' : fnamemodify(bufname('%'), ':p')
   call s:LoadPageInView(b:hexpair_page_index)
+  " BufWriteCmd owns the 'modified' flag: Vim does not clear it for an
+  " acwrite buffer, the autocommand has to (:help BufWriteCmd). Missing
+  " this is what left a buffer modified after a successful ':saveas'.
   setlocal nomodified
   echomsg printf('hexpair: "%s" %dB written; this view now edits it',
         \ a:target, total)
@@ -2479,6 +3253,7 @@ function! s:Write() abort
   if !get(b:, 'hexpair_page_active', 0)
     throw 'hexpair: not a paged hex buffer; nothing was written'
   endif
+
 
   let target = s:WriteTarget()
   if target !=# ''
@@ -2503,8 +3278,24 @@ function! s:Write() abort
     elseif !s:ConfirmResize(newlen)
       echomsg 'hexpair: cancelled; nothing was written'
       return
-    elseif newlen > b:hexpair_page_len && s:TailShiftIsCheaper()
-      call s:GrowInPlace(raw, newlen)
+    elseif s:ResizeIsInPlace(newlen)
+      " Which of the two in-place paths is by direction alone. The splice
+      " WOULD work past the limit now that s:CopyRange() has a PowerShell
+      " path, but it rewrites the whole file, and a file that side of the
+      " limit is at least 2 GiB - so the case the cost model calls
+      " expensive is the one that is actually cheap there, SetLength being
+      " able to shorten a file in place where no other platform can.
+      if newlen > b:hexpair_page_len
+        call s:GrowInPlace(raw, newlen)
+      else
+        " Only reachable past the limit: s:ResizeIsInPlace() says yes to a
+        " SHRINK nowhere else, and s:ShrinkInPlace() is PowerShell's alone
+        " (SetLength has no counterpart in Vim or xxd). Said out loud
+        " because the branch does not show it - and if it were ever
+        " reached elsewhere it would throw, not corrupt, since
+        " s:HasPowerShell() gates every step of it.
+        call s:ShrinkInPlace(raw, newlen)
+      endif
     else
       call s:Splice(raw, newlen)
     endif
@@ -2644,8 +3435,23 @@ function! HexPairPagedParsePageInput(text) abort
   if empty(a:text)
     return {}
   endif
+  " '$' alone, or a step FROM the last page: '$-5' is five back from the
+  " end, which is the thing a bare '-5' cannot say - that one steps from
+  " wherever the view happens to be. Returned as 'last' plus a delta so the
+  " resolver, which is the only place that knows how many pages there are,
+  " does the arithmetic.
   if a:text ==# '$'
-    return {'last': 1}
+    return {'last': 1, 'delta': 0}
+  endif
+  if a:text =~# '^\$-\d\+$'
+    return {'last': 1, 'delta': -str2nr(a:text[2:])}
+  endif
+  " '$+N' is past the last page, which is never a page. Refused by name,
+  " where it was typed, rather than left to the bounds check to report as
+  " a page that does not exist - the user knows which end they meant.
+  if a:text =~# '^\$+\d\+$'
+    return {'msg': 'hexpair: ' . a:text . ' is past the last page - $ is '
+          \ . 'the end, so only $-N (back from it) means anything'}
   endif
   if a:text =~# '^[+-]\d\+$'
     " str2nr() is not asked to make sense of a leading '+'.
@@ -2653,7 +3459,8 @@ function! HexPairPagedParsePageInput(text) abort
   endif
   if a:text !~# '^\d\+$'
     return {'msg': 'hexpair: not a page number: ' . a:text
-          \ . ' (a page, +N or -N to step, $ for the last)'}
+          \ . ' (a page, +N or -N from here, $ for the last, '
+          \ . '$-N for N back from it)'}
   endif
   return {'page': str2nr(a:text)}
 endfunction
@@ -2664,7 +3471,9 @@ endfunction
 " it was asked for as a number, a step or a $.
 function! HexPairPagedResolvePage(parsed, current, totalpages) abort
   if has_key(a:parsed, 'last')
-    return a:totalpages
+    " '$' is delta 0, '$-5' is five back from it. One branch for both, so
+    " they cannot disagree about which end they count from.
+    return a:totalpages + get(a:parsed, 'delta', 0)
   endif
   if has_key(a:parsed, 'delta')
     return a:current + a:parsed.delta
@@ -2702,7 +3511,7 @@ function! s:PageGotoPrompt(force) abort
   if !s:RequirePaged()
     return
   endif
-  let n = input(printf('hexpair: goto page (1-%d, +N/-N, $): ',
+  let n = input(printf('hexpair: goto page (1-%d, +N/-N, $, $-N): ',
         \ b:hexpair_page_totalpages))
   redraw
   call s:PageGotoText(n, a:force)
@@ -2934,9 +3743,12 @@ function! s:InspectBytes(count) abort
     return out
   endif
 
-  " Text view: cut the lines the bytes fall on out of the buffer, write
-  " just those, and let xxd say what they are.
-  let [first, last] = s:TextBodyRange()
+  " Text view, or an ordinary buffer that hexpair has never touched: cut
+  " the lines the bytes fall on out of the buffer, write just those, and
+  " let xxd say what they are. The only difference between the two is which
+  " lines are content - all of them, where there is no banner.
+  let [first, last] = get(b:, 'hexpair_page_active', 0)
+        \ ? s:TextBodyRange() : [1, line('$')]
   let lnum = line('.') < first ? first : (line('.') > last ? last : line('.'))
   let lines = [strpart(getline(lnum), col('.') - 1)]
   " A line break is a byte too, so each further line adds one plus its
@@ -2949,7 +3761,7 @@ function! s:InspectBytes(count) abort
   let raw = tempname()
   try
     call writefile(lines, raw, 'b')
-    let hex = substitute(s:Run(printf('%s -p -l %d %s', s:xxd, a:count,
+    let hex = substitute(s:Run(printf('%s -p -l %d %s', s:Xxd(), a:count,
           \ shellescape(raw))), '[^0-9a-fA-F]', '', 'g')
   finally
     call delete(raw)
@@ -3066,6 +3878,462 @@ function! s:CodePointText(cp, used) abort
         \ : printf('U+%04X%s', a:cp, glyph)
 endfunction
 
+" What a code point IS, as far as this plugin can honestly say. Vim has no
+" Unicode database: charclass() knows three coarse classes, and there is no
+" name lookup at all - so two questions are answerable here and one is not.
+"
+" Answered: the NAME of a code point that has no glyph and no identity you
+" can see - the C0 and C1 controls, and the space and format characters a
+" hex editor meets constantly, which is exactly the set someone reaches for
+" |:HexPairInspect| about. And the BLOCK any code point falls in, which is
+" the "what script even is this" question, and the one that turns a run of
+" unfamiliar bytes into "Cyrillic" or "CJK Unified Ideographs".
+"
+" NOT answered: the full character name, LATIN SMALL LETTER E WITH ACUTE and
+" its 150000 friends. That is UnicodeData.txt, two megabytes of names - a
+" different order of thing from a 14 KB table of ranges, and not something to
+" carry inside a Vim plugin. Saying the block and stopping is the honest
+" edge of what fits here.
+function! s:ControlNames() abort
+  if exists('s:controlnames')
+    return s:controlnames
+  endif
+  " "ABBR the long name", split on the first space: two parallel lists would
+  " be two things to keep in step.
+  let c0 = [
+        \ 'NUL null', 'SOH start of heading', 'STX start of text',
+        \ 'ETX end of text', 'EOT end of transmission', 'ENQ enquiry',
+        \ 'ACK acknowledge', 'BEL bell', 'BS backspace',
+        \ 'HT horizontal tab', 'LF line feed', 'VT vertical tab',
+        \ 'FF form feed', 'CR carriage return', 'SO shift out',
+        \ 'SI shift in', 'DLE data link escape', 'DC1 device control 1',
+        \ 'DC2 device control 2', 'DC3 device control 3',
+        \ 'DC4 device control 4', 'NAK negative acknowledge',
+        \ 'SYN synchronous idle', 'ETB end of transmission block',
+        \ 'CAN cancel', 'EM end of medium', 'SUB substitute', 'ESC escape',
+        \ 'FS file separator', 'GS group separator', 'RS record separator',
+        \ 'US unit separator',]
+  let c1 = [
+        \ 'PAD padding character', 'HOP high octet preset',
+        \ 'BPH break permitted here', 'NBH no break here', 'IND index',
+        \ 'NEL next line', 'SSA start of selected area',
+        \ 'ESA end of selected area', 'HTS character tabulation set',
+        \ 'HTJ character tabulation with justification',
+        \ 'VTS line tabulation set', 'PLD partial line forward',
+        \ 'PLU partial line backward', 'RI reverse line feed',
+        \ 'SS2 single shift two', 'SS3 single shift three',
+        \ 'DCS device control string', 'PU1 private use one',
+        \ 'PU2 private use two', 'STS set transmit state',
+        \ 'CCH cancel character', 'MW message waiting',
+        \ 'SPA start of guarded area', 'EPA end of guarded area',
+        \ 'SOS start of string', 'SGC single graphic character introducer',
+        \ 'SCI single character introducer',
+        \ 'CSI control sequence introducer', 'ST string terminator',
+        \ 'OSC operating system command', 'PM privacy message',
+        \ 'APC application program command',]
+  let special = [
+        \ [32,'SP space'], [160,'NBSP no-break space'],
+        \ [173,'SHY soft hyphen'], [1564,'ALM arabic letter mark'],
+        \ [8203,'ZWSP zero width space'],
+        \ [8204,'ZWNJ zero width non-joiner'],
+        \ [8205,'ZWJ zero width joiner'], [8206,'LRM left-to-right mark'],
+        \ [8207,'RLM right-to-left mark'], [8232,'LS line separator'],
+        \ [8233,'PS paragraph separator'],
+        \ [8234,'LRE left-to-right embedding'],
+        \ [8235,'RLE right-to-left embedding'],
+        \ [8236,'PDF pop directional formatting'],
+        \ [8237,'LRO left-to-right override'],
+        \ [8238,'RLO right-to-left override'], [8288,'WJ word joiner'],
+        \ [8294,'LRI left-to-right isolate'],
+        \ [8295,'RLI right-to-left isolate'],
+        \ [8296,'FSI first strong isolate'],
+        \ [8297,'PDI pop directional isolate'],
+        \ [65279,'BOM zero width no-break space, the byte order mark'],
+        \ [65533,'- replacement character, what a decoder leaves where it failed'],]
+  let s:controlnames = {}
+  let i = 0
+  while i < len(c0)
+    let s:controlnames[i] = s:NamePair(c0[i], 'a C0 control')
+    let i += 1
+  endwhile
+  let i = 0
+  while i < len(c1)
+    let s:controlnames[0x80 + i] = s:NamePair(c1[i], 'a C1 control')
+    let i += 1
+  endwhile
+  " DEL sits on its own: ASCII's last code point, a control by behaviour and
+  " in neither the C0 nor the C1 range.
+  let s:controlnames[0x7f] = s:NamePair('DEL delete', 'a control')
+  for pair in special
+    let s:controlnames[pair[0]] = s:NamePair(pair[1], '')
+  endfor
+  return s:controlnames
+endfunction
+
+function! s:NamePair(spec, kind) abort
+  return [matchstr(a:spec, '^\S\+'), matchstr(a:spec, '^\S\+\s\+\zs.*'), a:kind]
+endfunction
+
+" The Unicode blocks, sorted and disjoint. GENERATED - run
+" make-unicode-blocks.py rather than editing between the markers; the
+" Unicode version and the digest it is checked against are in that script.
+" It is a DEVELOPMENT tool, run by hand when the Unicode version is bumped:
+" its output is committed here, nothing generates anything at package time
+" and nothing does on a user's machine.
+"
+" Derived from Blocks.txt of the Unicode Character Database 16.0.0, which is
+" under the Unicode License V3. That permits this on the condition that its
+" copyright and permission notice travels with the copies or appears in the
+" documentation; NOTICE.md carries it in full and ships in every release.
+" SPDX-License-Identifier: Unicode-3.0 (this table only - the plugin itself
+" is under the Vim License, see LICENSE.md).
+"
+" EVALUATED on first use, not at load - which is about Vim and not about
+" generation. A function body is stored as text until the function runs, so
+" the list literal below costs a Vim that never inspects a character
+" nothing at all.
+function! s:Blocks() abort
+  if exists('s:blocks')
+    return s:blocks
+  endif
+  " >>> generated by make-unicode-blocks.py - do not edit below
+  let s:blocks = [
+        \ [0x0,0x7F,'Basic Latin'], [0x80,0xFF,'Latin-1 Supplement'],
+        \ [0x100,0x17F,'Latin Extended-A'],
+        \ [0x180,0x24F,'Latin Extended-B'], [0x250,0x2AF,'IPA Extensions'],
+        \ [0x2B0,0x2FF,'Spacing Modifier Letters'],
+        \ [0x300,0x36F,'Combining Diacritical Marks'],
+        \ [0x370,0x3FF,'Greek and Coptic'], [0x400,0x4FF,'Cyrillic'],
+        \ [0x500,0x52F,'Cyrillic Supplement'], [0x530,0x58F,'Armenian'],
+        \ [0x590,0x5FF,'Hebrew'], [0x600,0x6FF,'Arabic'],
+        \ [0x700,0x74F,'Syriac'], [0x750,0x77F,'Arabic Supplement'],
+        \ [0x780,0x7BF,'Thaana'], [0x7C0,0x7FF,'NKo'],
+        \ [0x800,0x83F,'Samaritan'], [0x840,0x85F,'Mandaic'],
+        \ [0x860,0x86F,'Syriac Supplement'],
+        \ [0x870,0x89F,'Arabic Extended-B'],
+        \ [0x8A0,0x8FF,'Arabic Extended-A'], [0x900,0x97F,'Devanagari'],
+        \ [0x980,0x9FF,'Bengali'], [0xA00,0xA7F,'Gurmukhi'],
+        \ [0xA80,0xAFF,'Gujarati'], [0xB00,0xB7F,'Oriya'],
+        \ [0xB80,0xBFF,'Tamil'], [0xC00,0xC7F,'Telugu'],
+        \ [0xC80,0xCFF,'Kannada'], [0xD00,0xD7F,'Malayalam'],
+        \ [0xD80,0xDFF,'Sinhala'], [0xE00,0xE7F,'Thai'],
+        \ [0xE80,0xEFF,'Lao'], [0xF00,0xFFF,'Tibetan'],
+        \ [0x1000,0x109F,'Myanmar'], [0x10A0,0x10FF,'Georgian'],
+        \ [0x1100,0x11FF,'Hangul Jamo'], [0x1200,0x137F,'Ethiopic'],
+        \ [0x1380,0x139F,'Ethiopic Supplement'], [0x13A0,0x13FF,'Cherokee'],
+        \ [0x1400,0x167F,'Unified Canadian Aboriginal Syllabics'],
+        \ [0x1680,0x169F,'Ogham'], [0x16A0,0x16FF,'Runic'],
+        \ [0x1700,0x171F,'Tagalog'], [0x1720,0x173F,'Hanunoo'],
+        \ [0x1740,0x175F,'Buhid'], [0x1760,0x177F,'Tagbanwa'],
+        \ [0x1780,0x17FF,'Khmer'], [0x1800,0x18AF,'Mongolian'],
+        \ [0x18B0,0x18FF,'Unified Canadian Aboriginal Syllabics Extended'],
+        \ [0x1900,0x194F,'Limbu'], [0x1950,0x197F,'Tai Le'],
+        \ [0x1980,0x19DF,'New Tai Lue'], [0x19E0,0x19FF,'Khmer Symbols'],
+        \ [0x1A00,0x1A1F,'Buginese'], [0x1A20,0x1AAF,'Tai Tham'],
+        \ [0x1AB0,0x1AFF,'Combining Diacritical Marks Extended'],
+        \ [0x1B00,0x1B7F,'Balinese'], [0x1B80,0x1BBF,'Sundanese'],
+        \ [0x1BC0,0x1BFF,'Batak'], [0x1C00,0x1C4F,'Lepcha'],
+        \ [0x1C50,0x1C7F,'Ol Chiki'], [0x1C80,0x1C8F,'Cyrillic Extended-C'],
+        \ [0x1C90,0x1CBF,'Georgian Extended'],
+        \ [0x1CC0,0x1CCF,'Sundanese Supplement'],
+        \ [0x1CD0,0x1CFF,'Vedic Extensions'],
+        \ [0x1D00,0x1D7F,'Phonetic Extensions'],
+        \ [0x1D80,0x1DBF,'Phonetic Extensions Supplement'],
+        \ [0x1DC0,0x1DFF,'Combining Diacritical Marks Supplement'],
+        \ [0x1E00,0x1EFF,'Latin Extended Additional'],
+        \ [0x1F00,0x1FFF,'Greek Extended'],
+        \ [0x2000,0x206F,'General Punctuation'],
+        \ [0x2070,0x209F,'Superscripts and Subscripts'],
+        \ [0x20A0,0x20CF,'Currency Symbols'],
+        \ [0x20D0,0x20FF,'Combining Diacritical Marks for Symbols'],
+        \ [0x2100,0x214F,'Letterlike Symbols'],
+        \ [0x2150,0x218F,'Number Forms'], [0x2190,0x21FF,'Arrows'],
+        \ [0x2200,0x22FF,'Mathematical Operators'],
+        \ [0x2300,0x23FF,'Miscellaneous Technical'],
+        \ [0x2400,0x243F,'Control Pictures'],
+        \ [0x2440,0x245F,'Optical Character Recognition'],
+        \ [0x2460,0x24FF,'Enclosed Alphanumerics'],
+        \ [0x2500,0x257F,'Box Drawing'], [0x2580,0x259F,'Block Elements'],
+        \ [0x25A0,0x25FF,'Geometric Shapes'],
+        \ [0x2600,0x26FF,'Miscellaneous Symbols'],
+        \ [0x2700,0x27BF,'Dingbats'],
+        \ [0x27C0,0x27EF,'Miscellaneous Mathematical Symbols-A'],
+        \ [0x27F0,0x27FF,'Supplemental Arrows-A'],
+        \ [0x2800,0x28FF,'Braille Patterns'],
+        \ [0x2900,0x297F,'Supplemental Arrows-B'],
+        \ [0x2980,0x29FF,'Miscellaneous Mathematical Symbols-B'],
+        \ [0x2A00,0x2AFF,'Supplemental Mathematical Operators'],
+        \ [0x2B00,0x2BFF,'Miscellaneous Symbols and Arrows'],
+        \ [0x2C00,0x2C5F,'Glagolitic'], [0x2C60,0x2C7F,'Latin Extended-C'],
+        \ [0x2C80,0x2CFF,'Coptic'], [0x2D00,0x2D2F,'Georgian Supplement'],
+        \ [0x2D30,0x2D7F,'Tifinagh'], [0x2D80,0x2DDF,'Ethiopic Extended'],
+        \ [0x2DE0,0x2DFF,'Cyrillic Extended-A'],
+        \ [0x2E00,0x2E7F,'Supplemental Punctuation'],
+        \ [0x2E80,0x2EFF,'CJK Radicals Supplement'],
+        \ [0x2F00,0x2FDF,'Kangxi Radicals'],
+        \ [0x2FF0,0x2FFF,'Ideographic Description Characters'],
+        \ [0x3000,0x303F,'CJK Symbols and Punctuation'],
+        \ [0x3040,0x309F,'Hiragana'], [0x30A0,0x30FF,'Katakana'],
+        \ [0x3100,0x312F,'Bopomofo'],
+        \ [0x3130,0x318F,'Hangul Compatibility Jamo'],
+        \ [0x3190,0x319F,'Kanbun'], [0x31A0,0x31BF,'Bopomofo Extended'],
+        \ [0x31C0,0x31EF,'CJK Strokes'],
+        \ [0x31F0,0x31FF,'Katakana Phonetic Extensions'],
+        \ [0x3200,0x32FF,'Enclosed CJK Letters and Months'],
+        \ [0x3300,0x33FF,'CJK Compatibility'],
+        \ [0x3400,0x4DBF,'CJK Unified Ideographs Extension A'],
+        \ [0x4DC0,0x4DFF,'Yijing Hexagram Symbols'],
+        \ [0x4E00,0x9FFF,'CJK Unified Ideographs'],
+        \ [0xA000,0xA48F,'Yi Syllables'], [0xA490,0xA4CF,'Yi Radicals'],
+        \ [0xA4D0,0xA4FF,'Lisu'], [0xA500,0xA63F,'Vai'],
+        \ [0xA640,0xA69F,'Cyrillic Extended-B'], [0xA6A0,0xA6FF,'Bamum'],
+        \ [0xA700,0xA71F,'Modifier Tone Letters'],
+        \ [0xA720,0xA7FF,'Latin Extended-D'],
+        \ [0xA800,0xA82F,'Syloti Nagri'],
+        \ [0xA830,0xA83F,'Common Indic Number Forms'],
+        \ [0xA840,0xA87F,'Phags-pa'], [0xA880,0xA8DF,'Saurashtra'],
+        \ [0xA8E0,0xA8FF,'Devanagari Extended'], [0xA900,0xA92F,'Kayah Li'],
+        \ [0xA930,0xA95F,'Rejang'],
+        \ [0xA960,0xA97F,'Hangul Jamo Extended-A'],
+        \ [0xA980,0xA9DF,'Javanese'], [0xA9E0,0xA9FF,'Myanmar Extended-B'],
+        \ [0xAA00,0xAA5F,'Cham'], [0xAA60,0xAA7F,'Myanmar Extended-A'],
+        \ [0xAA80,0xAADF,'Tai Viet'],
+        \ [0xAAE0,0xAAFF,'Meetei Mayek Extensions'],
+        \ [0xAB00,0xAB2F,'Ethiopic Extended-A'],
+        \ [0xAB30,0xAB6F,'Latin Extended-E'],
+        \ [0xAB70,0xABBF,'Cherokee Supplement'],
+        \ [0xABC0,0xABFF,'Meetei Mayek'],
+        \ [0xAC00,0xD7AF,'Hangul Syllables'],
+        \ [0xD7B0,0xD7FF,'Hangul Jamo Extended-B'],
+        \ [0xD800,0xDB7F,'High Surrogates'],
+        \ [0xDB80,0xDBFF,'High Private Use Surrogates'],
+        \ [0xDC00,0xDFFF,'Low Surrogates'],
+        \ [0xE000,0xF8FF,'Private Use Area'],
+        \ [0xF900,0xFAFF,'CJK Compatibility Ideographs'],
+        \ [0xFB00,0xFB4F,'Alphabetic Presentation Forms'],
+        \ [0xFB50,0xFDFF,'Arabic Presentation Forms-A'],
+        \ [0xFE00,0xFE0F,'Variation Selectors'],
+        \ [0xFE10,0xFE1F,'Vertical Forms'],
+        \ [0xFE20,0xFE2F,'Combining Half Marks'],
+        \ [0xFE30,0xFE4F,'CJK Compatibility Forms'],
+        \ [0xFE50,0xFE6F,'Small Form Variants'],
+        \ [0xFE70,0xFEFF,'Arabic Presentation Forms-B'],
+        \ [0xFF00,0xFFEF,'Halfwidth and Fullwidth Forms'],
+        \ [0xFFF0,0xFFFF,'Specials'],
+        \ [0x10000,0x1007F,'Linear B Syllabary'],
+        \ [0x10080,0x100FF,'Linear B Ideograms'],
+        \ [0x10100,0x1013F,'Aegean Numbers'],
+        \ [0x10140,0x1018F,'Ancient Greek Numbers'],
+        \ [0x10190,0x101CF,'Ancient Symbols'],
+        \ [0x101D0,0x101FF,'Phaistos Disc'], [0x10280,0x1029F,'Lycian'],
+        \ [0x102A0,0x102DF,'Carian'],
+        \ [0x102E0,0x102FF,'Coptic Epact Numbers'],
+        \ [0x10300,0x1032F,'Old Italic'], [0x10330,0x1034F,'Gothic'],
+        \ [0x10350,0x1037F,'Old Permic'], [0x10380,0x1039F,'Ugaritic'],
+        \ [0x103A0,0x103DF,'Old Persian'], [0x10400,0x1044F,'Deseret'],
+        \ [0x10450,0x1047F,'Shavian'], [0x10480,0x104AF,'Osmanya'],
+        \ [0x104B0,0x104FF,'Osage'], [0x10500,0x1052F,'Elbasan'],
+        \ [0x10530,0x1056F,'Caucasian Albanian'],
+        \ [0x10570,0x105BF,'Vithkuqi'], [0x105C0,0x105FF,'Todhri'],
+        \ [0x10600,0x1077F,'Linear A'],
+        \ [0x10780,0x107BF,'Latin Extended-F'],
+        \ [0x10800,0x1083F,'Cypriot Syllabary'],
+        \ [0x10840,0x1085F,'Imperial Aramaic'],
+        \ [0x10860,0x1087F,'Palmyrene'], [0x10880,0x108AF,'Nabataean'],
+        \ [0x108E0,0x108FF,'Hatran'], [0x10900,0x1091F,'Phoenician'],
+        \ [0x10920,0x1093F,'Lydian'],
+        \ [0x10980,0x1099F,'Meroitic Hieroglyphs'],
+        \ [0x109A0,0x109FF,'Meroitic Cursive'],
+        \ [0x10A00,0x10A5F,'Kharoshthi'],
+        \ [0x10A60,0x10A7F,'Old South Arabian'],
+        \ [0x10A80,0x10A9F,'Old North Arabian'],
+        \ [0x10AC0,0x10AFF,'Manichaean'], [0x10B00,0x10B3F,'Avestan'],
+        \ [0x10B40,0x10B5F,'Inscriptional Parthian'],
+        \ [0x10B60,0x10B7F,'Inscriptional Pahlavi'],
+        \ [0x10B80,0x10BAF,'Psalter Pahlavi'],
+        \ [0x10C00,0x10C4F,'Old Turkic'], [0x10C80,0x10CFF,'Old Hungarian'],
+        \ [0x10D00,0x10D3F,'Hanifi Rohingya'], [0x10D40,0x10D8F,'Garay'],
+        \ [0x10E60,0x10E7F,'Rumi Numeral Symbols'],
+        \ [0x10E80,0x10EBF,'Yezidi'], [0x10EC0,0x10EFF,'Arabic Extended-C'],
+        \ [0x10F00,0x10F2F,'Old Sogdian'], [0x10F30,0x10F6F,'Sogdian'],
+        \ [0x10F70,0x10FAF,'Old Uyghur'], [0x10FB0,0x10FDF,'Chorasmian'],
+        \ [0x10FE0,0x10FFF,'Elymaic'], [0x11000,0x1107F,'Brahmi'],
+        \ [0x11080,0x110CF,'Kaithi'], [0x110D0,0x110FF,'Sora Sompeng'],
+        \ [0x11100,0x1114F,'Chakma'], [0x11150,0x1117F,'Mahajani'],
+        \ [0x11180,0x111DF,'Sharada'],
+        \ [0x111E0,0x111FF,'Sinhala Archaic Numbers'],
+        \ [0x11200,0x1124F,'Khojki'], [0x11280,0x112AF,'Multani'],
+        \ [0x112B0,0x112FF,'Khudawadi'], [0x11300,0x1137F,'Grantha'],
+        \ [0x11380,0x113FF,'Tulu-Tigalari'], [0x11400,0x1147F,'Newa'],
+        \ [0x11480,0x114DF,'Tirhuta'], [0x11580,0x115FF,'Siddham'],
+        \ [0x11600,0x1165F,'Modi'],
+        \ [0x11660,0x1167F,'Mongolian Supplement'],
+        \ [0x11680,0x116CF,'Takri'], [0x116D0,0x116FF,'Myanmar Extended-C'],
+        \ [0x11700,0x1174F,'Ahom'], [0x11800,0x1184F,'Dogra'],
+        \ [0x118A0,0x118FF,'Warang Citi'], [0x11900,0x1195F,'Dives Akuru'],
+        \ [0x119A0,0x119FF,'Nandinagari'],
+        \ [0x11A00,0x11A4F,'Zanabazar Square'], [0x11A50,0x11AAF,'Soyombo'],
+        \ [0x11AB0,0x11ABF,'Unified Canadian Aboriginal Syllabics Extended-A'],
+        \ [0x11AC0,0x11AFF,'Pau Cin Hau'],
+        \ [0x11B00,0x11B5F,'Devanagari Extended-A'],
+        \ [0x11BC0,0x11BFF,'Sunuwar'], [0x11C00,0x11C6F,'Bhaiksuki'],
+        \ [0x11C70,0x11CBF,'Marchen'], [0x11D00,0x11D5F,'Masaram Gondi'],
+        \ [0x11D60,0x11DAF,'Gunjala Gondi'], [0x11EE0,0x11EFF,'Makasar'],
+        \ [0x11F00,0x11F5F,'Kawi'], [0x11FB0,0x11FBF,'Lisu Supplement'],
+        \ [0x11FC0,0x11FFF,'Tamil Supplement'],
+        \ [0x12000,0x123FF,'Cuneiform'],
+        \ [0x12400,0x1247F,'Cuneiform Numbers and Punctuation'],
+        \ [0x12480,0x1254F,'Early Dynastic Cuneiform'],
+        \ [0x12F90,0x12FFF,'Cypro-Minoan'],
+        \ [0x13000,0x1342F,'Egyptian Hieroglyphs'],
+        \ [0x13430,0x1345F,'Egyptian Hieroglyph Format Controls'],
+        \ [0x13460,0x143FF,'Egyptian Hieroglyphs Extended-A'],
+        \ [0x14400,0x1467F,'Anatolian Hieroglyphs'],
+        \ [0x16100,0x1613F,'Gurung Khema'],
+        \ [0x16800,0x16A3F,'Bamum Supplement'], [0x16A40,0x16A6F,'Mro'],
+        \ [0x16A70,0x16ACF,'Tangsa'], [0x16AD0,0x16AFF,'Bassa Vah'],
+        \ [0x16B00,0x16B8F,'Pahawh Hmong'], [0x16D40,0x16D7F,'Kirat Rai'],
+        \ [0x16E40,0x16E9F,'Medefaidrin'], [0x16F00,0x16F9F,'Miao'],
+        \ [0x16FE0,0x16FFF,'Ideographic Symbols and Punctuation'],
+        \ [0x17000,0x187FF,'Tangut'], [0x18800,0x18AFF,'Tangut Components'],
+        \ [0x18B00,0x18CFF,'Khitan Small Script'],
+        \ [0x18D00,0x18D7F,'Tangut Supplement'],
+        \ [0x1AFF0,0x1AFFF,'Kana Extended-B'],
+        \ [0x1B000,0x1B0FF,'Kana Supplement'],
+        \ [0x1B100,0x1B12F,'Kana Extended-A'],
+        \ [0x1B130,0x1B16F,'Small Kana Extension'],
+        \ [0x1B170,0x1B2FF,'Nushu'], [0x1BC00,0x1BC9F,'Duployan'],
+        \ [0x1BCA0,0x1BCAF,'Shorthand Format Controls'],
+        \ [0x1CC00,0x1CEBF,'Symbols for Legacy Computing Supplement'],
+        \ [0x1CF00,0x1CFCF,'Znamenny Musical Notation'],
+        \ [0x1D000,0x1D0FF,'Byzantine Musical Symbols'],
+        \ [0x1D100,0x1D1FF,'Musical Symbols'],
+        \ [0x1D200,0x1D24F,'Ancient Greek Musical Notation'],
+        \ [0x1D2C0,0x1D2DF,'Kaktovik Numerals'],
+        \ [0x1D2E0,0x1D2FF,'Mayan Numerals'],
+        \ [0x1D300,0x1D35F,'Tai Xuan Jing Symbols'],
+        \ [0x1D360,0x1D37F,'Counting Rod Numerals'],
+        \ [0x1D400,0x1D7FF,'Mathematical Alphanumeric Symbols'],
+        \ [0x1D800,0x1DAAF,'Sutton SignWriting'],
+        \ [0x1DF00,0x1DFFF,'Latin Extended-G'],
+        \ [0x1E000,0x1E02F,'Glagolitic Supplement'],
+        \ [0x1E030,0x1E08F,'Cyrillic Extended-D'],
+        \ [0x1E100,0x1E14F,'Nyiakeng Puachue Hmong'],
+        \ [0x1E290,0x1E2BF,'Toto'], [0x1E2C0,0x1E2FF,'Wancho'],
+        \ [0x1E4D0,0x1E4FF,'Nag Mundari'], [0x1E5D0,0x1E5FF,'Ol Onal'],
+        \ [0x1E7E0,0x1E7FF,'Ethiopic Extended-B'],
+        \ [0x1E800,0x1E8DF,'Mende Kikakui'], [0x1E900,0x1E95F,'Adlam'],
+        \ [0x1EC70,0x1ECBF,'Indic Siyaq Numbers'],
+        \ [0x1ED00,0x1ED4F,'Ottoman Siyaq Numbers'],
+        \ [0x1EE00,0x1EEFF,'Arabic Mathematical Alphabetic Symbols'],
+        \ [0x1F000,0x1F02F,'Mahjong Tiles'],
+        \ [0x1F030,0x1F09F,'Domino Tiles'],
+        \ [0x1F0A0,0x1F0FF,'Playing Cards'],
+        \ [0x1F100,0x1F1FF,'Enclosed Alphanumeric Supplement'],
+        \ [0x1F200,0x1F2FF,'Enclosed Ideographic Supplement'],
+        \ [0x1F300,0x1F5FF,'Miscellaneous Symbols and Pictographs'],
+        \ [0x1F600,0x1F64F,'Emoticons'],
+        \ [0x1F650,0x1F67F,'Ornamental Dingbats'],
+        \ [0x1F680,0x1F6FF,'Transport and Map Symbols'],
+        \ [0x1F700,0x1F77F,'Alchemical Symbols'],
+        \ [0x1F780,0x1F7FF,'Geometric Shapes Extended'],
+        \ [0x1F800,0x1F8FF,'Supplemental Arrows-C'],
+        \ [0x1F900,0x1F9FF,'Supplemental Symbols and Pictographs'],
+        \ [0x1FA00,0x1FA6F,'Chess Symbols'],
+        \ [0x1FA70,0x1FAFF,'Symbols and Pictographs Extended-A'],
+        \ [0x1FB00,0x1FBFF,'Symbols for Legacy Computing'],
+        \ [0x20000,0x2A6DF,'CJK Unified Ideographs Extension B'],
+        \ [0x2A700,0x2B73F,'CJK Unified Ideographs Extension C'],
+        \ [0x2B740,0x2B81F,'CJK Unified Ideographs Extension D'],
+        \ [0x2B820,0x2CEAF,'CJK Unified Ideographs Extension E'],
+        \ [0x2CEB0,0x2EBEF,'CJK Unified Ideographs Extension F'],
+        \ [0x2EBF0,0x2EE5F,'CJK Unified Ideographs Extension I'],
+        \ [0x2F800,0x2FA1F,'CJK Compatibility Ideographs Supplement'],
+        \ [0x30000,0x3134F,'CJK Unified Ideographs Extension G'],
+        \ [0x31350,0x323AF,'CJK Unified Ideographs Extension H'],
+        \ [0xE0000,0xE007F,'Tags'],
+        \ [0xE0100,0xE01EF,'Variation Selectors Supplement'],
+        \ [0xF0000,0xFFFFF,'Supplementary Private Use Area-A'],
+        \ [0x100000,0x10FFFF,'Supplementary Private Use Area-B'],
+        \ ]
+  " <<< generated
+  return s:blocks
+endfunction
+
+" The block a code point falls in, or '' where nothing is assigned. Linear,
+" because this runs once per :HexPairInspect and never in a redraw.
+function! s:BlockName(cp) abort
+  for block in s:Blocks()
+    if a:cp < block[0]
+      return ''
+    endif
+    if a:cp <= block[1]
+      return block[2]
+    endif
+  endfor
+  return ''
+endfunction
+
+" A byte order mark, if these bytes are one. The name and block rows below
+" describe the UTF-8 reading and nothing else - it is the one with no byte
+" order to choose, and naming all four readings would be four lines of
+" mostly noise - which leaves exactly one thing unsaid that a hex editor
+" user opening a file at offset 0 actually wants: that ff fe is a mark and
+" not data. This says it.
+"
+" ff fe 00 00 is genuinely ambiguous - a UTF-32LE mark, or a UTF-16LE one
+" followed by a NUL - so it is reported as both rather than guessed at.
+function! HexPairPagedBomText(bytes) abort
+  let b = a:bytes
+  if len(b) >= 3 && b[0 : 2] == [0xef, 0xbb, 0xbf]
+    return 'utf-8'
+  endif
+  if len(b) >= 4 && b[0 : 3] == [0x00, 0x00, 0xfe, 0xff]
+    return 'utf-32be'
+  endif
+  if len(b) >= 4 && b[0 : 3] == [0xff, 0xfe, 0x00, 0x00]
+    return 'utf-32le, or utf-16le followed by U+0000'
+  endif
+  if len(b) >= 2 && b[0 : 1] == [0xfe, 0xff]
+    return 'utf-16be'
+  endif
+  if len(b) >= 2 && b[0 : 1] == [0xff, 0xfe]
+    return 'utf-16le'
+  endif
+  return ''
+endfunction
+
+" What the inspector adds about one code point: a list of [label, text],
+" empty entries left out, so the caller lays it out like its other rows.
+function! HexPairPagedCharNotes(cp) abort
+  let out = []
+  let names = s:ControlNames()
+  if has_key(names, a:cp)
+    let name = names[a:cp]
+    " '-' means the code point has no abbreviation anyone would recognise,
+    " so it is named and not initialised at.
+    let said = name[0] ==# '-' ? name[1] : printf('%s (%s)', name[0], name[1])
+    call add(out, ['name', name[2] ==# '' ? said : said . ', ' . name[2]])
+  endif
+  " One code point is named but does not get a block row. U+FEFF - the byte
+  " order mark - sits in 'Arabic Presentation Forms-B', and a hex reader who
+  " sees a byte order mark and an Arabic block reaches for the table to
+  " doubt. The assignment is a Blocks.txt artefact, not a truth: blocks are
+  " laid out by CONTIGUITY, and FE70..FEFF is the range that happens to close
+  " the BMP, so U+FEFF lands in it as the last code point of that range. It
+  " is a format character (category Cf), a byte order mark, and it belongs to
+  " no script. The name row already says what it is; the block row would only
+  " add a script where there is none. No other code point needs this: the
+  " other format characters the inspector names (NBSP, SHY, the zero-width
+  " and bidi marks) are in General Punctuation or a block whose name is their
+  " home, and their block reads as true.
+  if a:cp != 0xfeff
+    let block = s:BlockName(a:cp)
+    call add(out, ['block', block ==# '' ? 'no block - unassigned here' : block])
+  endif
+  return out
+endfunction
+
 function! s:NeedsBytes(want, have) abort
   return printf('needs %d bytes, %d left', a:want, a:have)
 endfunction
@@ -3074,29 +4342,35 @@ endfunction
 " be wrong is a different answer, because a data inspector that reported
 " a code point for an overlong sequence or a surrogate would be inventing
 " one: those byte sequences are not characters at all.
-function! HexPairPagedUtf8Text(bytes) abort
+" One decoder, two readers. The inspector needs the CODE POINT and not a
+" sentence about it, so the decoding lives here and the wording lives in
+" HexPairPagedUtf8Text() below - rather than the sentence being parsed back,
+" or the decode written twice and drifting.
+"
+" Answers {'cp': N, 'used': K} or {'err': 'why not'}.
+function! HexPairPagedUtf8Decode(bytes) abort
   if empty(a:bytes)
-    return '-'
+    return {'err': '-'}
   endif
   let b0 = a:bytes[0]
   if b0 < 0x80
-    return s:CodePointText(b0, 1)
+    return {'cp': b0, 'used': 1}
   endif
   " 0x80-0xbf is a continuation byte with nothing in front of it, and
   " 0xc0/0xc1 could only ever start an overlong two-byte sequence.
   if b0 < 0xc2 || b0 > 0xf4
-    return 'not utf-8 (byte ' . printf('%02x', b0) . ' cannot start one)'
+    return {'err': 'not utf-8 (byte ' . printf('%02x', b0) . ' cannot start one)'}
   endif
   let want = b0 < 0xe0 ? 2 : (b0 < 0xf0 ? 3 : 4)
   if len(a:bytes) < want
-    return s:NeedsBytes(want, len(a:bytes))
+    return {'err': s:NeedsBytes(want, len(a:bytes))}
   endif
   let cp = b0 % (want == 2 ? 32 : (want == 3 ? 16 : 8))
   let i = 1
   while i < want
     let b = a:bytes[i]
     if b / 64 != 2
-      return 'not utf-8 (byte ' . printf('%02x', b) . ' is not a continuation)'
+      return {'err': 'not utf-8 (byte ' . printf('%02x', b) . ' is not a continuation)'}
     endif
     let cp = cp * 64 + b % 64
     let i += 1
@@ -3105,15 +4379,20 @@ function! HexPairPagedUtf8Text(bytes) abort
   " spells, and is not that character however it looks.
   let least = want == 2 ? 0x80 : (want == 3 ? 0x800 : 0x10000)
   if cp < least
-    return printf('not utf-8 (overlong: U+%04X in %d bytes)', cp, want)
+    return {'err': printf('not utf-8 (overlong: U+%04X in %d bytes)', cp, want)}
   endif
   if cp >= 0xd800 && cp <= 0xdfff
-    return printf('not utf-8 (U+%04X is a surrogate)', cp)
+    return {'err': printf('not utf-8 (U+%04X is a surrogate)', cp)}
   endif
   if cp > 0x10ffff
-    return printf('not utf-8 (U+%04X is past the last code point)', cp)
+    return {'err': printf('not utf-8 (U+%04X is past the last code point)', cp)}
   endif
-  return s:CodePointText(cp, want)
+  return {'cp': cp, 'used': want}
+endfunction
+
+function! HexPairPagedUtf8Text(bytes) abort
+  let got = HexPairPagedUtf8Decode(a:bytes)
+  return has_key(got, 'err') ? got.err : s:CodePointText(got.cp, got.used)
 endfunction
 
 " The same as UTF-16, in the byte order a:little asks for. A high
@@ -3189,7 +4468,11 @@ endfunction
 
 " The whole report, as lines. Pure: it is handed the bytes and where they
 " are, so every conversion in it is testable without a buffer.
-function! HexPairPagedInspectLines(bytes, at, total) abort
+" a:1 says where the bytes ran out, as a whole phrase and not a noun to be
+" slotted in: this reports on an ordinary buffer too, where there is no page
+" to be at the end of - and 'on this buffer' is not English.
+function! HexPairPagedInspectLines(bytes, at, total, ...) abort
+  let where = a:0 > 0 ? a:1 : 'on this page'
   if empty(a:bytes)
     return ['hexpair: no byte here to read']
   endif
@@ -3212,8 +4495,8 @@ function! HexPairPagedInspectLines(bytes, at, total) abort
     let name = printf('%d-bit', w * 8)
     if len(a:bytes) < w
       call add(out, printf('  %-8s %-26s  %s', name,
-            \ printf('(only %d byte%s left on this page)', len(a:bytes),
-            \        len(a:bytes) == 1 ? '' : 's'), ''))
+            \ printf('(only %d byte%s left %s)', len(a:bytes),
+            \        len(a:bytes) == 1 ? '' : 's', where), ''))
       continue
     endif
     let be = a:bytes[0 : w - 1]
@@ -3238,6 +4521,20 @@ function! HexPairPagedInspectLines(bytes, at, total) abort
         \ HexPairPagedUtf16Text(a:bytes, 1), HexPairPagedUtf16Text(a:bytes, 0)))
   call add(out, printf('  %-8s %-26s  %s', 'utf-32',
         \ HexPairPagedUtf32Text(a:bytes, 1), HexPairPagedUtf32Text(a:bytes, 0)))
+  " What the utf-8 row decoded, said in words: the name of a code point
+  " nobody can see, and the block it belongs to. Only for a sequence that
+  " actually decoded - naming a byte that is not utf-8 would be asserting an
+  " encoding the file has not been said to be in.
+  let decoded = HexPairPagedUtf8Decode(a:bytes)
+  if !has_key(decoded, 'err')
+    for note in HexPairPagedCharNotes(decoded.cp)
+      call add(out, printf('  %-8s %s', note[0], note[1]))
+    endfor
+  endif
+  let bom = HexPairPagedBomText(a:bytes)
+  if bom !=# ''
+    call add(out, printf('  %-8s %s byte order mark', 'bom', bom))
+  endif
   if !has('num64')
     call add(out, '  (32- and 64-bit values need a Vim with +num64)')
   endif
@@ -3361,9 +4658,62 @@ function! s:InspectForget() abort
   endif
 endfunction
 
-function! s:Inspect(clear) abort
-  if !s:RequirePaged()
+" The inspector outside hexpair: an ordinary buffer of ordinary text.
+" Reading the bytes under the cursor is worth as much there as it is here -
+" what is this character, is that a NBSP, is there a BOM at the top of the
+" file - and everything it needs already exists, since the text view's
+" reader works on any buffer once it is not told to skip a banner.
+"
+" What it must SAY is different, though, and this is the part that has to be
+" got right. In a paged view the buffer holds the FILE's bytes, because
+" hexpair opened it ++bin. In an ordinary buffer it holds VIM's: a file read
+" as latin1 into a utf-8 Vim is latin1 on disk and utf-8 in memory, and a
+" 'fileformat' of dos has CRLF on disk and no CR at all in the buffer. So a
+" note says which is on screen, whenever the two can differ - anything else
+" would be a hex editor quietly showing bytes that are not in the file.
+function! s:PlainNotes() abort
+  let out = []
+  if &l:binary
+    return out
+  endif
+  if &l:fileencoding !=# '' && &l:fileencoding !=# &encoding
+    call add(out, printf("Vim's bytes, not the file's: 'fileencoding' is %s, "
+          \ . 'this Vim holds %s', &l:fileencoding, &encoding))
+  endif
+  if &l:fileformat !=# 'unix'
+    call add(out, printf("a line break reads 0a here; 'fileformat' is %s, so "
+          \ . 'the file has %s', &l:fileformat,
+          \ &l:fileformat ==# 'dos' ? '0d 0a' : '0d'))
+  endif
+  return out
+endfunction
+
+function! s:InspectPlain(clear) abort
+  if a:clear
+    " Nothing is marked outside a hex view - the marking lives on the
+    " highlighting a paged buffer has and an ordinary one does not - so
+    " there is nothing for the bang to take off.
+    echo 'hexpair: nothing was marked to clear (this is not a hexpair view)'
     return
+  endif
+  let total = line2byte(line('$') + 1) - 1
+  if total <= 0
+    echo 'hexpair: this buffer holds no bytes'
+    return
+  endif
+  let bytes = s:InspectBytes(8)
+  let at = empty(bytes) ? 0 : s:BufOffset() + 1
+  for line in HexPairPagedInspectLines(bytes, at, total, 'in this buffer')
+    echo line
+  endfor
+  for note in s:PlainNotes()
+    echo printf('  %-8s %s', 'note', note)
+  endfor
+endfunction
+
+function! s:Inspect(clear) abort
+  if !get(b:, 'hexpair_page_active', 0)
+    return s:InspectPlain(a:clear)
   endif
   if a:clear
     call s:InspectForget()
@@ -3496,19 +4846,10 @@ let s:computed_encodings = ['utf-8', 'utf-16le', 'utf-16be',
 " one way to see a string's bytes exactly whatever 'encoding' is - the same
 " round trip the inspector's text view uses, and for the same reason.
 function! s:HexOfString(text) abort
-  " Everything else here runs with a page open, which is what resolves
-  " s:xxd; this one is also reachable from HexPairPagedCharBytes() with no
-  " buffer at all, which is how the suite asks it questions.
-  if !exists('s:xxd') || s:xxd ==# ''
-    let s:xxd = s:ResolveXxd()
-    if s:xxd ==# ''
-      throw 'hexpair: xxd not found in PATH nor in $VIMRUNTIME'
-    endif
-  endif
   let raw = tempname()
   try
     call writefile([a:text], raw, 'b')
-    return tolower(substitute(s:Run(printf('%s -p %s', s:xxd,
+    return tolower(substitute(s:Run(printf('%s -p %s', s:Xxd(),
           \ shellescape(raw))), '[^0-9a-fA-F]', '', 'g'))
   finally
     call delete(raw)
@@ -3723,7 +5064,10 @@ function! s:GotoOffsetPrompt(force) abort
   if !s:RequirePaged()
     return
   endif
-  let text = input(printf('hexpair: goto byte (1-%d, or +N/-N from here): ',
+  " Worded to match s:PageGotoPrompt()'s, which sits under the neighbouring
+  " key: both take +N/-N and $, and a prompt that lists one and not the
+  " other is a prompt that teaches the wrong thing about its neighbour.
+  let text = input(printf('hexpair: goto byte (1-%d, +N/-N, $, $-N): ',
         \ b:hexpair_page_total))
   redraw
   if !empty(text)
@@ -3779,6 +5123,29 @@ function! HexPairPagedParseOffsetInput(text) abort
   if empty(a:text)
     return {}
   endif
+  " '$' is the file's last byte, the same shorthand and the same spelling
+  " |:HexPairPageGoto| takes for its last page - the two prompts sit under
+  " neighbouring keys and answering one in the other's language should not
+  " be a mistake. Resolved by the caller, which is the only place that
+  " knows how big the file is; 'last' rather than an offset for the reason
+  " HexPairPagedParsePageInput() returns it that way.
+  if a:text ==# '$'
+    return {'last': 1, 'delta': 0}
+  endif
+  " '$-N' is N bytes back from the last one - the thing a bare '-N' cannot
+  " say, since that steps from wherever the cursor is. Resolved by the
+  " caller, which is the only place that knows how long the file is.
+  if a:text =~# '^\$-\%(0[xX]\x\+\|\d\+\)$'
+    let n = a:text[2:]
+    return {'last': 1,
+          \ 'delta': -(n =~# '^0[xX]' ? str2nr(n[2:], 16) : str2nr(n))}
+  endif
+  " '$+N' is past the last byte, which is not a byte. Refused where it was
+  " typed rather than reported later as an offset outside the file.
+  if a:text =~# '^\$+'
+    return {'msg': 'hexpair: ' . a:text . ' is past the last byte - $ is '
+          \ . 'the end, so only $-N (back from it) means anything'}
+  endif
   " A leading + or - makes it a step from the byte the cursor is on
   " rather than a position in the file, which is the only form where 0
   " means something ("stay here") and where the 1-based/0-based question
@@ -3790,7 +5157,8 @@ function! HexPairPagedParseOffsetInput(text) abort
   " ("byte positions start at 1") would be about the wrong thing.
   if text !~# '^\%(0[xX]\x\+\|\d\+\)$'
     return {'msg': printf('hexpair: not a byte position: %s (decimal, or '
-          \ . '0x for hex; byte 1 is the first, +N and -N step from here)',
+          \ . '0x for hex; byte 1 is the first, +N and -N step from '
+          \ . 'here, $ is the last, $-N is N back from it)',
           \ string(a:text))}
   endif
   let n = text =~# '^0[xX]' ? str2nr(text[2:], 16) : str2nr(text)
@@ -3811,6 +5179,20 @@ function! s:GotoOffset(text, force) abort
     let parsed = HexPairPagedParseOffsetInput(a:text)
     if has_key(parsed, 'msg')
       throw parsed.msg
+    endif
+    " BEFORE the step branch: '$' and '$-N' carry a delta as well, and
+    " the step branch would otherwise take them and count from the
+    " cursor rather than from the end of the file.
+    if has_key(parsed, 'last')
+      " '$' is the last byte and '$-N' is N back from it, resolved here
+      " because this is where the size is known. An empty file has no last
+      " byte; letting it through as -1 would be reported as "byte 0 is
+      " outside the file", which is true and says nothing about why.
+      let total = s:FileSize(b:hexpair_page_file)
+      if total <= 0
+        throw 'hexpair: the file is empty; it has no last byte'
+      endif
+      let parsed = {'offset': total - 1 + get(parsed, 'delta', 0)}
     endif
     if has_key(parsed, 'delta')
       " A step is from the byte the cursor is on, so it needs no page
@@ -4262,7 +5644,7 @@ function! s:SpliceIntoPage(at, len, hex) abort
   let dump = tempname()
   try
     call writefile([new], hex)
-    call s:Run(printf('%s -r -p %s %s', s:xxd,
+    call s:Run(printf('%s -r -p %s %s', s:Xxd(),
           \ shellescape(hex), shellescape(raw)))
     call s:CanonicalDump(raw, b:hexpair_page_base, dump)
     call s:SetLinesUndoable(s:HexViewLines(readfile(dump)))
@@ -4465,6 +5847,23 @@ function! s:DiffHex() abort
   return get(b:, 'hexpair_diff_hex', '')
 endfunction
 
+" Is a comparison running at all?
+"
+" The diff FILE answers that. Its BYTES cannot, and the difference is not
+" academic: a page past the end of the other file has no bytes to compare
+" against, and every byte on it differs precisely because of that. Three
+" separate guards used to ask s:DiffHex() and read its empty string as "no
+" comparison", so on such a page the marking, the count and the text view
+" each fell silent and the page looked identical to a file that does not
+" reach it - reported on a 120 GiB file compared with a smaller one.
+"
+" One predicate, called by all three, so they cannot drift apart about it
+" again. Global because it is the testable half: the drawing itself needs a
+" window with geometry, which `vim -es` does not have.
+function! HexPairPagedDiffActive() abort
+  return get(b:, 'hexpair_diff_file', '') !=# ''
+endfunction
+
 function! s:LoadDiffHex() abort
   if get(b:, 'hexpair_diff_file', '') ==# ''
     let b:hexpair_diff_hex = ''
@@ -4489,7 +5888,8 @@ function! s:ClearDiffHighlight() abort
 endfunction
 
 function! s:DiffHighlight() abort
-  if !get(b:, 'hexpair_page_active', 0) || s:DiffHex() ==# ''
+  " HexPairPagedDiffActive(), never s:DiffHex(): see that function.
+  if !get(b:, 'hexpair_page_active', 0) || !HexPairPagedDiffActive()
     return
   endif
   let state = [b:changedtick, line('w0'), line('w$'), b:hexpair_page_index]
@@ -4519,6 +5919,80 @@ function! HexPairPagedDiffText(theirs, base, len, differing, first) abort
   return printf('hexpair: %d of the %d bytes on this page differ from %s, '
         \ . 'first at byte %d (0x%x)',
         \ a:differing, a:len, a:theirs, a:first + 1, a:first + 1)
+endfunction
+
+" How many bytes to spell out before :HexPairDiffShow stops listing them.
+" A Visual selection can cover a whole page, and a message of eight thousand
+" bytes is not a message.
+let s:diffshowmax = 32
+
+" What |:HexPairDiffShow| says: the byte under the cursor, or the bytes
+" under a Visual selection, beside what the file being compared with holds
+" at the SAME offsets - including when it holds nothing there at all, which
+" is the one question the marking on screen cannot answer. A marked byte
+" says "these differ"; this says what the other file has, or that it stops
+" before here.
+"
+" a:mine and a:theirs are flat hex as s:FileHex() gives it, a:theirs
+" possibly shorter or empty. Offsets are 1-based and inclusive, like every
+" other message here, so they can be typed straight into
+" |:HexPairGoOffset|. Pure, so the wording is testable without a cursor or
+" a Visual selection.
+function! HexPairPagedDiffShowText(name, first, mine, theirs, othersize) abort
+  let bytes = strlen(a:mine) / 2
+  if bytes <= 0
+    return ['hexpair: no bytes here to compare']
+  endif
+  let have = strlen(a:theirs) / 2
+  let ends = printf('ends at byte %d (0x%x)', a:othersize, a:othersize)
+
+  if bytes == 1
+    let mine = strpart(a:mine, 0, 2)
+    if have < 1
+      return [printf('hexpair: byte %d (0x%x): %s here, nothing in %s - it %s',
+            \ a:first + 1, a:first + 1, mine, a:name, ends)]
+    endif
+    let theirs = strpart(a:theirs, 0, 2)
+    if mine ==# theirs
+      return [printf('hexpair: byte %d (0x%x): %s here and in %s',
+            \ a:first + 1, a:first + 1, mine, a:name)]
+    endif
+    return [printf('hexpair: byte %d (0x%x): %s here, %s in %s',
+          \ a:first + 1, a:first + 1, mine, theirs, a:name)]
+  endif
+
+  " Two aligned rows, so the pairs line up under each other and a run that
+  " the other file does not reach reads as a row of dashes rather than as
+  " an absence to be inferred.
+  let shown = bytes > s:diffshowmax ? s:diffshowmax : bytes
+  let differ = 0
+  let mrow = []
+  let trow = []
+  let i = 0
+  while i < bytes
+    let mine = strpart(a:mine, i * 2, 2)
+    let theirs = i < have ? strpart(a:theirs, i * 2, 2) : ''
+    if mine !=# theirs
+      let differ += 1
+    endif
+    if i < shown
+      call add(mrow, mine)
+      call add(trow, theirs ==# '' ? '--' : theirs)
+    endif
+    let i += 1
+  endwhile
+
+  let width = strlen(a:name) > 4 ? strlen(a:name) : 4
+  let out = [printf('hexpair: bytes %d-%d (0x%x-0x%x), %d of %d differ%s',
+        \ a:first + 1, a:first + bytes, a:first + 1, a:first + bytes,
+        \ differ, bytes,
+        \ have < bytes ? printf(' - %s %s', a:name, ends) : '')]
+  call add(out, printf('  %-*s  %s', width, 'here', join(mrow, ' ')))
+  call add(out, printf('  %-*s  %s', width, a:name, join(trow, ' ')))
+  if bytes > shown
+    call add(out, printf('  ... and %d more, not shown', bytes - shown))
+  endif
+  return out
 endfunction
 
 " How many bytes of a:mine differ from a:theirs, and the index of the
@@ -4629,7 +6103,8 @@ endfunction
 
 function! s:DiffCount(hex) abort
   let mine = get(b:, 'hexpair_page_hex', '')
-  if mine ==# '' || a:hex ==# ''
+  " HexPairPagedDiffActive(), never a:hex: see that function.
+  if mine ==# '' || !HexPairPagedDiffActive()
     return [-1, -1]
   endif
   let [differing, first] = HexPairPagedCountDifferences(mine, a:hex)
@@ -4685,6 +6160,68 @@ endfunction
 " with a space or a literal '$' does not survive <f-args>.
 function! HexPairDiffWith(file) abort
   call s:Diff(a:file, 0)
+endfunction
+
+" :HexPairDiffShow - what the file being compared with holds where I am.
+"
+" The marking says WHICH bytes differ and nothing more; on a page past the
+" end of the other file every byte is marked and the reason is invisible.
+" This is the byte under the cursor - or the whole Visual selection, since
+" "what is over there" is as reasonable a question about a run as about one
+" byte - against the same offsets in the other file, saying plainly when
+" there is nothing there.
+"
+" The bytes reported are the page as it was READ, not as the buffer now
+" holds it, for the reason s:DiffCount() gives: this answers "how do these
+" two files compare", which unwritten edits of mine are no part of.
+"
+" a:reselect mirrors s:Selection(): asking from the command line ends
+" Visual mode, and losing the selection to look at it is not a trade worth
+" making, so the gv comes first and the message last.
+function! s:DiffShow(...) abort
+  if !s:RequirePaged()
+    return
+  endif
+  if !HexPairPagedDiffActive()
+    echohl ErrorMsg
+    echomsg 'hexpair: not comparing with anything - :HexPairDiff {file} first'
+    echohl None
+    return
+  endif
+  let reselect = a:0 && a:1
+  if reselect
+    let sel = HexPairPagedSelectionBytes(getpos("'<"), getpos("'>"),
+          \ visualmode())
+    if empty(sel)
+      echo 'hexpair: the selection covers no bytes'
+      return
+    endif
+    let [first, last] = [sel.first, sel.last]
+  else
+    let first = s:PagedByteOffset()
+    let last = first
+  endif
+
+  let at = first - b:hexpair_page_base
+  " NOT `count`: that is v:count and read-only, and a local of that name
+  " aborts the function with E46. Same for errmsg, line and friends.
+  let span = last - first + 1
+  let mine = strpart(get(b:, 'hexpair_page_hex', ''), at * 2, span * 2)
+  " Their bytes for the same offsets, which past the end of that file is
+  " simply nothing - strpart() beyond the end gives '' and the text
+  " function reads that as "not there" rather than as an error.
+  let theirs = strpart(s:DiffHex(), at * 2, span * 2)
+  let lines = HexPairPagedDiffShowText(
+        \ fnamemodify(b:hexpair_diff_file, ':~:.'), first, mine, theirs,
+        \ getfsize(b:hexpair_diff_file))
+
+  if reselect
+    normal! gv
+  endif
+  " More than one line gets Vim's hit-enter prompt, which is what keeps a
+  " multi-line report on the screen long enough to read - and after Visual
+  " mode, what stops "-- VISUAL --" painting over it.
+  echo join(lines, "\n") . (len(lines) > 1 || reselect ? "\n" : '')
 endfunction
 
 " The next (or previous) offset at which the two files differ, from a:from
@@ -5436,10 +6973,15 @@ endfunction
 " 3. WINDOWED-TEXT the SAME page's raw bytes as text, with the same banner.
 "
 " :HexPairToggle moves PLAIN -> HEX-PAGE -> WINDOWED-TEXT -> HEX-PAGE -> ...
-" There is deliberately no way back to PLAIN: once a buffer holds one page
-" rather than the whole file, presenting it as the file again would be a
-" lie, and a plain :w would truncate the file down to that page. Close and
-" reopen the file to get back.
+" There is a way back from a buffer that TOGGLED from PLAIN: :HexPairUnhex
+" re-opens the whole file as it stood before the toggle, with the options
+" it had then. There is no such thing for a buffer OPENED as hex (:HexPairOpen,
+" vimhex), because that door has no PLAIN to return to - the file may never
+" have been read as text and may be far too large to load for that purpose.
+" (And in neither case would a page be 'reverted' to a file: once a buffer
+" holds one page rather than the whole file, presenting it as the file again
+" would be a lie, and a plain :w would truncate the file down to that page.
+" That is why :HexPairUnhex re-opens rather than converts.)
 "
 " b:hexpair_page_active marks states 2 and 3; b:hexpair_view says which.
 
@@ -5569,7 +7111,61 @@ function! s:ToHex() abort
     throw sizeerr
   endif
 
-  let off = s:PageSource()
+  " Remember what PLAIN was before anything here changes it: s:PageSource()
+  " reloads the buffer ++bin, s:SetupPagedBuffer() takes the options and
+  " autocmds over, and none of it is undoable from the buffer afterwards.
+  " This snapshot is what :HexPairUnhex restores; s:Open() never takes one,
+  " which is how the two hex doors stay distinguishable. Captured once:
+  " re-entering the hex view from a restored buffer must not overwrite the
+  " original with its own ++bin state.
+  "
+  " 'fileencoding' and 'fileformat' come out EMPTY where they matched the
+  " global defaults on the way in - Vim stores 'no choice made' that way -
+  " and empty is exactly what s:UnhexPlain() wants back: an ordinary
+  " re-:edit rediscovers the encoding, which is what the user's opening did.
+  "
+  " The cursor BEFORE the ++bin reload, and in the PLAIN view's own
+  " line/column: the reload changes the buffer's bytes (the BOM and CRs
+  " materialise, transcoding is undone) while the cursor keeps its old
+  " coordinates, so the plain view's position has to be taken while the
+  " plain view is still on screen. s:PageSource() keeps its own, in bytes,
+  " for the hex side of things; the two do not have to agree.
+  "
+  " The file is NOT among the values kept: s:UnhexPlain() re-opens whatever
+  " file the buffer holds when it runs, which after a :saveas is not the
+  " one this buffer was toggled from.
+  if !exists('b:hexpair_plain')
+    let b:hexpair_plain = {
+          \ 'lnum':         line('.'),
+          \ 'col':          col('.'),
+          \ 'binary':       &l:binary,
+          \ 'fileencoding': &l:fileencoding,
+          \ 'fileformat':   &l:fileformat,
+          \ 'buftype':      &l:buftype,
+          \ 'bufhidden':    &l:bufhidden,
+          \ 'swapfile':     &l:swapfile,
+          \ 'filetype':     &l:filetype,
+          \ 'readonly':     &l:readonly,
+          \ 'modifiable':   &l:modifiable,
+          \ 'modeline':     &l:modeline,
+          \ 'textwidth':    &l:textwidth,
+          \ 'expandtab':    &l:expandtab}
+  endif
+  try
+    let off = s:PageSource()
+  catch
+    " The snapshot goes only if PLAIN is still on screen for a fresh one to
+    " be taken from - which is the refusals, every one of which happens
+    " before anything about the buffer changes. Past the ++bin re-read the
+    " same argument as s:AbandonSetup()'s applies: the plain view is gone
+    " and this is the only record of it left, so it stays and
+    " :HexPairUnhex is the way out. The re-read is what sets 'binary', so
+    " the snapshot's own value is the test for whether it happened.
+    if &l:binary == b:hexpair_plain.binary
+      unlet! b:hexpair_plain
+    endif
+    throw v:exception
+  endtry
   call s:Debug('entering hex mode on byte %d, page %d',
         \ off, off / g:hexpair_page_size + 1)
   call s:SetupPagedBuffer()
@@ -5590,6 +7186,214 @@ function! s:ToHex() abort
   redraw!
 endfunction
 
+" ---------------------------------------------------------------------------
+" Back to PLAIN (:HexPairUnhex)
+" ---------------------------------------------------------------------------
+"
+" :HexPairToggle has no way back to PLAIN on purpose (see "The buffer's
+" three states" above), and that is right for the PAGE: the buffer holds
+" one page, and dressing it up as the file again would be a lie. But
+" there is a second door into the paged view - a plain buffer of a whole
+" file toggled by <Leader>h - and behind THAT door the whole file is
+" still on disk, exactly where Vim read it from. For those buffers only,
+" :HexPairUnhex re-opens it the way :edit would, with the options as
+" they were before the first toggle: the ordinary, unpaged, non-binary
+" view the user started with.
+"
+" What makes this different from a hand-made dump being 'reverted': it
+" does not convert the buffer's bytes back (a page is not the file), and
+" it does not guess (the snapshot names every option). s:Open() never
+" takes that snapshot, which is the whole test - a buffer opened through
+" the vimhex door may have had no text view at all, its file may be huge
+" or unreadable, and hexpair has no parameters to restore, so it refuses
+" and says why.
+function! s:Unhex(force) abort
+  try
+    call s:UnhexPlain(a:force)
+  catch /^hexpair:/
+    echohl ErrorMsg
+    echomsg v:exception
+    echohl None
+  endtry
+endfunction
+
+function! s:UnhexPlain(force) abort
+  if !exists('b:hexpair_plain')
+    " No snapshot means one of two quite different things, and a single
+    " message would be wrong in whichever case it did not describe: a
+    " buffer that never entered hex mode has nothing to come back from,
+    " while a paged one came through the door that has no way back.
+    if !get(b:, 'hexpair_page_active', 0)
+      throw 'hexpair: hex mode is not active'
+    endif
+    let f = get(b:, 'hexpair_page_file', '')
+    throw 'hexpair: this hex view was opened as hex (:HexPairOpen or '
+          \ . 'vimhex), so hexpair never saw a text view of this file to '
+          \ . 'return to; the text parameters are not known and the file '
+          \ . 'may be huge - open it normally instead'
+          \ . (f !=# '' ? ' (:edit ' . f . ')' : '')
+  endif
+  let p = b:hexpair_plain
+  " The file to re-open is the one this BUFFER holds now, not the name the
+  " snapshot was taken under. :saveas moves a view to another file
+  " (|hexpair-saveas|) and nothing updates the snapshot, so re-editing the
+  " remembered name would open a SECOND buffer and leave this one paged
+  " with its autocommands already gone - a hex view whose :w has no
+  " BufWriteCmd left to run. The remembered OPTIONS are still the ones
+  " worth handing back either way: an ordinary :edit re-detects the
+  " encoding and the line endings for whichever file it is, which is what
+  " the user's own opening did.
+  let name = expand('%:p')
+  if name ==# ''
+    throw 'hexpair: this hex view is paged from content with no file of '
+          \ . 'its own, so there is nothing to re-open as text; write the '
+          \ . 'bytes out with :w {file} first'
+  endif
+  " A plain :edit does not write, so unwritten edits would be lost without
+  " a word - and in a paged buffer they are edits to one PAGE, which even
+  " a :w would not turn into a whole-file save. Say so; '!' discards them.
+  " (The discarding itself happens right before the re-edit, because
+  " restoring 'fileencoding' marks the buffer modified again; see there.)
+  if &l:modified && !a:force
+    throw 'hexpair: this page has unwritten edits; :w patches them into the '
+          \ . 'file first, :HexPairUnhex! discards them'
+  endif
+  " Buffer and disk agreed the last time a page was read (s:CheckFresh()'s
+  " own test, so the same standard this plugin holds writes to); a change
+  " since then is a change no re-edit will preserve the knowledge of.
+  " Only when there IS a page: s:AbandonSetup() leaves a buffer holding the
+  " snapshot and no page state at all, and that buffer - re-read ++bin and
+  " never paged - is exactly the one this has to be able to rescue.
+  if get(b:, 'hexpair_page_active', 0)
+    call s:CheckFresh()
+  endif
+  if !filereadable(name)
+    throw 'hexpair: ' . name . ' cannot be read; the hex view is kept'
+  endif
+
+  " The cursor goes back to where it was in the plain view, and the
+  " snapshot already holds that: p.lnum / p.col. It is not computed back
+  " from the byte the cursor is on now, for two reasons. Mapping a hex-view
+  " byte into plain-view coordinates is lossy exactly where 'fileencoding'
+  " or 'fileformat' convert (the same caveat s:PreReloadPos() documents),
+  " and on a modified page s:PagedByteOffset() runs s:PagedScan() to
+  " recount the bytes - a whole-page validation this does not need, since
+  " the page's content is about to be thrown away for the file.
+
+  " 'paste' is GLOBAL, and it is switched on while the cursor is in a hex
+  " buffer (s:PasteOn()) - so it has to come off here, because the BufLeave
+  " that would have done it is about to be deleted with the rest of the
+  " paged arrangement and this buffer is never left. Without it an unhexed
+  " file comes home with the user's insert-mode mappings, abbreviations and
+  " automatic formatting silently switched off. It goes BEFORE
+  " b:undo_ftplugin below: switching 'paste' off restores the options it
+  " overrode, and only then may the ftplugin's undo revert them.
+  call s:PasteOff()
+
+  " The autocmds (BufWriteCmd, BufReadCmd, the highlights) belong to the
+  " paged arrangement, and ':edit' below fires BufReadCmd on its way out
+  " if they are still attached - which would render a page into a buffer
+  " that is about to be the whole file. Drop them first, then the
+  " arrangement they served.
+  augroup HexPairPagedBuffer
+    autocmd! * <buffer>
+  augroup END
+  call s:ClearMarkings()
+  call s:DropSpill()
+
+  " Nothing of hexpair's stays on the buffer: it is an ordinary buffer
+  " again, and every leftover is state the next entry into hex mode would
+  " read as this view's own - a diff target the user has forgotten, a
+  " cached page, a search's hit list. By PREFIX rather than name by name,
+  " because the hand-written list this replaces was already seven names
+  " short of the ones the plugin sets. Before the :edit, so nothing (a
+  " 'statusline' calling HexPairStatus(), say) can read the whole file as
+  " though it were still a page. p keeps the snapshot alive - the variable
+  " goes, the dict it named does not.
+  for hpvar in keys(b:)
+    if hpvar =~# '^hexpair_'
+      call remove(b:, hpvar)
+    endif
+  endfor
+
+  " The :edit re-reads the file, and HOW it reads it is fixed by the read
+  " options - 'binary', 'fileencoding', 'fileformat'. A plain :edit keeps
+  " every local value the paged view left there (the probes show none of
+  " them is reset by the re-read), so the read-affecting ones must be put
+  " back BEFORE the read: left at the ++bin values, the buffer would come
+  " back raw - no BOM strip, no CRLF folding, no transcode. From the
+  " snapshot, not from the global side: 'setlocal binary&' would reset to
+  " whatever the global value is, which is not necessarily what this
+  " buffer's plain view had.
+  let &l:binary = p.binary
+  let &l:fileencoding = p.fileencoding
+  let &l:fileformat = p.fileformat
+
+  " The xxd ftplugin's local options (tabstop 10 and friends) belong to a
+  " dump, not to the file's own view. Its undo must run while 'filetype'
+  " still names xxd - once the re-read's FileType event fires, ftdetect
+  " re-runs and the undo has been overwritten by whatever filetype the
+  " file's own name resolves to. 'filetype' is cleared rather than reset:
+  " an autocmd for an empty filetype cannot fire, so no ftplugin runs
+  " here, and the re-read re-detects the way the original opening did.
+  setlocal filetype=
+  if exists('b:undo_ftplugin')
+    execute b:undo_ftplugin
+    unlet b:undo_ftplugin
+  endif
+  unlet! b:did_ftplugin
+
+  " Restoring 'fileencoding' re-transcodes the buffer in place, which
+  " marks it modified - and a modified buffer makes an :edit first try to
+  " write it (E37, or a page-range write through autowrite), which is
+  " exactly what is not wanted: the :edit replaces this page with the whole
+  " file, so whatever the buffer holds is about to be thrown away. An
+  " unwritten edit to a page is not a write to the file, and the '!' above
+  " has already been refused or given. The flag is noise here, so it is
+  " cleared for real right before the read, not left to the option above.
+  setlocal nomodified
+
+  " The re-edit: same name, same window, ordinary read. It re-detects the
+  " filetype exactly the way the user's opening did - 'filetype' is empty
+  " and b:did_ftplugin is gone, so its FileType event fires the ftplugin
+  " for the file's own name. A :silent :edit can still fail (E13/E505 on
+  " the file), and the buffer is already de-paged by then - so the state
+  " below only gets written once the edit actually happened.
+  execute 'silent edit' fnameescape(name)
+
+  " The options the paged view and the ++bin reload set, back from the
+  " snapshot rather than assumed. A plain :edit keeps every local value -
+  " so the paged 'buftype', 'bufhidden', 'swapfile' would otherwise
+  " survive - and the ++bin reload's side effects, 'modeline' off,
+  " 'textwidth' 0 and 'expandtab' off, sit in the snapshot too. Restoring
+  " what was THERE, not the defaults, is the difference between an unhex
+  " that lands home and one that lands at the defaults.
+  let &l:buftype    = p.buftype
+  let &l:bufhidden  = p.bufhidden
+  let &l:swapfile   = p.swapfile
+  let &l:modifiable = p.modifiable
+  let &l:modeline   = p.modeline
+  let &l:textwidth  = p.textwidth
+  let &l:expandtab  = p.expandtab
+  " 'readonly' is the one that is not simply handed back. The :edit has
+  " just worked it out from the file itself, which is fresher than the
+  " snapshot: a file that has become read-only since would be presented as
+  " writable again by a restore. So only a 'readonly' the user had set
+  " BEFORE the toggle is re-asserted, and Vim's own answer is never
+  " overruled the other way.
+  if p.readonly
+    setlocal readonly
+  endif
+
+  " The plain view's own coordinates, into the re-opened whole file. They
+  " were taken while the plain view was on screen (s:ToHex), so they name a
+  " real line and column of it; clamp the line to the file in case it has
+  " grown or shrunk since, and the column is left to cursor() to clamp.
+  call cursor(p.lnum > line('$') ? line('$') : p.lnum, p.col)
+  redraw!
+  echomsg 'hexpair: ' . name . ' re-opened as text'
+endfunction
+
 " Undo s:SetupPagedBuffer() when the page never got loaded, so a buffer
 " is never left looking paged (acwrite, our BufWriteCmd) without the page
 " state a write would need.
@@ -5601,6 +7405,13 @@ function! s:AbandonSetup() abort
   setlocal buftype= bufhidden=
   unlet! b:hexpair_page_file b:hexpair_page_size b:hexpair_page_bufname
         \ b:hexpair_page_spill
+  " b:hexpair_plain is deliberately NOT dropped. By the time a page load
+  " can fail, s:PageSource() has already re-read the buffer ++bin, and the
+  " snapshot is then the only surviving record of what the plain view was:
+  " throwing it away leaves the buffer stuck in binary with nothing to
+  " restore, and the NEXT toggle would snapshot that ++bin state as though
+  " it were the plain one. Keeping it costs a cursor position that may have
+  " moved since; :HexPairUnhex is the way out of that buffer.
 endfunction
 
 " ---------------------------------------------------------------------------
@@ -5798,7 +7609,7 @@ function! s:BytesAsText(label, hex) abort
     let raw = tempname()
     try
       call writefile([a:hex], hexfile)
-      call s:Run(printf('%s -r -p %s %s', s:xxd,
+      call s:Run(printf('%s -r -p %s %s', s:Xxd(),
             \ shellescape(hexfile), shellescape(raw)))
       let text = join(readfile(raw, 'b'), "\n")
     catch
@@ -5815,13 +7626,17 @@ endfunction
 
 " What the buffer holds against a:hex, over the visible lines only.
 function! s:TextComparePositions(first, last, label, hex) abort
-  if a:hex ==# ''
+  " An empty a:hex means "no bytes over there", which for the 'diff' layer
+  " is a real answer - past the end of the other file every byte differs -
+  " and NOT a reason to mark nothing; see HexPairPagedDiffActive(). Only
+  " the 'page' layer, which holds unwritten edits against the page as it
+  " was read, can take it as nothing to compare, and with a non-empty page
+  " it does not arise there either: both sides are then empty and the run
+  " builders return nothing of their own accord.
+  if a:label ==# 'page' && a:hex ==# ''
     return []
   endif
   let theirs = s:BytesAsText(a:label, a:hex)
-  if theirs ==# ''
-    return []
-  endif
   let spans = s:TextSpans(a:first, a:last)
   let runs = []
   for span in spans
@@ -5890,7 +7705,13 @@ function! s:TextMarkPositions(first, last) abort
 endfunction
 
 " Replace the buffer with exactly a:lines, without making it an undoable
-" edit (see s:LoadPage() for why).
+" edit (s:LoadPage() says why a page load must not be one).
+"
+" |clear-undo|: making the change with 'undolevels' at -1 discards the
+" history; restoring the option afterwards resumes normal undo, so edits
+" made to the page itself stay undoable. Buffer-local, not global:
+" 'undolevels' is global-local, and a buffer-local value left behind here
+" would keep winning over the global one and the history would survive.
 function! s:SetLines(lines) abort
   let save_ul = &l:undolevels
   setlocal noreadonly modifiable
@@ -5948,7 +7769,7 @@ function! s:ToText() abort
   let raw = tempname()
   try
     call writefile(scan.lines, hex)
-    call s:Run(printf('%s -r -p %s %s', s:xxd,
+    call s:Run(printf('%s -r -p %s %s', s:Xxd(),
           \ shellescape(hex), shellescape(raw)))
     call s:PagedClearHighlight()
     call s:ClearMarkings()
@@ -6061,6 +7882,7 @@ endfunction
 " ---------------------------------------------------------------------------
 
 command! -bar HexPairToggle  call s:Toggle()
+command! -bar -bang HexPairUnhex call s:Unhex('<bang>' ==# '!')
 command! -bar HexPairGoHex   call s:PagedJumpTo('hex')
 command! -bar HexPairGoAscii call s:PagedJumpTo('ascii')
 command! -bar HexPairSwap    call s:PagedJumpTo('swap')
@@ -6077,6 +7899,7 @@ command! -bar -bang -nargs=1 HexPairGoOffset
 command! -bar HexPairSyncViews call s:SyncViews()
 command! -bar HexPairPages call s:Pages()
 command! -bar HexPairSelection call s:Selection()
+command! -bar HexPairDiffShow call s:DiffShow()
 command! -bar -bang HexPairInspect call s:Inspect('<bang>' ==# '!')
 command! -bar -nargs=1 HexPairMark call s:SetMark(<q-args>)
 command! -bar -nargs=1 -complete=customlist,HexPairPagedMarkComplete
@@ -6116,6 +7939,7 @@ command! -bar -nargs=? HexPairVSplit call s:SplitView(1, <f-args>)
 if g:hexpair_short_commands
   for [s:flags, s:short, s:long] in [
         \ ['-bar', 'HPToggle', 'HexPairToggle'],
+        \ ['-bar -bang', 'HPUnhex', 'HexPairUnhex'],
         \ ['-bar', 'HPGoHex', 'HexPairGoHex'],
         \ ['-bar', 'HPGoAscii', 'HexPairGoAscii'],
         \ ['-bar', 'HPSwap', 'HexPairSwap'],
@@ -6136,6 +7960,7 @@ if g:hexpair_short_commands
         \  'HPGoMark', 'HexPairGoMark'],
         \ ['-bar', 'HPMarks', 'HexPairMarks'],
         \ ['-bar -bang -nargs=? -complete=file', 'HPDiff', 'HexPairDiff'],
+        \ ['-bar', 'HPDiffShow', 'HexPairDiffShow'],
         \ ['-bar', 'HPDiffNext', 'HexPairDiffNext'],
         \ ['-bar', 'HPDiffPrev', 'HexPairDiffPrev'],
         \ ['-bar', 'HPModifiedNext', 'HexPairModifiedNext'],
@@ -6207,15 +8032,25 @@ nnoremap <silent> <Plug>(HexPairModifiedPrev) :<C-U>HexPairModifiedPrev<CR>
 " matches once the thing has been found.
 nnoremap <silent> <Plug>(HexPairFindClear) :<C-U>HexPairFind!<CR>
 nnoremap <silent> <Plug>(HexPairDiffClear) :<C-U>HexPairDiff!<CR>
+" Two targets, one name: from Normal mode the byte under the cursor, from
+" Visual mode the whole selection - the same shape <Plug>(HexPairSelection)
+" has, and for the same reason.
+nnoremap <silent> <Plug>(HexPairDiffShow) :<C-U>HexPairDiffShow<CR>
+xnoremap <silent> <Plug>(HexPairDiffShow) :<C-U>call <SID>DiffShow(1)<CR>
 
 " No default key mappings are defined; map the <Plug> mappings (or the
 " commands directly) in your vimrc, e.g.:
 "   nmap <Leader>h <Plug>(HexPairToggle)
+"   nmap <Leader>U <Plug>(HexPairUnhex)
 "   nmap <Leader>< <Plug>(HexPairGoHex)
 "   nmap <Leader>> <Plug>(HexPairGoAscii)
 "   nmap <Leader>- <Plug>(HexPairSwap)
 "   nmap <Leader>r <Plug>(HexPairRefresh)
 nnoremap <silent> <Plug>(HexPairToggle)  :<C-U>HexPairToggle<CR>
+" The way back out of a paged view that came from a plain buffer of a whole
+" file: re-open it as text. It refuses a view opened as hex, where there is
+" no text view to return to.
+nnoremap <silent> <Plug>(HexPairUnhex)   :<C-U>HexPairUnhex<CR>
 nnoremap <silent> <Plug>(HexPairGoHex)   :<C-U>HexPairGoHex<CR>
 nnoremap <silent> <Plug>(HexPairGoAscii) :<C-U>HexPairGoAscii<CR>
 nnoremap <silent> <Plug>(HexPairSwap)    :<C-U>HexPairSwap<CR>

@@ -59,8 +59,13 @@ endfunction
 
 " --- The two views -------------------------------------------------------
 " Toggle between the hex page view and the windowed text view of the same
-" page. There is no way back to the plain buffer - reopen the file for that.
+" page.
 call s:Map('n', '<Leader>h', '<Plug>(HexPairToggle)')
+" The way back out: a plain buffer of a whole file toggled to hex comes
+" back to its ordinary, unpaged, non-binary text view with the options it
+" had before. A view opened as hex (vimhex, :HexPairOpen) has no such text
+" view, so this refuses it and says why.
+call s:Map('n', '<Leader>U', '<Plug>(HexPairUnhex)')
 
 " Move between the columns of a dump: to the hex one, to the ASCII one, or
 " to whichever one the cursor is not in - staying on the same byte.
@@ -105,7 +110,12 @@ call s:Map('n', '<Leader>=', '<Plug>(HexPairSyncViews)')
 " --- Reading the bytes ---------------------------------------------------
 " The bytes at the cursor as the numbers they could be - 8/16/32/64-bit,
 " signed and unsigned, both endiannesses, both IEEE 754 floats - and as
-" text: UTF-8, UTF-16, UTF-32.
+" text: UTF-8, UTF-16, UTF-32, with the character's name and Unicode block.
+"
+" Mapped globally on purpose. It works in an ORDINARY buffer as well as in a
+" hex view - what is this character, is that a NBSP, does this file start
+" with a BOM - and there it says so when the bytes it is showing are Vim's
+" rather than the file's. See |hexpair-inspect-anywhere|.
 call s:Map('n', '<Leader>i', '<Plug>(HexPairInspect)')
 " ... and the same reading the other way round: ask for a character and put
 " its bytes in, in g:hexpair_insert_encoding (utf-8 unless you say
@@ -157,6 +167,12 @@ call s:Map('n', '<Leader>E', '<Plug>(HexPairModifiedPrev)')
 call s:Map('n', '<Leader>]', '<Plug>(HexPairDiffNext)')
 call s:Map('n', '<Leader>[', '<Plug>(HexPairDiffPrev)')
 call s:Map('n', '<Leader>C', '<Plug>(HexPairDiffClear)')
+" What the other file actually holds here - the byte under the cursor, or a
+" whole Visual selection. The marking says which bytes differ and stops
+" there; on a page past the end of the other file every byte is marked and
+" this is what says why.
+call s:Map('n', '<Leader>D', '<Plug>(HexPairDiffShow)')
+call s:Map('x', '<Leader>D', '<Plug>(HexPairDiffShow)')
 
 " --- What has no <Plug> target -------------------------------------------
 " Commands that take an argument cannot have one, so they are typed - or

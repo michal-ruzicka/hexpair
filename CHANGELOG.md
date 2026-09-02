@@ -7,6 +7,193 @@ and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html); the
 `Version:` header in `plugin/hexpair.vim` is the single source of truth.
 
+## [v2.3.0] – 2026-09-02
+
+### Added
+- **`:HexPairUnhex`, the way back out of a paged view.** A file you opened
+  normally (`vim file.md`) and then switched to hex with `<Leader>h` /
+  `:HexPairToggle` comes back to its ordinary, unpaged, non-binary view:
+  `:HexPairUnhex` (mapped to `<Leader>U` in `hexpair.vimrc`) re-opens the
+  whole file with the `'binary'`, `'fileencoding'`, `'fileformat'` and the
+  other buffer options it had before the first toggle, with the cursor where
+  it was. The plugin takes a snapshot of those options the first time a
+  buffer toggles from plain, and hands them back rather than guessing. The
+  buffer is re-read from disk, not converted — a page is not the file, and
+  a page's unwritten edits would be lost, so without `!` the command refuses
+  and `!` discards them. What it cannot serve it refuses, each with its own
+  message: a file opened **as** hex by `:HexPairOpen` or `vimhex`, which may
+  have had no text view at all and whose file may be far too large to load
+  for one (it names the file to `:edit` instead); a view paged from content
+  with no file of its own; and one whose file has changed on disk since the
+  page was read. See `:help :HexPairUnhex`.
+- **`:HexPairInspect` now says what the character _is_.** A `name` row for
+  every code point you cannot see — the C0 and C1 controls, `DEL`, and the
+  space and format characters a hex editor meets constantly — a `block` row
+  naming the Unicode block, which answers *what script even is this*, and a
+  `bom` row when the bytes at the cursor are a byte order mark, which the
+  UTF-8 rows cannot say because `ff fe` is not UTF-8. The byte order mark is
+  the one named character with no `block` row: `U+FEFF` sits in *Arabic
+  Presentation Forms-B* only because Unicode lays blocks out by contiguity
+  and `FE70..FEFF` closes the BMP, and a format character belongs to no
+  script, so the row would only assert one where there is none. No full
+  character names: that needs `UnicodeData.txt`, which is a different order
+  of thing from a table of ranges. See `:help hexpair-inspect-naming`.
+- **`:HexPairInspect` works in an ordinary buffer**, with no hex view
+  anywhere near it - what is this character, is that a NBSP, does this file
+  start with a BOM. It says when the bytes it is showing are Vim's rather
+  than the file's, which is the moment `'fileencoding'` or `'fileformat'`
+  differs. See `:help hexpair-inspect-anywhere`.
+- **`vimhex.cmd` and `vimhexdiff.cmd`**, the `cmd.exe` counterparts of the
+  two shell functions in `hexpair.bashrc` - same names, same arguments, so
+  a hex view is opened the same way whichever shell you are standing in.
+  Put the plugin's own directory on `PATH` and updating the plugin updates
+  the commands; `VIMHEX_VIM` picks the Vim, `gvim` included.
+- **Explorer context-menu entries**, as a `vimhex` submenu holding
+  *gvimhex this*, a separator, and *gvimhexdiff select as left* / *select as
+  right*. Two files take two clicks because Explorer runs a verb once per
+  selected file and there is no `%2` without a COM handler - so
+  `vimhexdiff.cmd` grew `/left FILE` and `/right FILE`. They are
+  **symmetric**: either may be used first, each records its side and stops,
+  and whichever completes the pair opens the comparison and clears both
+  selections. Selecting the same side twice just overwrites it, and if the
+  other side's file has been moved or deleted since, only that selection is
+  cleared — the one just made is kept, so nothing has to be re-selected.
+- **`gvimhex.cmd` and `gvimhexdiff.cmd`**, and `gvimhex`/`gvimhexdiff` in
+  `hexpair.bashrc`, opening gVim instead of console Vim by default - what a
+  double-click or a context-menu verb needs, since neither has a console
+  for `vim` to run in or a way to pass `VIMHEX_VIM`. Each delegates to its
+  `vimhex`/`vimhexdiff` counterpart rather than duplicating the argument
+  grammar.
+- **`vimhex-contex-entry.add.reg` and `vimhex-contex-entry.remove.reg`**,
+  ready-made versions of the registry snippets above - one import wires up
+  all three context-menu entries (pointing at `gvimhex.cmd`/
+  `gvimhexdiff.cmd`), the other removes them again. **Nothing to edit for a
+  default install**: the paths are written against
+  `%USERPROFILE%\vimfiles\pack\plugins\start\hexpair` as `REG_EXPAND_SZ`
+  values, the one registry string type whose `%USERPROFILE%` the shell
+  expands - a plain `REG_SZ` would have it look for a folder literally
+  named that. Installed elsewhere? `make-context-entry-reg.py` regenerates
+  the pair for any path, which is also why these two files are generated
+  rather than hand-written: `.reg` can only express that type as `hex(2):`
+  plus UTF-16LE bytes.
+- **`icons/hexpair-open.ico`, `-pick.ico`, `-with.ico`**, custom icons for
+  those three entries - Explorer has nothing to show for a verb whose
+  command is a `.cmd` file otherwise. A V mark in Vim's own green, a `0x`
+  badge marking these as hexpair's, and on the diff pair a bigger badge of
+  two window panes (echoing `vimhexdiff`'s own `vsplit`) - blue left,
+  orange right, the side that entry represents shown at full colour and
+  the other dimmed, since text or an arrow stops reading reliably at
+  16px but colour still does. Generated by `icons/build.py`
+  (`icons/design.py`, `icons/rasticon.py` - a from-scratch PNG/ICO
+  encoder, no image library); only the `.ico` files ship in the release
+  tarball, the generator is a development-only file.
+
+- **`:HexPairDiffShow`** (`<Plug>(HexPairDiffShow)`, `<Leader>D` in
+  `hexpair.vimrc`, Normal and Visual) says what the file being compared
+  with holds at the cursor - or over a whole selection - beside the bytes
+  here. The marking answers *which* bytes differ and stops there; this
+  answers *what is over there instead*, and in particular says when there
+  is nothing there because that file ends before this offset. Missing
+  bytes show as `--`, so an absent byte cannot be misread as a byte that
+  happens to be `00`.
+
+- **Files over 2 GiB on native Windows**, which `xxd` cannot reach at all
+  (see *Fixed*). Every operation past that offset — reading, searching,
+  comparing, overwriting, growing, shrinking, `:w {file}` — goes through
+  PowerShell, at the cost of one process start each. **Shrinking is
+  actually cheaper there than anywhere else**: neither Vim nor `xxd` can
+  shorten a file except by rewriting it, so a shrinking write copies the
+  whole file on every other platform, while `.NET`'s `SetLength` truncates
+  in place. `README.md`'s *Windows and the 2 GiB limit* has the table of
+  what runs where. Every write past the limit reads back what it wrote
+  before reporting success; `g:hexpair_verify_writes = 0` opts out.
+
+### Changed
+- **`vimhexdiff` opens maximized** (`:simalt ~x`, guarded by
+  `has('gui_running')`) and sets `shortmess+=F`. Two hex views side by side
+  want the width anyway, and a narrow window was what made Vim stop for a
+  hit-enter prompt on each file: a long path plus the size makes the file
+  message longer than one line, which is what triggers it.
+
+- **`:HexPairGoOffset` takes `$`** for the file's last byte, the same
+  shorthand `:HexPairPageGoto` already took for the last page - the two
+  prompts sit under neighbouring keys (`<Leader>b` and `<Leader>g`), and
+  answering one in the other's language should not be a mistake.
+
+- **The Vim requirement is stated exactly, and proved.** It is Vim 8.0 at
+  any patch level — the old wording asked for patch 8.0.0794, which has not
+  been true since `count()` over a string left the plugin — plus Vim
+  9.0.0795 with `+num64` for the three writes that change a file's length.
+  It is no longer a claim: CI builds Vim 8.0.0000 from source on every push
+  and runs the whole suite against it, where it passes in full because the
+  suite asks that Vim what it can do and checks that the rest is *refused*.
+  The floor had rotted twice while checking it was a manual ritual.
+
+### Fixed
+- **The splice named the wrong Vim patch, by a major release.** Shortening a
+  file, `:w {file}` and a grow with more than half the file behind it need
+  `readblob()` with an *offset and a size*, which is patch **9.0.0795** —
+  plain whole-file `readblob()` is 8.2.2343, and 8.2.4906, which the gate
+  asked for, is an unrelated MS-Windows patch. Any Vim between the two was
+  told it could do such a write and then failed with `E118: Too many
+  arguments for function: readblob` part way through the copy. The gate, the
+  message and the documented requirement all say 9.0.0795 now.
+- **`xxd` was located only when a page was opened**, so any other route
+  into the readers died with `E121: Undefined variable` instead of a
+  message naming `xxd`. It is resolved on demand now, and a missing `xxd`
+  is reported as itself wherever it is first needed.
+- **On native Windows, everything past 2 GiB was read and written at the
+  wrong offset.** `xxd` keeps its seek offset in a C `long` — `strtol()`
+  into `long seekoff`, then `fseek()` — and a `long` is 32 bits on Windows,
+  which is LLP64. Worse, `strtol()` *saturates*: an offset past the limit
+  does not fail, it silently becomes `2147483647` and `xxd` reads, or
+  writes, a page from there. So a 120 GiB file compared with a 77 GiB one
+  showed bytes as matching on pages wholly past the shorter file's end —
+  both were being read at 2 GiB, where the shorter one does have data —
+  while the same hexpair on the same files was right under WSL, where a
+  `long` is 64 bits. `xxd -r` and `xxd -o` share the limit, so the page you
+  look at, the bytes a diff compares and the bytes a `:w` puts back were
+  all affected. Everything past that limit now goes through PowerShell —
+  see **Windows and the 2 GiB limit** in `README.md`.
+- **A nonsensical `g:hexpair_bytes_per_line` was accepted.** Zero passed
+  the "page size must be a multiple of it" check, because Vim answers
+  `512 % 0` with `0` rather than an error, and a negative one passed for
+  the same reason — both then failed later and obscurely, in `xxd -c 0` and
+  in every column sum on the page. So did anything over 256, which is
+  `xxd`'s own ceiling for `-c` and made it exit with "invalid number of
+  columns". The check is now the range 1 to 256, and says so, along with
+  the one thing that *does* have to divide: the page size.
+- **`g:hexpair_page_size` had no upper bound.** It is capped at
+  2147483647 bytes: a page's length reaches `xxd -l` (a C `long`, 32-bit on
+  Windows) and PowerShell's `[int]`, and a larger one would overflow both
+  silently rather than fail.
+- **A file too large for this Vim to measure opened as an empty one.**
+  `getfsize()` answers `-2` when the size does not fit in a Number — which
+  on a build without `+num64` is any file over 2 GiB — and `-1` when it
+  cannot see the file at all. Both were read as "no bytes", so such a file
+  opened as an empty view with the page count and every offset derived from
+  it silently meaningless. Both are now refused with a message naming the
+  cause; an actual empty file still opens and still says it is empty.
+- **A `^M` at the end of every line of a page, on Windows.** `xxd` opens a
+  dump in text mode there (`xxd.c`: `BIN_ASSIGN(fpo = stdout, revert)` for
+  the stream, `BIN_WRITE(revert)` for a named output file), so every dump
+  line reaches Vim CRLF-terminated - and the page loader read it through a
+  `%!` filter, which leaves what becomes of that CR to `'fileformats'`
+  auto-detection. That is a *user* option: with `set fileformats=unix` in a
+  vimrc nothing stripped it, and the whole dump was fringed with `^M`.
+  Cosmetic only - the CR sat past the ASCII column, in the region the
+  payload rules ignore, so it never reached the file - but it was on screen
+  on every page load and every page turn, and `:HexPairRefresh` cleared it
+  only because that path already went through `readfile()`, whose text mode
+  drops a CR before a NL whatever the options say. The loader now does the
+  same, as every other `xxd` call in the plugin already did.
+- **A page read that fails no longer leaves the buffer claiming to be the
+  new page.** The page state was assigned before the dump was read, so an
+  `xxd` that failed part way left the buffer's bytes and its idea of which
+  page they are disagreeing - and a `:w` would have patched the old page's
+  bytes in at the new page's offset. The read and its shape check now both
+  happen before anything about the buffer changes.
+
 ## [v2.2.0] – 2026-08-28
 
 ### Added
@@ -42,7 +229,7 @@ and this project adheres to
   any other name is handed to `iconv()`, checked by converting it back,
   and refused if this Vim does not know it. `<Plug>(HexPairInsertChar)`
   asks for the text (`<Leader>I` in `hexpair.vimrc`).
-- **`docs/`: the animation at the top of `README.md`, and what records
+- **`demo/`: the animation at the top of `README.md`, and what records
   it.** The plugin at work on **its own v2.1.0 release tarball**, fetched
   live: a reproducible build, so the bytes on screen are the bytes anybody
   else gets, and the same 480 KiB can be fetched and followed along offset
@@ -57,7 +244,7 @@ and this project adheres to
   made only of typed commands reads as if the plugin had no keys, and with
   every line left on the screen long enough to be read before it is sent.
   It is recorded rather than drawn
-  (`docs/hexpair-demo.sh`), from this repository's own working tree, so
+  (`demo/hexpair-demo.sh`), from this repository's own working tree, so
   it can be made again whenever what it shows stops being true.
 
 ### Changed
@@ -558,6 +745,7 @@ in one place:
 - Vim help documentation (`:help hexpair`).
 
 
+[v2.3.0]: https://github.com/michal-ruzicka/hexpair/compare/v2.2.0...v2.3.0
 [v2.2.0]: https://github.com/michal-ruzicka/hexpair/compare/v2.1.0...v2.2.0
 [v2.1.0]: https://github.com/michal-ruzicka/hexpair/compare/v2.0.0...v2.1.0
 [v2.0.0]: https://github.com/michal-ruzicka/hexpair/compare/v1.1.0...v2.0.0

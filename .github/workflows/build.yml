@@ -25,13 +25,25 @@ concurrency:
 jobs:
   test-and-pack-linux:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install Vim
         run: sudo apt-get update && sudo apt-get install -y vim xxd
       - name: Run the regression suite
         run: test/run-tests.sh
+      # The suite cannot do this: it needs a multi-gigabyte file, which is
+      # why the script is separate and normally run by hand. In CI it is
+      # worth the minutes because it is the only check that a page past
+      # 2 GiB is written where it says - and on Linux it also exercises the
+      # splice, which is the path Windows now avoids entirely.
+      - name: Check a file over 2 GiB
+        timeout-minutes: 20
+        run: |
+          df -h "$RUNNER_TEMP" | sed 's/^/  /'
+          # Three times the fixture at peak here: the file, the whole-file
+          # temp the shrink splices through, and the ':w {file}' copy.
+          TMPDIR="$RUNNER_TEMP" test/check-large-file.sh
       - name: Package the release tarball
         run: ./pack-release
       - name: Record the tarball hash
@@ -43,9 +55,68 @@ jobs:
             dist/*.tar
             linux.sha256
 
+  # The oldest Vim the plugin claims to work on, built and actually run.
+  #
+  # This job exists because the claim rotted twice while it was a manual
+  # ritual: a recipe in CLAUDE.md, a build by hand, and a list of expected
+  # failures to be compared by eye. Nobody ran it for a year, and the second
+  # time nobody ran it the inspector's whole block table was dead on this
+  # Vim - correct on every Vim CI did run, so nothing said a word. A version
+  # floor is only as true as its last run.
+  #
+  # It is cheap: about a minute to build, and the suite knows what this Vim
+  # cannot do (writes that change a file's length need readblob() with an
+  # offset, patch 9.0.0795) and checks that they are refused instead. So the
+  # result here is the same "All tests passed" as everywhere else, and any
+  # new use of a function or a syntax younger than 8.0 fails the build
+  # rather than waiting to be discovered by a user on RHEL 8, which ships
+  # exactly this series.
+  test-oldest-vim:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      # Pinned by COMMIT, not by the archive tarball's digest: GitHub
+      # regenerates those and their hashes have changed under people before,
+      # while a commit id cannot. This is the v8.0.0000 tag.
+      VIM_TAG: v8.0.0000
+      VIM_COMMIT: bb76f24af2010943387ce696a7092175b4ecccf2
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install what the build needs
+        # xxd from the distribution, not from this tree: Vim 8.0's own
+        # xxd.c has K&R prototypes that no current GCC compiles, and a user
+        # on such a Vim would have the distribution's xxd too.
+        run: sudo apt-get update && sudo apt-get install -y libncurses-dev xxd
+      - name: Build Vim ${{ env.VIM_TAG }}
+        run: |
+          git clone --depth 1 --branch "$VIM_TAG" \
+              https://github.com/vim/vim.git "$RUNNER_TEMP/vim"
+          cd "$RUNNER_TEMP/vim"
+          got=$(git rev-parse HEAD)
+          if [ "$got" != "$VIM_COMMIT" ]; then
+              echo "$VIM_TAG is $got, expected $VIM_COMMIT" >&2
+              exit 1
+          fi
+          # -std=gnu89 is NOT optional on a current compiler: configure's own
+          # "is uint32_t 32 bits" probe is a K&R main() that calls exit()
+          # with no <stdlib.h>, which a modern default standard rejects - and
+          # configure reports that as "WRONG! uint32_t not defined correctly"
+          # rather than as a compiler error.
+          CFLAGS="-O1 -w -std=gnu89" ./configure --with-features=normal \
+              --disable-gui --without-x --disable-nls --with-tlib=ncurses
+          # From src/: 8.0's top-level Makefile has no `vim` target, and
+          # plain `make` stops at xxd/xxd.c (see above).
+          make -C src -j"$(nproc)" vim
+          ./src/vim --version | head -2
+      - name: Run the regression suite
+        run: |
+          HEXPAIR_VIM=$RUNNER_TEMP/vim/src/vim \
+          VIMRUNTIME=$RUNNER_TEMP/vim/runtime \
+              test/run-tests.sh
+
   test-and-pack-windows:
     runs-on: windows-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # Windows is the platform the plugin's portability rules exist for -
@@ -83,6 +154,54 @@ jobs:
           $fwd = $dir -replace '\\', '/'
           Add-Content -Path $env:GITHUB_ENV -Value "HEXPAIR_VIM=$fwd/vim.exe"
           Add-Content -Path $env:GITHUB_ENV -Value "HEXPAIR_XXD=$fwd/xxd.exe"
+      # This job has hung inside the 4 GiB straddle block, which is the
+      # first place the suite starts PowerShell - hexpair reaches offsets
+      # past 2 GiB that way, since xxd seeks with a 32-bit long on Windows
+      # (see hexpair-windows-2gib in doc/hexpair.txt). That block is
+      # skipped here for now, which lets the rest of the suite run but
+      # explains nothing.
+      #
+      # This measures the thing that would explain it. The bare runs say
+      # whether PowerShell starts on this runner at all and what a cold
+      # start costs; the third says whether it starts when a native
+      # Windows Vim asks through system(), which is what hexpair actually
+      # does and the only one of the three that matches the failing path.
+      #
+      # Diagnostic, not gating: continue-on-error so a runner without
+      # PowerShell reports rather than blocks, and a timeout of its own
+      # because "it hangs" is a possible answer and finding that out
+      # should cost three minutes rather than fifteen.
+      - name: Probe PowerShell, including the way hexpair calls it
+        shell: bash
+        timeout-minutes: 3
+        continue-on-error: true
+        run: |
+          probe() {
+            start=$(date +%s)
+            powershell -NoProfile -NonInteractive -Command "exit 0"
+            echo "  $1: exit=$? elapsed=$(( $(date +%s) - start ))s"
+          }
+          probe "bare, cold"
+          probe "bare, warm"
+
+          # Through Vim's system(), with the arguments hexpair actually
+          # uses - -InputFormat None included, so this measures the real
+          # call and not an approximation of it. The bare runs above are
+          # always fine even where this one is not, which is exactly why
+          # it has to be asked separately.
+          printf '%s\n' \
+            'let t = reltime()' \
+            "call system('powershell -NoProfile -NonInteractive -InputFormat None -Command exit 0')" \
+            "call writefile([printf('exit=%d elapsed=%.1fs shell=%s', v:shell_error, reltimefloat(reltime(t)), &shell)], 'probe.out')" \
+            'qa!' > probe.vim
+          "$HEXPAIR_VIM" -es -u NONE -S probe.vim < /dev/null || echo "  vim itself exited $?"
+          if [ -f probe.out ]; then
+            echo "  through Vim's system(), -InputFormat None: $(cat probe.out)"
+          else
+            echo "  through Vim's system(): NO OUTPUT - system() did not return"
+          fi
+          rm -f probe.vim probe.out
+
       # Git Bash, so the one suite runs on both platforms; it converts its
       # own paths to the drive-letter form that a native Vim understands.
       # The MS-Windows check is the point of the job: an MSYS Vim would
@@ -98,6 +217,19 @@ jobs:
             exit 1
           }
           test/run-tests.sh
+      # The one check that native Windows past 2 GiB does what it claims:
+      # PowerShell seeks, .NET writes, and every byte is verified against a
+      # pattern predicted from its own offset. Nothing else in this job
+      # reaches those offsets - the suite's 4 GiB block is skipped here on
+      # purpose, and for a different reason (see run-tests.sh).
+      #
+      # `shell: cmd` and not bash: the driver runs Vim itself, and doing
+      # that from a batch file rather than from anything with a PowerShell
+      # or an MSYS layer above it is the whole design (see the .cmd).
+      - name: Check a file over 2 GiB
+        shell: cmd
+        timeout-minutes: 30
+        run: test\check-large-file.cmd
       - name: Package the release tarball
         shell: cmd
         run: pack-release.cmd

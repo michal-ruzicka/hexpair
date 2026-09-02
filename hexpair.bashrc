@@ -13,20 +13,26 @@
 # It defines one function:
 #
 #     vimhex FILE          the first page
-#     vimhex FILE PAGE     that page, 1-based; also '$' for the last one
-#                          and '+N' / '-N' to step from the first
+#     vimhex FILE PAGE     that page, 1-based; also '$' for the last one,
+#                          '$-N' for N pages back from it, and '+N' / '-N'
+#                          to step from the first
 #     vimhex FILE @BYTE    the page holding that byte, cursor on it;
 #                          decimal or 0x-prefixed, and 1-based, so a
 #                          position :HexPairPages reported can be typed
-#                          straight back in
+#                          straight back in. '@$' is the last byte and
+#                          '@$-N' is N back from it.
 #     vimhex - [...]       read from standard input instead of a file
 #
 #     vimhex disk.img
 #     vimhex disk.img 37
 #     vimhex disk.img '$'          the end of the file, without counting pages
+#     vimhex disk.img '$-5'        five pages back from the end
+#     vimhex disk.img '@$-0x100'   0x100 bytes back from the last one
 #     vimhex disk.img @0x4a2000
 #     cat disk.img | vimhex -
 #     dd if=/dev/sda bs=1M count=64 | vimhex - @1024
+#
+# Quote anything containing a '$', or the shell reads it as a variable.
 #
 # A block device (/dev/sda) cannot be paged directly: the size the system
 # reports for it is 0, and hexpair pages what a file says it holds. Read a
@@ -56,6 +62,11 @@
 #
 # Only the page on screen is read, so the size of the file does not matter.
 # Set VIMHEX_VIM to use a particular Vim, e.g. VIMHEX_VIM=/usr/bin/vim.
+#
+# gvimhex and gvimhexdiff are the same two commands, taking the same
+# arguments, but opening gVim instead - VIMHEX_VIM defaults to "gvim"
+# rather than "vim" there; a VIMHEX_VIM already set in the environment is
+# left alone.
 
 vimhex()
 {
@@ -76,9 +87,10 @@ vimhex()
             jump='execute "HexPairGoOffset" $HEXPAIR_OPEN_WHERE'
             ;;
         *)
-            # A page number, '$' for the last page, or '+N' / '-N'.
-            # :HexPairPageGoto parses all three; passing it through the
-            # environment keeps the shell out of it.
+            # A page number, '$' for the last page, '$-N' for N back from
+            # it, or '+N' / '-N' from the first. :HexPairPageGoto parses
+            # them all; passing the value through the environment keeps
+            # the shell out of it, which is what lets a '$' survive.
             jump='execute "HexPairPageGoto" $HEXPAIR_OPEN_WHERE'
             ;;
     esac
@@ -136,4 +148,21 @@ vimhexdiff()
             -c 'autocmd VimEnter * call HexPairOpenFile($HEXPAIR_DIFF_A) | call HexPairDiffWith($HEXPAIR_DIFF_B)' \
             -c 'autocmd VimEnter * rightbelow vsplit | call HexPairOpenFile($HEXPAIR_DIFF_B) | call HexPairDiffWith($HEXPAIR_DIFF_A) | setlocal scrollbind' \
             -c 'autocmd VimEnter * wincmd t | setlocal scrollbind | HexPairDiffNext | HexPairSyncViews'
+}
+
+# gvimhex and gvimhexdiff delegate to vimhex and vimhexdiff above rather
+# than duplicating them, so the argument grammar stays defined in ONE
+# place. (The Windows .cmd counterparts additionally share the /left and
+# /right side-selection state that way.) ":-" leaves an already-set
+# VIMHEX_VIM (a full gvim path, say) alone and only supplies "gvim" as the
+# default vimhex/vimhexdiff would otherwise fall back to "vim" for.
+
+gvimhex()
+{
+    VIMHEX_VIM="${VIMHEX_VIM:-gvim}" vimhex "$@"
+}
+
+gvimhexdiff()
+{
+    VIMHEX_VIM="${VIMHEX_VIM:-gvim}" vimhexdiff "$@"
 }

@@ -42,12 +42,22 @@ FILES = [
     "hexpair/CLAUDE.md",
     "hexpair/CONTRIBUTING.md",
     "hexpair/LICENSE.md",
+    "hexpair/NOTICE.md",
     "hexpair/README.md",
     "hexpair/doc/hexpair.txt",
     "hexpair/ftplugin/xxd.vim",
+    "hexpair/gvimhex.cmd",
+    "hexpair/gvimhexdiff.cmd",
     "hexpair/hexpair.bashrc",
     "hexpair/hexpair.vimrc",
+    "hexpair/icons/hexpair-open.ico",
+    "hexpair/icons/hexpair-pick.ico",
+    "hexpair/icons/hexpair-with.ico",
     "hexpair/plugin/hexpair.vim",
+    "hexpair/vimhex-contex-entry.add.reg",
+    "hexpair/vimhex-contex-entry.remove.reg",
+    "hexpair/vimhex.cmd",
+    "hexpair/vimhexdiff.cmd",
 ]
 
 

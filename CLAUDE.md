@@ -50,6 +50,251 @@ hexpair.vimrc         - the mappings the maintainer uses, in a form a
                         g:loaded_hexpair_vimrc, restores 'cpoptions', and
                         never takes a key the user has already mapped.
                         Bundled in the release tarball.
+vimhex.cmd            the cmd.exe counterparts of the two shell
+vimhexdiff.cmd        functions in hexpair.bashrc, same names and same
+                      arguments. CRLF line endings, pinned by
+                      .gitattributes - a batch file with LF endings
+                      breaks `goto` under cmd.exe. Both pass paths
+                      through the ENVIRONMENT into $NAME inside a Vim
+                      expression, for hexpair.bashrc's reason, and that
+                      is also what makes them safe to call from an
+                      Explorer verb. vimhexdiff.cmd additionally has
+                      /left and /right: a context-menu verb is run once
+                      per selected file and there is no %2, so two files
+                      take two clicks unless one writes a COM handler.
+                      Bundled in the release tarball, and the packaging
+                      test's rule was widened to vimhex*.cmd to keep
+                      them there (pack-release.cmd is a build tool, not
+                      part of a release). NOT exercised by CI: the
+                      Windows job runs the Vim suite under Git Bash, so
+                      the batch itself is only ever run by hand.
+                      Both `:run`/`:stdin` labels check `errorlevel 1`
+                      right after invoking `"%VIMHEX_VIM%"` and, only on
+                      failure, echo why plus `pause` before `exit /b 1`
+                      (`:launchfailed`). Reported by the maintainer:
+                      the entries the .reg files add flashed a console
+                      and closed too fast to read - `cmd.exe /c` (what
+                      Explorer's "command" value runs through) closes
+                      its console the instant the batch ends, and on
+                      SUCCESS gvim/vim return control (0) almost at
+                      once (gVim forks and returns; console Vim returns
+                      when the user quits it), so the pause never fires
+                      on a normal launch and the fast-flash UX the
+                      README documents is unchanged. Root cause NOT
+                      confirmed - the maintainer separately reported
+                      that `*vimhex*.cmd` run directly from a cmd
+                      prompt work first try, which rules out a bad
+                      $VIMHEX_VIM/$PATH in that shell and points at
+                      something specific to the Explorer-constructed
+                      "cmd.exe /c ""path" "%1""" invocation instead
+                      (its quoting was re-derived by hand against
+                      `cmd /?`'s own documented two rules and comes out
+                      correct, so that is not the leading suspect
+                      either) - but this pause is what will surface the
+                      actual message next time, which is the fix that
+                      does not depend on guessing right first.
+gvimhex.cmd           the same two commands, defaulting VIMHEX_VIM to
+gvimhexdiff.cmd       "gvim" instead of "vim" - what a context-menu verb
+                      or a double-click needs, since neither has a
+                      console to run the console Vim in or a way to pass
+                      VIMHEX_VIM. Each `call`s its vimhex.cmd/
+                      vimhexdiff.cmd counterpart via `%~dp0` (this
+                      directory) rather than reimplementing the argument
+                      parsing and, for the diff pair, the /left-/right
+                      state file - one source of truth for that grammar.
+                      Consequence: unlike vimhex.cmd/vimhexdiff.cmd
+                      themselves, these two are NOT independently
+                      relocatable - they must stay next to the
+                      vimhex*.cmd they call. Same CRLF and packaging
+                      treatment as vimhex.cmd/vimhexdiff.cmd; the
+                      packaging test's glob is `*vimhex*.cmd` (leading
+                      `*`) so it catches these without a separate rule.
+vimhex-contex-entry.  add.reg wires gvimhex.cmd/gvimhexdiff.cmd into the
+  add.reg / .remove.reg  Explorer context menu under HKEY_CURRENT_USER, as
+                      ONE `vimhex` submenu holding three items (open, a
+                      separator, then the diff /left+/right pair);
+                      .remove.reg deletes the folder and its child key by
+                      name, and needs no path of its own, so it undoes an
+                      add.reg generated for ANY path. Each item carries an
+                      "Icon" pointing into icons/.
+                      It deliberately does NOT clean up after the shapes
+                      this menu had earlier in development (three keys
+                      straight in the "*" menu). Nothing was ever released
+                      with those, so there is no installed base to tidy;
+                      carrying deletions for a layout no user ever had is
+                      dead weight. Same reasoning applies to the next
+                      restructure while v2.3.0 is unreleased.
+                      Submenu mechanics, all three of which are load-
+                      bearing: the folder is a verb with
+                      "ExtendedSubCommandsKey" and NO \command subkey (a
+                      \command would make it clickable instead of a
+                      folder); the key it names is relative to HKCR, and
+                      HKCU\Software\Classes merges into HKCR, which is
+                      what keeps this out of HKLM - the older
+                      "SubCommands" scheme resolves against HKLM's
+                      CommandStore and needs admin; children sort
+                      ALPHABETICALLY BY KEY NAME, not by write order,
+                      hence the 10-/20-/30- prefixes, and the separator is
+                      "CommandFlags"=dword:20 (ECF_SEPARATORBEFORE) on the
+                      item BELOW the rule.
+                      The two diff items are SYMMETRIC (/left and /right,
+                      either order) - see vimhexdiff.cmd's :side.
+                      BOTH ARE GENERATED - see make-context-entry-reg.py;
+                      do not hand-edit them. Bundled in the release
+                      tarball; same packaging-glob mechanism as the .cmd
+                      files, `*vimhex*.reg`.
+                      NOTE for Windows 11: this is a "legacy" context
+                      menu, so it sits under "Show more options". Total
+                      Commander (what the maintainer actually uses) shows
+                      the classic menu directly, so it is not a problem
+                      there.
+The console flash        DECIDED, do not re-litigate without new
+  from a context-menu    information. A "cmd.exe /c" verb creates a
+  verb                   console window; the reported problem was not the
+                      flash itself but the FOCUS - with a Windows Terminal
+                      window already open, the new console attaches to it
+                      and takes focus, dropping the file manager the menu
+                      was used from (Total Commander) into the background.
+                      A wscript.exe + vimhex-launch.vbs launcher WAS built
+                      and did fix it (GUI-subsystem host, .cmd run with
+                      window style 0, failures reported in a MsgBox), then
+                      was WITHDRAWN at the maintainer's call. Why, so the
+                      next person does not rebuild it: "run this command
+                      with a hidden window" through the Windows Script
+                      Host is one of the shapes antivirus heuristics look
+                      for, and VBScript is being removed from Windows
+                      (Feature on Demand since 11 24H2). The only other
+                      way to lose the console is a GUI-subsystem stub
+                      .exe, and an UNSIGNED binary is usually worse for
+                      antivirus than the script, besides being the first
+                      compiled artefact this project would ship.
+                      So the flash is accepted. What survived from that
+                      attempt and is still worth keeping: the exit-status
+                      check in each .cmd, and HEXPAIR_NO_PAUSE (:holdopen
+                      in vimhexdiff.cmd) so a caller that shows the
+                      message its own way can skip the pause.
+                      If it is ever revisited, the untried idea with the
+                      best shape is to have the registry call gvim.exe
+                      DIRECTLY (a GUI program, so no console exists to
+                      begin with) and move the side-selection state into
+                      the plugin - the obstacle being that recording a
+                      side must not open a window, which is exactly what
+                      launching gVim does.
+make-context-entry-   generates the two .reg files above. Exists because
+  reg.py              the maintainer's requirement is that a DEFAULT
+                      install import and work with nothing edited, and
+                      that forces REG_EXPAND_SZ: a plain REG_SZ does NOT
+                      expand %USERPROFILE% (the shell would look for a
+                      folder literally named that), and REG_EXPAND_SZ is
+                      only expressible in .reg text as `hex(2):` plus the
+                      string's UTF-16LE bytes - unmaintainable by hand,
+                      fine to generate. Takes an optional install path
+                      (default %USERPROFILE%\vimfiles\pack\plugins\start\
+                      hexpair, which is what README.md installs to), so
+                      "installed elsewhere" is a re-run, not an edit.
+                      **The expansion ORDER is the subtle part and is
+                      why %1 survives**: the shell expands the variable
+                      when it READS the value, then substitutes %1 when
+                      it builds the command line. Once %USERPROFILE% is
+                      consumed as a pair, the only % left in the string
+                      is %1's own - a lone %, so it cannot be mis-paired
+                      into a bogus variable name. Re-check it whenever a
+                      command grows another variable: the rule that has to
+                      hold is that each one is a COMPLETE %VAR% pair, so
+                      the count of leftover lone % stays exactly one.
+                      test/run-tests.sh does this for real - it decodes
+                      every hex(2) value back to UTF-16, asserts the
+                      round trip, and asserts that count.
+                      Writes CRLF itself (the files are
+                      generated, so .gitattributes' *.reg rule is a
+                      backstop, not the mechanism), and is deterministic
+                      - verified by hashing two consecutive runs.
+                      Development-only, like icons/*.py: it matches no
+                      pattern in the packaging test's shipped-files glob,
+                      so it is correctly never expected in FILES.
+NOTICE.md             third-party notices, and the reason there is a file
+                      for them at all: the block table is DERIVED from the
+                      Unicode Character Database, whose Unicode License V3
+                      permits that on the condition its copyright and
+                      permission notice appears with the copies or in the
+                      documentation. Reproduced verbatim there, with the
+                      source URL, the digest and the SPDX identifier
+                      (Unicode-3.0). **Any future third-party data goes
+                      through the same door**: check the license before
+                      deriving, record the provenance, ship the notice.
+                      In pack-release.py's FILES, and the packaging test
+                      keeps it there for free - every .md outside test/
+                      must be listed.
+make-unicode-blocks.py - regenerates the Unicode block table inside
+                      plugin/hexpair.vim, between two markers, from
+                      Blocks.txt. Pinned by version in the URL and by
+                      SHA-256 in the script, so a re-run either produces
+                      the same 338 ranges or refuses. It exists because
+                      Vim has no Unicode database at all: charclass()
+                      knows three coarse classes and there is no name
+                      lookup, so the block is the most the inspector can
+                      honestly say about an arbitrary code point.
+                      Development-only, like the other generators here:
+                      run BY HAND when the Unicode version is bumped, never
+                      at package time and never on a user's machine. Its
+                      output is committed. Bumping the version means
+                      updating NOTICE.md's URL, digest and version too.
+                      **The markers sit OUTSIDE the list literal**, and
+                      the `let` that opens it is generated between them, so
+                      they are ordinary `"` comments. They were `"\ `
+                      comment continuations INSIDE the literal, which is the
+                      only comment form that works there - and which Vim 8.0
+                      does not have: the whole literal failed to parse
+                      (E15), so every `block` row of the inspector was dead
+                      on the version this plugin claims to support. A plain
+                      comment inside the literal would end the continuation,
+                      so the fix is to move the markers out, not to change
+                      the comment form in place.
+icons/                three custom icons for the entries above, and
+                      what generates them:
+                      - rasticon.py: a from-scratch vector rasterizer
+                        plus PNG/ICO encoder, stdlib only (no Pillow/
+                        ImageMagick on the box this was built on, and
+                        the plugin's own no-incidental-tooling rule
+                        fit anyway). Draw calls run in 0..1 unit-square
+                        coordinates against a Canvas rendered at 4x
+                        supersample and box-downsampled, so one shape
+                        spec produces every target size cleanly. PNG
+                        write path is the minimum valid subset (IHDR/
+                        IDAT/IEND, filter type 0, zlib); ICO write path
+                        packs PNG-format entries per the Vista+ scheme
+                        (a 0 width/height byte in an ICONDIRENTRY means
+                        256, since the field is one byte).
+                      - design.py: the three icon specs. A V mark
+                        (ORIGINAL - not extracted from a real gvim.exe,
+                        there being no Windows box handy to pull one off
+                        of - in Vim's own green) plus a "0x" badge
+                        (bottom-right, smaller, the blocky 5x7 font) on
+                        all three, and on the diff pair a bigger
+                        bottom-left badge of two window panes (echoing
+                        vimhexdiff's own actual `vsplit`) - blue left /
+                        orange right, the side THIS icon represents at
+                        full colour and the other dimmed toward the
+                        badge's dark frame.
+                        SUPERSEDED first design, kept here for why:
+                        top-right diff mark plus top-left L/R letter (or
+                        a left/right arrow) - all discarded once actually
+                        compared at 16px, where neither text nor an arrow
+                        stayed legible; colour-coding one badge does.
+                      - build.py: renders icons/*.ico (sizes 16/24/32/
+                        48/256) from design.py. Deterministic (no
+                        timestamps, no randomness) - confirmed by hash,
+                        re-running it after an unrelated change must not
+                        touch the .ico files.
+                      Only the three .ico files are bundled in the
+                      release tarball (pack-release.py's FILES) - the
+                      packaging test's glob gained a bare `*.ico`
+                      (asymmetric with the `*vimhex*.{cmd,reg}` rule
+                      on purpose: every .ico ships, but rasticon.py/
+                      design.py/build.py themselves match no pattern
+                      there and so are correctly never expected in
+                      FILES - source stays out of the tarball, only
+                      what it built goes in).
 pack-release          - POSIX wrapper around pack-release.py
 pack-release.cmd      - Windows wrapper around pack-release.py
 pack-release.py       - the packaging implementation (python3, stdlib
@@ -61,7 +306,7 @@ plugin/hexpair.vim    - the whole plugin, one script scope; header
 ftplugin/xxd.vim      - dump-editing defaults (guarded by b:did_ftplugin,
                         reverted via b:undo_ftplugin)
 doc/hexpair.txt       - Vim help (:help hexpair)
-docs/                 - the animation at the top of README.md and what
+demo/                 - the animation at the top of README.md and what
                         records it: hexpair-demo.tape (the vhs script),
                         hexpair-demo.vimrc (the Vim it uses - the plugin
                         out of the working tree, nothing of the person
@@ -85,14 +330,69 @@ docs/                 - the animation at the top of README.md and what
                         long (hence MP4 then ffmpeg), and its work
                         directory must be short as well as off tmpfs
 test/run-tests.sh     - headless regression suite (vim -es)
+test/check-large-file.{cmd,ps1,sh} - what the suite cannot be: builds a
+                        multi-gigabyte file and edits it past 2 GiB, which
+                        is the only way to exercise the Windows paths in
+                        earnest. Run by hand, needs 2x the size in disk.
+                        Refuses under 3 GiB rather than run every check
+                        against the ordinary paths and report a success
+                        that means nothing. Checks THREE things per edit -
+                        the bytes that should change did, the bytes on
+                        either side did not, the length is right - because
+                        a whole-file hash answers none of them separately.
+                        Its own arithmetic cost a 3 GiB run to get right:
+                        the edits rewrite the first columns of a dump LINE,
+                        so the offset has to be line-aligned or every
+                        expectation is off by up to fifteen bytes.
+                        On Windows the .cmd is the DRIVER, not a wrapper:
+                        it runs Vim, and the .ps1 never does. Every
+                        arrangement in which PowerShell started Vim -
+                        Start-Process with redirected handles, `& cmd /c`
+                        with the path as an argument, `start /wait`, with
+                        and without capturing stdout - hung on a read of
+                        eight bytes, while `vim -es -u NONE -S file <nul`
+                        from a batch always works. Six explanations were
+                        offered and five were wrong; this stops explaining
+                        and adopts the working shape. The .ps1 keeps the
+                        arithmetic (2.7-billion offsets, and cmd's `set /a`
+                        is 32-bit) and runs in PHASES, leaving an edit.vim
+                        for the driver between them, because the checks
+                        must interleave with the edits - "the file grew by
+                        two bytes" cannot be asked after the shrink undid
+                        it. State between phases is state.json; the
+                        driver learns the work directory from a generated
+                        batch of `set` lines, the one handoff cmd can
+                        consume with no quoting rules involved.
+                        A PREFLIGHT reads eight bytes of a 256-byte file
+                        through the same call before any fixture is built,
+                        so a broken setup costs a second rather than three
+                        gigabytes.
+                        TWO implementations, deliberately. The .ps1 (via
+                        .cmd) is for native Windows and needs nothing
+                        installed: cmd's `set /a` is 32-bit and cannot hold
+                        a 2.7-billion offset, and python3 is an install the
+                        maintainer does not want there - while PowerShell
+                        is already what hexpair uses past 2 GiB, so the
+                        check needs nothing the feature does not. The .sh
+                        is POSIX (python3), for Linux, WSL and the Git Bash
+                        Vim. They assert the SAME twenty checks under the
+                        same names, which is checkable by diffing their
+                        output and is the only thing keeping them from
+                        drifting - if one gains a check, give the other the
+                        same one. Known limit of the .ps1: past 2 GiB it
+                        reads back through the same FileStream calls the
+                        plugin wrote with, so a Seek fault affecting reads
+                        and writes identically would hide; the length
+                        checks and the head check (asked of xxd, under
+                        2 GiB) do not go that way.
 dist/                 - packaged release tarballs (gitignored)
 ```
 
 ## Architecture (plugin/hexpair.vim)
 
 One script, script-local functions, three public surfaces: the
-commands (`:HexPairToggle`, `:HexPairGoHex`, `:HexPairGoAscii`,
-`:HexPairSwap`, `:HexPairRefresh`), the `<Plug>` mappings (no default
+commands (`:HexPairToggle`, `:HexPairUnhex`, `:HexPairGoHex`,
+`:HexPairGoAscii`, `:HexPairSwap`, `:HexPairRefresh`), the `<Plug>` mappings (no default
 key mappings — the user maps them in vimrc), and the highlight groups
 (`HexPairActive` / `HexPairMirror`).
 
@@ -187,6 +487,41 @@ Key function map:
   then may `b:undo_ftplugin` revert them), and when the restored
   filetype is empty no `FileType` event fires, so the plugin executes
   `b:undo_ftplugin` and clears `b:did_ftplugin` itself.
+- **The inspector runs outside hexpair too** (`s:InspectPlain()`), on an
+  ordinary buffer with no page and no banner - `s:InspectBytes()`'s text
+  branch already worked on any buffer once `s:TextBodyRange()` stopped being
+  assumed. The part that needed care is what it SAYS: a paged view holds the
+  FILE's bytes (`++bin`), an ordinary buffer holds VIM's, and they part
+  company the moment `'fileencoding'` or `'fileformat'` does. `s:PlainNotes()`
+  says which is on screen, and only when the two can differ. No marking
+  there - that is drawn by highlighting a paged buffer has and an ordinary
+  one does not, and the bang says so rather than pretending to clear
+  something. `HexPairPagedInspectLines()` takes the "ran out of bytes"
+  phrase as an argument for the same reason: "on this page" is a lie in a
+  buffer.
+- **Naming a code point** - `HexPairPagedCharNotes()`, and
+  `HexPairPagedBomText()` beside it. Two tables: the controls and format
+  characters by hand (C0, C1, DEL, NBSP, the zero-width joiners, the bidi
+  marks - the set someone actually reaches for the inspector about), and
+  the 338 Unicode blocks generated into `s:Blocks()`. That list is built on
+  FIRST USE and not at load - which is about how Vim stores a function body
+  and not about anything being generated: the literal is text until the
+  function runs, so a Vim that never inspects a character pays nothing for
+  14 KB of ranges. The table is DERIVED DATA and carries a licence notice;
+  see NOTICE.md. **One code point is named and given NO block row, on
+  purpose**: `U+FEFF`. Blocks.txt really does put it in *Arabic
+  Presentation Forms-B*, because Unicode lays blocks out by CONTIGUITY and
+  `FE70..FEFF` is the range that happens to close the BMP - so the row
+  asserted a script at a format character that belongs to none, and read as
+  "this byte is Arabic" to the one person most likely to be asking. The
+  table stays faithful to its source; the row is withheld. No other named
+  character needs this (the rest sit in General Punctuation or in a block
+  whose name is their home, and ALM really is an Arabic mark). The rows
+  describe the UTF-8 reading
+  only, which is the one with no byte order to choose; `bom` is the single
+  exception, because `ff fe` is not UTF-8 and is exactly what someone
+  opening a file at offset 0 wants named. **No full character names**: that
+  is `UnicodeData.txt`, two megabytes, a different order of thing.
 - The data inspector's two directions. `s:Inspect()` reads up to eight
   bytes and `b:hexpair_inspect` is `[absolute offset, count]` of what it
   actually got — which near a page or file end is fewer, and the marking
@@ -231,8 +566,10 @@ Key function map:
 7. A dump line is buffer line `k + s:HeaderLines()`, **never** a literal
    2: `g:hexpair_ruler` puts a second line above the dump. Every mapping
    between a line number and a byte offset — `s:PagedLineBase()`,
-   `s:PagedGotoOffset()`, `s:PosOffset()`, `HexPairStatus()`, the line
-   count `s:LoadPage()` checks xxd's output against — goes through it.
+   `s:PagedGotoOffset()`, `s:PosOffset()`, `HexPairStatus()` — goes
+   through it. (`s:LoadPage()`'s shape check is the one that does not,
+   and must not: it counts the lines xxd produced, before they are a
+   buffer and before a banner or a ruler is anywhere near them.)
    The text view has no ruler, so its own header is always the one
    banner line, matched by exact text (`s:TextBodyRange()`).
 
@@ -299,6 +636,7 @@ come back**; each names the test that would catch it.
 | A duplicate `*:HexPairRefresh*` tag aborted `:helptags`, leaving the plugin with no `:help` at all | "helptags accepts the help file" |
 | A page read that silently produced nothing would be patched into the file | "a full page is two banner lines plus its dump lines" |
 | `:w {other}` patched the page into the view's own file | "':w other' leaves the buffer and its own file alone" |
+| `:saveas` wrote the bytes but left `'modified'` set and the view still editing the OLD file, so every later write copied the whole file instead of patching a page. Vim leaves `'modified'` to the autocommand for `acwrite`; and inside `BufWriteCmd` `:saveas` and `:w {file}` both arrive with `<amatch>` = the target, so the only thing telling them apart is that `:saveas` RENAMES THE BUFFER FIRST (`s:IsSaveAs()`). Beware the near-miss fix: updating the cached buffer name from `BufFilePost` fires BEFORE the write and makes a `:saveas` look like a plain `:w` of the view's own file, which patches the page into the file it was saved away from | "':saveas' clears 'modified' and adopts the file" and the four beside it |
 | `<amatch>` is absolute, `bufname()` relative — comparing them as strings refuses every write | same test |
 | A splice failing while *building* the temp left it behind | "a successful splice leaves no temp files behind" |
 | Opening a page could abandon a modified buffer | "opening a page refuses to abandon a modified buffer" |
@@ -329,37 +667,89 @@ come back**; each names the test that would catch it.
 | A jump synced the scroll-bound windows only when it crossed a page boundary, so the same keystroke took the other window along or left it behind depending on how far it happened to go | "a jump inside a page takes the bound view along too" and "which is the same rule as across a page" |
 | `vimhexdiff` opened with its two windows on different parts of two files: everything it does runs inside `VimEnter`, and `'scrollbind'` syncs only movement made after the main loop has seen the window bound | "and :HexPairSyncViews is the way back" and the block around it — the startup now ends in `:HexPairSyncViews` |
 | Two assertions about the diff summary compared the message against a path the harness had built, while the plugin prints one `fnamemodify(':~:.')` has been over. Identical on Linux, where `tempname()` is under `/tmp` and `:~` has nothing to do; on Windows the fixtures live under the user's profile and the message says `~/AppData/...`, so the suite passed everywhere it was run and failed only in Windows CI | "a longer file agrees over the bytes it shares" and "but differs from where it grows" — the expected path is now line 4 of the fixture's own output, written by the same `fnamemodify()` call the plugin makes |
+| A page past the end of the file being compared with was marked as though nothing on it differed - reported on 120 GiB against a smaller file. Three guards read an empty run of other-file bytes as "no comparison running" when it means "that file has no bytes here"; the workers underneath were all correct. `HexPairPagedDiffActive()` is now the single predicate, over the diff FILE | "a page past the other file's end differs in every byte" + the three with it |
+| **On Windows, everything past 2 GiB was read from the wrong place.** xxd keeps its seek in a C `long` (`strtol` into `long seekoff`, then `fseek`), 32 bits on Windows - and `strtol` SATURATES, so a large offset does not fail, it becomes 2147483647 and xxd reads a page from there. Reported as a 120 GiB file comparing "equal" to a 77 GiB one past the shorter file's end, correct under WSL on the same files. TWO call sites had to be fixed, not one: `s:FileHex()` and the page-display dump in `s:LoadPage()` are separate `xxd -s` calls, and fixing only the first left every page still SHOWING the bytes at 2 GiB. Both now go through `s:SeekReadRaw()` past `s:xxdseekmax`. Writes are refused instead: `xxd -r` has the same limit (`base_off`/`want_off`/`have_off` are all `long`) and Vim has no write-at-offset primitive. NOT probeable - `strtol` saturating makes a too-large offset and a past-the-end one look identical from outside - so it is gated on `has('win32')`, which is every Windows Vim ("32 or 64 bits" per Vim's docs; `win64` is an extra feature, not an alternative, and `long` stays 32 bits on Win64 since Windows is LLP64) | "the fallback reader matches xxd over a range both can read" + the two with it |
+| Writing past 2 GiB on Windows: every byte-moving step is PowerShell's, since `xxd -r` shares the 32-bit offsets. `s:SeekWriteRaw()` overwrites, `s:SeekSetLength()` resizes, `s:SeekMoveRange()` slides a range (FULLY BUFFERED - read it all, then write it all - because a tail sliding by less than a block overlaps itself). `s:GrowInPlace()` needed no change, only its two primitives. `s:ShrinkInPlace()` is new and has no counterpart elsewhere: SetLength truncates, which neither Vim nor xxd can do, so the shrink that costs a whole-file rewrite on every other platform is here a tail move and a cut. ORDER is the correctness argument in both: grow extends first then moves the tail backwards from its end; shrink patches, then moves the tail forwards from its start, and cuts LAST - so a failure always leaves a longer file than intended, never a shorter one. Writes verify by reading back (`g:hexpair_verify_writes`), because this path cannot be exercised where it is developed. `:w {file}`/`:saveas` work too, through `s:SeekCopyRange()` - ONE process for the whole range with the chunking inside the script, since that operation walks a whole file and a process per block would be thousands. NOTE the inverted cost model: `s:TailShiftIsCheaper()` is ignored past this limit, because SetLength makes the shrink that is a whole-file rewrite everywhere else into a tail move and a cut - the expensive case is the cheap one here, and the splice (which now also works) would be the expensive one. Do NOT add a pwsh path for Linux/macOS/BSD: pwsh exists there and would behave the same, but `long` is 64 bits so xxd is already correct AND faster than a process start - the fallback is for where xxd is broken, not for where another tool exists | \"the writer puts the bytes where it was told\", \"SetLength grows a file\", \"a range slides right over itself intact\" + those with them |
+| `readblob()` looks like the fix for the above and is not: Vim's own `read_blob()` in blob.c declares a plain `struct stat` and calls plain `fstat()` where the rest of Vim uses `stat_T` (`struct _stat64` on Windows - vim.h says why), so for a large file it computes a negative length and returns an EMPTY BLOB AND SUCCESS, silently. Worth reporting upstream. PowerShell is what does the seek instead (`FileStream.Seek` takes an Int64). Note `s:CopyRange()` still uses `readblob()` - safe only because writes past the limit are refused | the same three |
+| The PowerShell reader's "is this hex?" check was `'^\%(\x\x\)*$'` - a quantified group over the whole run, which on a page-sized string (262144 characters) is E363, "Pattern uses more memory than 'maxmempattern'". Correct-looking and fine on anything short, so it shipped and reached a user on the first big page. `\X` plus an even-length test says the same thing in one linear scan (~7 ms a page). Same family as the `\zs`-consumes-the-newline and negated-collection traps in `s:PagedScan()`: **a regex over a whole page must be tested on a whole page** | "the hex check runs on a page-sized string at all" + the two with it |
+| Formatting a page's dump byte by byte in VimScript, when xxd could not be used for it: correct, and 3.5 SECONDS a page (131072 iterations of strpart/str2nr/concat) - which on Windows read as Vim hanging for half a minute on every page turn. xxd's limit is its SEEK, not its formatting: PowerShell now writes the page's bytes to a temp file and xxd dumps THAT from offset 0, with only the offset column renumbered here (`HexPairPagedRebaseDump()`, 8192 map() calls, 25 ms). 3530 ms -> 48 ms. The same page load also used to read the range TWICE, once for the dump and once for `b:hexpair_page_hex`; on a path where starting the process is the cost, that was half the total | "renumbered offsets are what xxd itself would have printed" + the three with it |
+| `g:hexpair_bytes_per_line = 0` was ACCEPTED: the only check was `size % bytesperline != 0`, and Vim answers `512 % 0` with 0 rather than erroring, so a zero width passed "is a multiple of" and fell over later in `xxd -c 0`. Width is checked by name and first now, as the RANGE 1..256 - 256 being xxd's own `#define COLS 256`, above which it exits with "invalid number of columns", which would otherwise reach the user as a command that failed for reasons nothing connects to the setting. The message names the range AND the page-size multiple, because "must be positive" left the reader asking what else was wanted of the number. `g:hexpair_page_size` also had no upper bound and is capped at `s:pagesizemax` (2147483647) - a correctness boundary, not a tidy number: a page's length reaches `xxd -l` (a C long, 32-bit on Windows) and PowerShell's `[int]`, and both would overflow silently | "a zero bytes-per-line is caught, not read as a multiple" + the three with it |
+| The offset-column renumbering existed TWICE - `s:CanonicalDump()`'s no-`-o` fallback and the Windows path past 2 GiB - which is one more place than the format can be got right in. One `HexPairPagedRebaseDump()` now. Its tests cover non-default widths, since every other test in the suite uses the default and a renumberer that advanced by 16 rather than by `n` would pass all of them | "renumbering follows a narrower dump line" + the two with it |
+| **`vim -es` reads Ex commands from STANDARD INPUT, and a failed `:source` leaves it doing exactly that.** `-S` only says what to run first; if that aborts, Vim does not exit, it reads the console forever with nothing printed. Every harness that drives it must close stdin - `< /dev/null`, or `<nul` from cmd. The tell, if it ever recurs: typing `:qa!` into the frozen run moves it on by exactly one step, which no blocked child process does | not testable here (needs Windows); `test/check-large-file.*` all redirect stdin |
+| PowerShell called from Vim's `system()` is invoked with `-InputFormat None`. Vim redirects the child's stdin, and PowerShell started with `-Command` and a redirected stdin reads it under the default `-InputFormat Text`. This is a KNOWN HAZARD guarded against, NOT a diagnosed field bug - nothing here ever demonstrated it. All invocations go through one `s:psinvoke` so the six call sites cannot drift | not testable here; the CI probe step measures it |
+| `getfsize()` has two answers that are not sizes - `-1` (cannot see the file) and `-2` (does not fit in a Number, i.e. ANY file over 2 GiB on a build without `+num64`, which is the 8.0 baseline this plugin supports). `s:LoadPage()` tested `<= 0` and so read both as "empty": a 5 GiB file would open as an empty view on such a Vim, with the page count, the bounds and every offset derived from it meaningless and nothing saying so. `s:FileSize()` throws for both and keeps zero as a real answer | "an empty file measures zero, not an error" + the two with it |
+| Guards on the 2 GiB limit test the END of the range, never the start: a range beginning below it and crossing it is xxd's for the seek and not for the rest. `s:FileHex()` tested the start and was the odd one out | "a range that STRADDLES the limit is not, on Windows" |
 | A search match straddling a page boundary was marked on neither page: it fits whole inside neither, and each page was searched alone | "and the page it starts on marks the byte it has" — `s:PageHexForSearch()` reads the page with span-1 bytes of each neighbour |
 | Mark completion with nothing typed yet offered nothing: `v:val[0 : strlen('') - 1]` is `[0 : -1]`, the whole name, which matches no empty lead | "mark completion offers all the names, and the matching ones" |
 | A selection report echoed from a Visual-mode mapping was painted over by `-- VISUAL --` before it could be read | not testable headlessly — the tmux recipe above, and the hit-enter prompt is the fix |
 | Refreshing the other windows (a `wincmd w` there and back) ENDED the Visual selection on every cursor movement, so Visual mode was unusable in `vimhexdiff` | "a Visual or Insert mode keeps this window" — the modes are a pure function, since mode() cannot be driven into a Visual one here |
-| The window's markings survived a toggle to the text view and sat there at the columns the hex view had put them | "the text view is left unmarked, not marked in the wrong columns" |
+| The window's markings survived a toggle to the text view and sat there at the columns the hex view had put them. SUPERSEDED: the answer was first to clear them, then (b7ea116) to draw them in the text view properly, one column per byte - so the guard is that they are drawn RIGHT there, not that they are absent | "and the text view marks its one column", "the text view marks one column per byte" |
+| A Windows `xxd` ends every dump line CRLF (`xxd.c`: `BIN_ASSIGN(fpo = stdout, revert)`, `BIN_WRITE(revert)` - text mode for a dump, binary only for `-r`), and the page loader read it through a `%!` filter, which leaves the CR to `'fileformats'` auto-detection. With `set fileformats=unix` in a vimrc nothing stripped it: a `^M` on every line of every page, cleared by `:HexPairRefresh` only because that path already went through `readfile()` | "a CRLF dump loads without a ^M at the end of the line" and the four checks with it - Windows CI uses the real `xxd.exe`, everywhere else a stand-in supplies the CRLF |
+| The page state was assigned before the dump was read, so a failed read left the buffer's bytes and its idea of which page they are disagreeing - and `:w` would have patched the old page's bytes in at the new page's offset | same block: the read and the shape check both happen before anything about the buffer changes |
+| The inspector reported the byte order mark as *Arabic Presentation Forms-B*. Blocks.txt says so, and Blocks.txt is right: blocks are laid out by CONTIGUITY and `FE70..FEFF` closes the BMP. But a format character belongs to no script, so the row asserted one where there is none | "and the byte order mark is the one named without a block" |
+| `:HexPairUnhex` left the global `'paste'` switched on: it deletes the `BufLeave` that would have cleared it, and the buffer is never left. The user came home to a text file with insert-mode mappings, abbreviations and automatic formatting silently off | "'paste' is on in the hex view and off again after the unhex" - and the state clear is by PREFIX now, the hand-written `unlet!` list having been seven names short, a stale diff target among them |
+| `:HexPairUnhex` after a `:saveas` re-edited the file the snapshot remembered, which is no longer this buffer's - so it opened a SECOND buffer and left the saved-as view paged with its autocommands already deleted, a hex view whose `:w` has no `BufWriteCmd` (E676). The file is read live now, never remembered | "a view saved elsewhere unhexes to the file it now holds" |
+| A buffer that had never been near hex mode was told `:HexPairUnhex` could not help it because it "was opened as hex (:HexPairOpen or vimhex)" - two entry points the reader had not used | "a buffer that never entered hex mode is told that, not told about :HexPairOpen" |
+| A toggle whose page read failed dropped the plain-view snapshot, though `s:PageSource()` had already re-read the buffer `++bin`: the file was left showing as raw bytes with nothing able to put it back, and the next toggle would have recorded that binary state as the plain one | "and the buffer it left in binary can still be unhexed" - reached with an `xxd` that only ever fails, on PATH |
+| `:HexPairUnhex` restored `'readonly'` from the snapshot over the answer the `:edit` had just worked out from the file, so a file whose write permission had been taken away came back writable | "a file that became read-only is not handed back writable" |
+| The generated block table's markers were `"\ ` comment continuations INSIDE the list literal, a form Vim 8.0 does not have - so `s:Blocks()` failed with E15 there and every `block` row of the inspector with it. Nothing noticed because CI runs a current Vim, and the 8.0 run below had not been done since the table landed | the baseline run below: 40 failures, all in the splice and save-as scripts, and no `E...` anywhere - which is what "the floor is a claim that has to be RUN" is for |
+| The splice gate asked for patch **8.2.4906**, which is an MS-Windows transparent-background patch. `readblob()`'s offset and size arguments are **9.0.0795**; plain `readblob()` is 8.2.2343. So every Vim in 8.2.4906..9.0.0794 was TOLD it could splice and then hit `E118: Too many arguments` inside `s:CopyRange()` - and during the copy back that is a target left half written, which is the one outcome the splice's ordering argument exists to prevent | the three `gate message ...` checks pin the wording, which now names 9.0.0795; the constant itself is checkable only by reading Vim's `version9.txt`, and the comment on `HexPairPagedGateMessage()` records what it says |
 
-**The Vim version floor is a claim that has to be run.** The plugin says
-everything but the splice works on Vim 8.0; it did not, for a year, and
-nothing noticed because CI only ever ran a current Vim. Build the oldest
-one and point the suite at it:
+**The Vim version floor is a claim that has to be run — and CI runs it
+now.** The plugin says everything but the splice works on Vim 8.0; it did
+not, for a year, and nothing noticed because CI only ever ran a current
+Vim. It then broke again, the same way, when the inspector's block table
+arrived carrying `"\ ` comment continuations. Both times the recipe below
+existed and nobody followed it. So the `test-oldest-vim` job in
+`.github/workflows/build.yml` builds v8.0.0000 from source on every push
+and runs the whole suite against it, and the suite **passes there**: it
+asks the Vim under test whether it can splice
+(`HexPairPagedSpliceSupported()`, global for exactly this) and
+`check_splice()` stands down at the forty checks that need one, while four
+checks in their place require the refusal, its message and an untouched
+file. Same check count on every Vim, so the count tripwire below still
+works.
+
+Read this section for what the build costs, not for how to interpret a
+list of failures — there is no list any more, only a pass or a fail.
 
 ```sh
 curl -sSLO https://github.com/vim/vim/archive/refs/tags/v8.0.0000.tar.gz
 tar xzf v8.0.0000.tar.gz && cd vim-8.0.0000
-CFLAGS="-O1 -w -Wno-error=implicit-function-declaration \
--Wno-error=int-conversion -Wno-error=incompatible-pointer-types" \
+# -std=gnu89 is NOT optional on a current compiler (checked on GCC 16.2):
+# configure's own "uint32_t is 32 bits" probe is a K&R `main()` calling
+# exit() with no <stdlib.h>, which a modern default standard rejects
+# outright, and configure reports that as "WRONG! uint32_t not defined
+# correctly" rather than as a compiler error. The -Wno-error=* flags the
+# recipe used to carry do not help, because this is the language standard
+# and not a warning.
+CFLAGS="-O1 -w -std=gnu89" \
     ./configure --with-features=normal --disable-gui --without-x \
                 --disable-nls --with-tlib=ncurses
-make -j4 vim     # `make` alone stops at xxd/xxd.c, whose K&R prototypes
-                 # no modern GCC compiles - use the system xxd instead
+cd src && make -j4 vim   # from src/, not the top level: 8.0's top-level
+                 # Makefile has no `vim` target. `make` alone stops at
+                 # xxd/xxd.c, whose K&R prototypes no modern GCC
+                 # compiles - use the system xxd instead
+cd ..
 HEXPAIR_VIM=$PWD/src/vim VIMRUNTIME=$PWD/runtime test/run-tests.sh
 ```
- The expected result
-is 33 failures, all of them inside the splice and save-as scripts —
-shortening a file, `:w {file}`, and a grow whose tail is more than half
-the file — each refused with the `readblob()` gate message, plus the
-assertions that follow such a refusal in the same script. Anything else
-failing there is a regression in the baseline; the count itself moves
-whenever a test is added to one of those scripts, so read the names, not
-the number. The suite itself must stay 8.0-clean
-too: no `trim()`, no Blob literal, no `count()` over a string.
+
+CI pins that tag by its COMMIT (`bb76f24af2010943387ce696a7092175b4ecccf2`)
+and shallow-clones it, rather than pinning the archive tarball's digest:
+GitHub regenerates those and their hashes have moved under people before.
+
+The suite itself must stay 8.0-clean, which is now enforced rather than
+remembered: no `trim()`, no Blob literal, no `count()` over a string, and
+no `"\ ` comment on a continuation line (that last one has a static check
+of its own, since every Vim this suite can run accepts it).
+
+**Who is actually on Vim 8.0**, since the floor costs something to keep:
+RHEL 8 and its rebuilds (AlmaLinux, Rocky, Oracle Linux) ship `vim`
+8.0.1763, still the current package in 8.10, and are supported into 2029.
+The floor is not sentiment. Note the difference between "the 8.0 series"
+and "8.0.0000": `"\ ` needs 8.1.0369, so the block-table bug hit every
+real 8.0 too, and testing 8.0.0000 is the strict superset that makes the
+claim simple to state.
 
 **Linting is worth doing by hand, and is not worth automating** (the
 maintainer's call, and the numbers back it): `vint` over the two
@@ -414,6 +804,79 @@ Worth running before touching anything that prints a file name. The rule it
 serves is the one already stated above: **assert against the value the code will
 actually use** — here, by having the fixture's own Vim script write out
 `fnamemodify(path, ':~:.')` and comparing against that.
+
+**The Windows CI job hangs in the 4 GiB straddle block, and that block is
+skipped there** (`$IS_WIN`, set by asking the Vim under test rather than
+the shell - Git Bash says MSYS whichever Vim is being tested). Past 2 GiB a
+Windows Vim reaches a file through PowerShell rather than xxd, so the block
+stops testing what it exists for (xxd's own offset-column widening) and
+becomes the first place in the suite that starts PowerShell at all. The job
+then times out at fifteen minutes. **The cause is not known.** Nothing is
+lost meanwhile: the widening is checked without a 4 GiB file by "and the
+column widens past eight digits", and the PowerShell paths by the checks
+that call them directly. The job carries a non-gating probe step ("Probe
+PowerShell, including the way hexpair calls it") whose value is the
+comparison between a bare run and one through Vim's `system()`.
+
+**CI runs both large-file checkers**, one per platform, as a step of its
+own with a budget of its own. They are the only checks that touch a real
+multi-gigabyte file, and they cover different things from the straddle
+block above: that one is a SPARSE 4 GiB fixture testing xxd's offset-column
+widening from eight digits to nine, a few KiB on disk; the checkers build a
+real 3 GiB file and verify that bytes written past 2 GiB land where they
+were told, against a pattern predicted from the offset. Peak disk is three
+times the fixture on Linux (the file, the whole-file temp the shrink
+splices through, and the `:w {file}` copy) and twice it on Windows, where
+SetLength truncates in place and no temp is needed.
+
+### What `test/check-large-file.cmd` cost to get running, and the rules it left
+
+It now passes all twenty checks on native Windows - the same-length write,
+the grow, the shrink, `:w {file}` - which is the only evidence the
+past-2 GiB paths have ever had. Getting there took a day, five wrong
+diagnoses, and one real plugin bug. **The meta-rule, which is the valuable
+part: the instrument is part of the measurement.** A diagnostic harness
+that starts Vim through `Start-Process` with redirected standard handles
+hung on a script that ran no `system()` at all, while a batch file running
+`vim -es -u NONE -S file <nul` never did. Four theories about
+`plugin/hexpair.vim` were argued from that harness's output before anyone
+questioned the harness. **When a diagnostic and the thing being diagnosed
+disagree, take the diagnostic apart first.**
+
+The concrete rules, each of which cost real time:
+
+- **`*.ps1` is pinned to CRLF in `.gitattributes`**, and any batch file a
+  script GENERATES is built from an ARRAY of lines so `Set-Content`
+  supplies the platform newline. A here-string carries its own file's
+  endings, and a batch file with LF endings does not run under cmd.exe -
+  the rule was already written down here for `*.cmd` and was applied to the
+  wrong half of the problem.
+- **"Which Vim is that?" is answered by `v:progpath`, never by the
+  filesystem.** `vim` on PATH is often a launcher that re-executes the real
+  binary, and that is FINE. Guessing by directory was wrong; guessing by
+  size was wrong too, because the real binary on the maintainer's machine
+  is 188 KB. Only Vim knows.
+- **`vim -es` is SILENT Ex mode: `:echomsg` displays nothing**, so
+  `g:hexpair_debug` cannot report there. A script that must say where it
+  got to writes markers with `writefile()`, each overwriting the last -
+  which is what `check-large-file.ps1` does, one per statement, into
+  `trace.out`.
+- **Windows PowerShell 5.1**: `try`/`catch` is a STATEMENT, so `try` inside
+  a parenthesised expression parses as a command name; `Get-Content` on an
+  EMPTY file returns an empty ARRAY, so `.Trim()` on it throws
+  "[System.Object[]] does not contain a method named 'Trim'".
+- **In a batch file a lone `%` is eaten** unless it forms `%VAR%` or `%%`,
+  and `^|` inside double quotes is a literal `^`, not an escape.
+- **A process that survives `taskkill /F` is stuck in the kernel and keeps
+  every handle it holds.** That happened here, and orphans holding a shared
+  redirect file made every layer after the first hang fail too. Diagnostics
+  that kill things must give each run its own files and report whether the
+  kill worked.
+
+The hang itself was never explained. It stopped happening, on the same
+machine and the same commits, both with and without the change that
+appeared to fix it - so the last theory is no better than the four before
+it.
 
 **Read the check COUNT, not just the last line.** The suite is one long
 sequence of blocks, and an edit that replaces a span of it can swallow
@@ -530,9 +993,11 @@ Windowed-text-view one too.
 1. **Plain** — an ordinary Vim buffer, hex mode never engaged.
    Completely untouched by hexpair; `:w` is 100% vanilla Vim. This is
    the *only* way to see/edit the true whole-file content once a file
-   is large enough to need more than one page — there is deliberately
-   **no escape hatch back to Plain** once a buffer has left it (see
-   below); the maintainer's own call: close and reopen Vim instead.
+   is large enough to need more than one page. A buffer that **toggled**
+   here from Plain can go back: `:HexPairUnhex` re-opens the file (see
+   "Back to Plain" below). A buffer that was **opened** as hex cannot,
+   and that half of the original decision stands: it may never have had
+   a text view and its file may be far too large to load for one.
 2. **Hex-page-view** — today's Stage 1 paged view (banner + `xxd -g 1`
    dump of the current page), reached by `:HexPairToggle` from Plain,
    or directly via `:HexPairOpen`/`HexPairOpenFile`.
@@ -562,6 +1027,61 @@ Windowed-text-view one too.
    pages — acceptable because this view is byte-oriented (`++bin`) by
    design, matching the existing "utf-16 remains approximate" class of
    disclaimed limitation elsewhere in this file.
+
+### Back to Plain (`:HexPairUnhex`)
+(`s:Unhex()` / `s:UnhexPlain()`, snapshot taken in `s:ToHex()`)
+
+Only for a buffer that **toggled** in from Plain, and the test is simply
+whether `b:hexpair_plain` exists — `s:Open()` never takes that snapshot,
+so the two doors stay distinguishable with no flag of their own. The
+command **re-opens the file**, it does not convert the buffer back: the
+buffer holds one page, and a page is not the file.
+
+- **The snapshot is taken once**, before `s:PageSource()` runs, because
+  that re-reads the buffer `++bin` and none of what it undoes (BOM
+  stripped, CRs folded, `'fileencoding'` transcoding) can be recovered
+  from the buffer afterwards. It holds the cursor's *plain-view*
+  line/column and the buffer options — `'binary'`, `'fileencoding'`,
+  `'fileformat'`, `'buftype'`, `'bufhidden'`, `'swapfile'`,
+  `'filetype'`, `'readonly'`, `'modifiable'`, `'modeline'`,
+  `'textwidth'`, `'expandtab'`. Empty `'fileencoding'`/`'fileformat'`
+  are *kept* empty: that is Vim's "no choice made", and it is what makes
+  the re-`:edit` rediscover them the way the user's own opening did.
+- **The file is NOT in the snapshot.** `:saveas` moves a view to another
+  file and nothing tells the snapshot, so the name is read live at unhex
+  time. Editing a remembered name would open a *second* buffer and leave
+  this one paged with its autocommands already deleted — a hex view
+  whose `:w` has no `BufWriteCmd` left to run (E676).
+- **Order inside `s:UnhexPlain()` is the whole of it**, and each step is
+  there for a reason a probe established: `s:PasteOff()` first (the
+  global `'paste'` is on and the `BufLeave` that would clear it is about
+  to be deleted, and it must precede `b:undo_ftplugin` — see
+  `s:PasteOn()`); the buffer-local autocmds next, or the `:edit` fires
+  our own `BufReadCmd` and renders a page into what is about to be the
+  whole file; every `b:hexpair_*` variable dropped **by prefix**, so
+  nothing survives to be read as this view's state next time; the
+  read-affecting options back *before* the `:edit` (a plain `:edit`
+  keeps every local value the paged view left); the ftplugin's undo
+  while `'filetype'` still says `xxd`; `nomodified` (restoring
+  `'fileencoding'` re-transcodes and marks the buffer modified, and a
+  modified buffer makes `:edit` try to write); then the `:edit`, then
+  the rest of the options.
+- **`'readonly'` is the one option not simply handed back**: the
+  `:edit` has just worked it out from the file, which is fresher than
+  the snapshot, so only a `'readonly'` the user had set *before* the
+  toggle is re-asserted.
+- **`s:AbandonSetup()` keeps the snapshot.** By the time a page load can
+  fail the `++bin` re-read has already happened, so the snapshot is the
+  only record of the plain view left; dropping it stranded the buffer in
+  binary *and* made the next toggle record that binary state as "plain".
+  `:HexPairUnhex` therefore also works on a buffer with a snapshot and
+  no page (its freshness check is skipped there) — that buffer is
+  exactly what it exists to rescue.
+- Refused, each with its own message: no snapshot and no page (hex mode
+  is simply not active); no snapshot but a page (opened as hex); no file
+  of its own (piped in); unwritten edits without `!`; the file changed
+  on disk since the page was read (`s:CheckFresh()`, the same standard
+  writes are held to).
 
 ### Entering hex mode: two population paths, chosen by entry point, not by size
 
@@ -618,13 +1138,15 @@ This resolves two questions raised while planning this stage:
 
 ### Vim version gate — narrowed
 
-Re-examined during this redesign: `readblob()` (patch 8.2.4906) is
-only actually needed by the Stage 4 **splice** write (growing/
-shrinking a page). Reading pages (either population path), Stage 3's
+Re-examined during this redesign: `readblob()` with an offset and a size
+(patch **9.0.0795** - NOT 8.2.4906, which this gate named for a long time
+and which is an unrelated MS-Windows patch; plain whole-file `readblob()`
+is 8.2.2343) is only actually needed by the Stage 4 **splice** write
+(growing/shrinking a page). Reading pages (either population path), Stage 3's
 same-length write, and Windowed-text-view all work on the same Vim 8.0
 baseline the rest of the plugin already requires. So the blanket
 load-time version gate Stage 1 introduced (refusing to load the whole
-paged feature below patch 8.2.4906) becomes unnecessarily strict once
+paged feature below the readblob() patch) becomes unnecessarily strict once
 paging is the *only* hex mode — it would raise the plugin's minimum
 Vim version for basic hex viewing, which used to work on Vim 8.0.
 **Stage 4 changes the gate to a runtime check performed only at the
@@ -1300,10 +1822,13 @@ naming the two ways out: write the buffer, or `:HexPairOpen` the file.
   a multi-byte UTF-8 sequence in Windowed-text-view is the paged
   equivalent, and is likewise not fixed — both are accepted, disclosed
   limitations of being fundamentally byte-oriented.
-- No way back to the Plain (pre-hex-mode, whole-file, unpaged) buffer
-  state once a buffer has engaged hex mode at all — close and reopen
-  Vim for that (the maintainer's explicit call, to avoid maintaining a
-  second, rarely-exercised code path just for reverting).
+- No way back to Plain for a buffer that was OPENED as hex
+  (`:HexPairOpen`, `vimhex`) — close and reopen Vim for that. A buffer
+  that TOGGLED into hex from a plain one does have a way back
+  (`:HexPairUnhex`, see "Back to Plain" above); the refusal survives
+  only where it is a real one, since there hexpair never saw a text
+  view of the file, has no parameters to restore, and the file may be
+  far too large to load in order to make one.
 
 ### Accepted risks — decided, not overlooked
 
