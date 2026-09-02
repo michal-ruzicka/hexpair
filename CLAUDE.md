@@ -384,8 +384,8 @@ dist/                 - packaged release tarballs (gitignored)
 ## Architecture (plugin/hexpair.vim)
 
 One script, script-local functions, three public surfaces: the
-commands (`:HexPairToggle`, `:HexPairGoHex`, `:HexPairGoAscii`,
-`:HexPairSwap`, `:HexPairRefresh`), the `<Plug>` mappings (no default
+commands (`:HexPairToggle`, `:HexPairUnhex`, `:HexPairGoHex`,
+`:HexPairGoAscii`, `:HexPairSwap`, `:HexPairRefresh`), the `<Plug>` mappings (no default
 key mappings — the user maps them in vimrc), and the highlight groups
 (`HexPairActive` / `HexPairMirror`).
 
@@ -680,6 +680,11 @@ come back**; each names the test that would catch it.
 | A Windows `xxd` ends every dump line CRLF (`xxd.c`: `BIN_ASSIGN(fpo = stdout, revert)`, `BIN_WRITE(revert)` - text mode for a dump, binary only for `-r`), and the page loader read it through a `%!` filter, which leaves the CR to `'fileformats'` auto-detection. With `set fileformats=unix` in a vimrc nothing stripped it: a `^M` on every line of every page, cleared by `:HexPairRefresh` only because that path already went through `readfile()` | "a CRLF dump loads without a ^M at the end of the line" and the four checks with it - Windows CI uses the real `xxd.exe`, everywhere else a stand-in supplies the CRLF |
 | The page state was assigned before the dump was read, so a failed read left the buffer's bytes and its idea of which page they are disagreeing - and `:w` would have patched the old page's bytes in at the new page's offset | same block: the read and the shape check both happen before anything about the buffer changes |
 | The inspector reported the byte order mark as *Arabic Presentation Forms-B*. Blocks.txt says so, and Blocks.txt is right: blocks are laid out by CONTIGUITY and `FE70..FEFF` closes the BMP. But a format character belongs to no script, so the row asserted one where there is none | "and the byte order mark is the one named without a block" |
+| `:HexPairUnhex` left the global `'paste'` switched on: it deletes the `BufLeave` that would have cleared it, and the buffer is never left. The user came home to a text file with insert-mode mappings, abbreviations and automatic formatting silently off | "'paste' is on in the hex view and off again after the unhex" - and the state clear is by PREFIX now, the hand-written `unlet!` list having been seven names short, a stale diff target among them |
+| `:HexPairUnhex` after a `:saveas` re-edited the file the snapshot remembered, which is no longer this buffer's - so it opened a SECOND buffer and left the saved-as view paged with its autocommands already deleted, a hex view whose `:w` has no `BufWriteCmd` (E676). The file is read live now, never remembered | "a view saved elsewhere unhexes to the file it now holds" |
+| A buffer that had never been near hex mode was told `:HexPairUnhex` could not help it because it "was opened as hex (:HexPairOpen or vimhex)" - two entry points the reader had not used | "a buffer that never entered hex mode is told that, not told about :HexPairOpen" |
+| A toggle whose page read failed dropped the plain-view snapshot, though `s:PageSource()` had already re-read the buffer `++bin`: the file was left showing as raw bytes with nothing able to put it back, and the next toggle would have recorded that binary state as the plain one | "and the buffer it left in binary can still be unhexed" - reached with an `xxd` that only ever fails, on PATH |
+| `:HexPairUnhex` restored `'readonly'` from the snapshot over the answer the `:edit` had just worked out from the file, so a file whose write permission had been taken away came back writable | "a file that became read-only is not handed back writable" |
 
 **The Vim version floor is a claim that has to be run.** The plugin says
 everything but the splice works on Vim 8.0; it did not, for a year, and
@@ -966,9 +971,11 @@ Windowed-text-view one too.
 1. **Plain** — an ordinary Vim buffer, hex mode never engaged.
    Completely untouched by hexpair; `:w` is 100% vanilla Vim. This is
    the *only* way to see/edit the true whole-file content once a file
-   is large enough to need more than one page — there is deliberately
-   **no escape hatch back to Plain** once a buffer has left it (see
-   below); the maintainer's own call: close and reopen Vim instead.
+   is large enough to need more than one page. A buffer that **toggled**
+   here from Plain can go back: `:HexPairUnhex` re-opens the file (see
+   "Back to Plain" below). A buffer that was **opened** as hex cannot,
+   and that half of the original decision stands: it may never have had
+   a text view and its file may be far too large to load for one.
 2. **Hex-page-view** — today's Stage 1 paged view (banner + `xxd -g 1`
    dump of the current page), reached by `:HexPairToggle` from Plain,
    or directly via `:HexPairOpen`/`HexPairOpenFile`.
@@ -998,6 +1005,61 @@ Windowed-text-view one too.
    pages — acceptable because this view is byte-oriented (`++bin`) by
    design, matching the existing "utf-16 remains approximate" class of
    disclaimed limitation elsewhere in this file.
+
+### Back to Plain (`:HexPairUnhex`)
+(`s:Unhex()` / `s:UnhexPlain()`, snapshot taken in `s:ToHex()`)
+
+Only for a buffer that **toggled** in from Plain, and the test is simply
+whether `b:hexpair_plain` exists — `s:Open()` never takes that snapshot,
+so the two doors stay distinguishable with no flag of their own. The
+command **re-opens the file**, it does not convert the buffer back: the
+buffer holds one page, and a page is not the file.
+
+- **The snapshot is taken once**, before `s:PageSource()` runs, because
+  that re-reads the buffer `++bin` and none of what it undoes (BOM
+  stripped, CRs folded, `'fileencoding'` transcoding) can be recovered
+  from the buffer afterwards. It holds the cursor's *plain-view*
+  line/column and the buffer options — `'binary'`, `'fileencoding'`,
+  `'fileformat'`, `'buftype'`, `'bufhidden'`, `'swapfile'`,
+  `'filetype'`, `'readonly'`, `'modifiable'`, `'modeline'`,
+  `'textwidth'`, `'expandtab'`. Empty `'fileencoding'`/`'fileformat'`
+  are *kept* empty: that is Vim's "no choice made", and it is what makes
+  the re-`:edit` rediscover them the way the user's own opening did.
+- **The file is NOT in the snapshot.** `:saveas` moves a view to another
+  file and nothing tells the snapshot, so the name is read live at unhex
+  time. Editing a remembered name would open a *second* buffer and leave
+  this one paged with its autocommands already deleted — a hex view
+  whose `:w` has no `BufWriteCmd` left to run (E676).
+- **Order inside `s:UnhexPlain()` is the whole of it**, and each step is
+  there for a reason a probe established: `s:PasteOff()` first (the
+  global `'paste'` is on and the `BufLeave` that would clear it is about
+  to be deleted, and it must precede `b:undo_ftplugin` — see
+  `s:PasteOn()`); the buffer-local autocmds next, or the `:edit` fires
+  our own `BufReadCmd` and renders a page into what is about to be the
+  whole file; every `b:hexpair_*` variable dropped **by prefix**, so
+  nothing survives to be read as this view's state next time; the
+  read-affecting options back *before* the `:edit` (a plain `:edit`
+  keeps every local value the paged view left); the ftplugin's undo
+  while `'filetype'` still says `xxd`; `nomodified` (restoring
+  `'fileencoding'` re-transcodes and marks the buffer modified, and a
+  modified buffer makes `:edit` try to write); then the `:edit`, then
+  the rest of the options.
+- **`'readonly'` is the one option not simply handed back**: the
+  `:edit` has just worked it out from the file, which is fresher than
+  the snapshot, so only a `'readonly'` the user had set *before* the
+  toggle is re-asserted.
+- **`s:AbandonSetup()` keeps the snapshot.** By the time a page load can
+  fail the `++bin` re-read has already happened, so the snapshot is the
+  only record of the plain view left; dropping it stranded the buffer in
+  binary *and* made the next toggle record that binary state as "plain".
+  `:HexPairUnhex` therefore also works on a buffer with a snapshot and
+  no page (its freshness check is skipped there) — that buffer is
+  exactly what it exists to rescue.
+- Refused, each with its own message: no snapshot and no page (hex mode
+  is simply not active); no snapshot but a page (opened as hex); no file
+  of its own (piped in); unwritten edits without `!`; the file changed
+  on disk since the page was read (`s:CheckFresh()`, the same standard
+  writes are held to).
 
 ### Entering hex mode: two population paths, chosen by entry point, not by size
 
@@ -1736,10 +1798,13 @@ naming the two ways out: write the buffer, or `:HexPairOpen` the file.
   a multi-byte UTF-8 sequence in Windowed-text-view is the paged
   equivalent, and is likewise not fixed — both are accepted, disclosed
   limitations of being fundamentally byte-oriented.
-- No way back to the Plain (pre-hex-mode, whole-file, unpaged) buffer
-  state once a buffer has engaged hex mode at all — close and reopen
-  Vim for that (the maintainer's explicit call, to avoid maintaining a
-  second, rarely-exercised code path just for reverting).
+- No way back to Plain for a buffer that was OPENED as hex
+  (`:HexPairOpen`, `vimhex`) — close and reopen Vim for that. A buffer
+  that TOGGLED into hex from a plain one does have a way back
+  (`:HexPairUnhex`, see "Back to Plain" above); the refusal survives
+  only where it is a real one, since there hexpair never saw a text
+  view of the file, has no parameters to restore, and the file may be
+  far too large to load in order to make one.
 
 ### Accepted risks — decided, not overlooked
 

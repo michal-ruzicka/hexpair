@@ -59,8 +59,13 @@ endfunction
 
 " --- The two views -------------------------------------------------------
 " Toggle between the hex page view and the windowed text view of the same
-" page. There is no way back to the plain buffer - reopen the file for that.
+" page.
 call s:Map('n', '<Leader>h', '<Plug>(HexPairToggle)')
+" The way back out: a plain buffer of a whole file toggled to hex comes
+" back to its ordinary, unpaged, non-binary text view with the options it
+" had before. A view opened as hex (vimhex, :HexPairOpen) has no such text
+" view, so this refuses it and says why.
+call s:Map('n', '<Leader>U', '<Plug>(HexPairUnhex)')
 
 " Move between the columns of a dump: to the hex one, to the ASCII one, or
 " to whichever one the cursor is not in - staying on the same byte.

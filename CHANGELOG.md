@@ -10,6 +10,20 @@ and this project adheres to
 ## [v2.3.0-devel] – 2026-08-28
 
 ### Added
+- **`:HexPairUnhex`, the way back out of a paged view.** A file you opened
+  normally (`vim file.md`) and then switched to hex with `<Leader>h` /
+  `:HexPairToggle` comes back to its ordinary, unpaged, non-binary view:
+  `:HexPairUnhex` (mapped to `<Leader>U` in `hexpair.vimrc`) re-opens the
+  whole file with the `'binary'`, `'fileencoding'`, `'fileformat'` and the
+  other buffer options it had before the first toggle, with the cursor where
+  it was. The plugin takes a snapshot of those options the first time a
+  buffer toggles from plain, and hands them back rather than guessing. The
+  buffer is re-read from disk, not converted — a page is not the file, and
+  a page's unwritten edits would be lost, so without `!` the command refuses
+  and `!` discards them. The one case it cannot serve — a file opened **as**
+  hex by `:HexPairOpen` or `vimhex`, which may have had no text view at all
+  and whose file may be far too large to load — it refuses and says so,
+  naming the file to `:edit` instead. See `:help :HexPairUnhex`.
 - **`:HexPairInspect` now says what the character _is_.** A `name` row for
   every code point you cannot see — the C0 and C1 controls, `DEL`, and the
   space and format characters a hex editor meets constantly — a `block` row

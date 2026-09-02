@@ -22,8 +22,8 @@
 " :w writes just the page back: an edit that kept its length patches it
 " in place, one that changed the length splices the file.
 "
-" Views:            :HexPairToggle, :HexPairGoHex, :HexPairGoAscii,
-"                   :HexPairSwap, :HexPairRefresh
+" Views:            :HexPairToggle, :HexPairUnhex, :HexPairGoHex,
+"                   :HexPairGoAscii, :HexPairSwap, :HexPairRefresh
 " Pages:            :HexPairOpen, :HexPairPageNext, :HexPairPagePrev,
 "                   :HexPairPageGoto, :HexPairGoOffset, :HexPairPages,
 "                   :HexPairSplit, :HexPairVSplit
@@ -6958,10 +6958,15 @@ endfunction
 " 3. WINDOWED-TEXT the SAME page's raw bytes as text, with the same banner.
 "
 " :HexPairToggle moves PLAIN -> HEX-PAGE -> WINDOWED-TEXT -> HEX-PAGE -> ...
-" There is deliberately no way back to PLAIN: once a buffer holds one page
-" rather than the whole file, presenting it as the file again would be a
-" lie, and a plain :w would truncate the file down to that page. Close and
-" reopen the file to get back.
+" There is a way back from a buffer that TOGGLED from PLAIN: :HexPairUnhex
+" re-opens the whole file as it stood before the toggle, with the options
+" it had then. There is no such thing for a buffer OPENED as hex (:HexPairOpen,
+" vimhex), because that door has no PLAIN to return to - the file may never
+" have been read as text and may be far too large to load for that purpose.
+" (And in neither case would a page be 'reverted' to a file: once a buffer
+" holds one page rather than the whole file, presenting it as the file again
+" would be a lie, and a plain :w would truncate the file down to that page.
+" That is why :HexPairUnhex re-opens rather than converts.)
 "
 " b:hexpair_page_active marks states 2 and 3; b:hexpair_view says which.
 
@@ -7091,7 +7096,61 @@ function! s:ToHex() abort
     throw sizeerr
   endif
 
-  let off = s:PageSource()
+  " Remember what PLAIN was before anything here changes it: s:PageSource()
+  " reloads the buffer ++bin, s:SetupPagedBuffer() takes the options and
+  " autocmds over, and none of it is undoable from the buffer afterwards.
+  " This snapshot is what :HexPairUnhex restores; s:Open() never takes one,
+  " which is how the two hex doors stay distinguishable. Captured once:
+  " re-entering the hex view from a restored buffer must not overwrite the
+  " original with its own ++bin state.
+  "
+  " 'fileencoding' and 'fileformat' come out EMPTY where they matched the
+  " global defaults on the way in - Vim stores 'no choice made' that way -
+  " and empty is exactly what s:UnhexPlain() wants back: an ordinary
+  " re-:edit rediscovers the encoding, which is what the user's opening did.
+  "
+  " The cursor BEFORE the ++bin reload, and in the PLAIN view's own
+  " line/column: the reload changes the buffer's bytes (the BOM and CRs
+  " materialise, transcoding is undone) while the cursor keeps its old
+  " coordinates, so the plain view's position has to be taken while the
+  " plain view is still on screen. s:PageSource() keeps its own, in bytes,
+  " for the hex side of things; the two do not have to agree.
+  "
+  " The file is NOT among the values kept: s:UnhexPlain() re-opens whatever
+  " file the buffer holds when it runs, which after a :saveas is not the
+  " one this buffer was toggled from.
+  if !exists('b:hexpair_plain')
+    let b:hexpair_plain = {
+          \ 'lnum':         line('.'),
+          \ 'col':          col('.'),
+          \ 'binary':       &l:binary,
+          \ 'fileencoding': &l:fileencoding,
+          \ 'fileformat':   &l:fileformat,
+          \ 'buftype':      &l:buftype,
+          \ 'bufhidden':    &l:bufhidden,
+          \ 'swapfile':     &l:swapfile,
+          \ 'filetype':     &l:filetype,
+          \ 'readonly':     &l:readonly,
+          \ 'modifiable':   &l:modifiable,
+          \ 'modeline':     &l:modeline,
+          \ 'textwidth':    &l:textwidth,
+          \ 'expandtab':    &l:expandtab}
+  endif
+  try
+    let off = s:PageSource()
+  catch
+    " The snapshot goes only if PLAIN is still on screen for a fresh one to
+    " be taken from - which is the refusals, every one of which happens
+    " before anything about the buffer changes. Past the ++bin re-read the
+    " same argument as s:AbandonSetup()'s applies: the plain view is gone
+    " and this is the only record of it left, so it stays and
+    " :HexPairUnhex is the way out. The re-read is what sets 'binary', so
+    " the snapshot's own value is the test for whether it happened.
+    if &l:binary == b:hexpair_plain.binary
+      unlet! b:hexpair_plain
+    endif
+    throw v:exception
+  endtry
   call s:Debug('entering hex mode on byte %d, page %d',
         \ off, off / g:hexpair_page_size + 1)
   call s:SetupPagedBuffer()
@@ -7112,6 +7171,214 @@ function! s:ToHex() abort
   redraw!
 endfunction
 
+" ---------------------------------------------------------------------------
+" Back to PLAIN (:HexPairUnhex)
+" ---------------------------------------------------------------------------
+"
+" :HexPairToggle has no way back to PLAIN on purpose (see "The buffer's
+" three states" above), and that is right for the PAGE: the buffer holds
+" one page, and dressing it up as the file again would be a lie. But
+" there is a second door into the paged view - a plain buffer of a whole
+" file toggled by <Leader>h - and behind THAT door the whole file is
+" still on disk, exactly where Vim read it from. For those buffers only,
+" :HexPairUnhex re-opens it the way :edit would, with the options as
+" they were before the first toggle: the ordinary, unpaged, non-binary
+" view the user started with.
+"
+" What makes this different from a hand-made dump being 'reverted': it
+" does not convert the buffer's bytes back (a page is not the file), and
+" it does not guess (the snapshot names every option). s:Open() never
+" takes that snapshot, which is the whole test - a buffer opened through
+" the vimhex door may have had no text view at all, its file may be huge
+" or unreadable, and hexpair has no parameters to restore, so it refuses
+" and says why.
+function! s:Unhex(force) abort
+  try
+    call s:UnhexPlain(a:force)
+  catch /^hexpair:/
+    echohl ErrorMsg
+    echomsg v:exception
+    echohl None
+  endtry
+endfunction
+
+function! s:UnhexPlain(force) abort
+  if !exists('b:hexpair_plain')
+    " No snapshot means one of two quite different things, and a single
+    " message would be wrong in whichever case it did not describe: a
+    " buffer that never entered hex mode has nothing to come back from,
+    " while a paged one came through the door that has no way back.
+    if !get(b:, 'hexpair_page_active', 0)
+      throw 'hexpair: hex mode is not active in this buffer'
+    endif
+    let f = get(b:, 'hexpair_page_file', '')
+    throw 'hexpair: this hex view was opened as hex (:HexPairOpen or '
+          \ . 'vimhex), so hexpair never saw a text view of this file to '
+          \ . 'return to; the text parameters are not known and the file '
+          \ . 'may be huge - open it normally instead'
+          \ . (f !=# '' ? ' (:edit ' . f . ')' : '')
+  endif
+  let p = b:hexpair_plain
+  " The file to re-open is the one this BUFFER holds now, not the name the
+  " snapshot was taken under. :saveas moves a view to another file
+  " (|hexpair-saveas|) and nothing updates the snapshot, so re-editing the
+  " remembered name would open a SECOND buffer and leave this one paged
+  " with its autocommands already gone - a hex view whose :w has no
+  " BufWriteCmd left to run. The remembered OPTIONS are still the ones
+  " worth handing back either way: an ordinary :edit re-detects the
+  " encoding and the line endings for whichever file it is, which is what
+  " the user's own opening did.
+  let name = expand('%:p')
+  if name ==# ''
+    throw 'hexpair: this hex view is paged from content with no file of '
+          \ . 'its own, so there is nothing to re-open as text; write the '
+          \ . 'bytes out with :w {file} first'
+  endif
+  " A plain :edit does not write, so unwritten edits would be lost without
+  " a word - and in a paged buffer they are edits to one PAGE, which even
+  " a :w would not turn into a whole-file save. Say so; '!' discards them.
+  " (The discarding itself happens right before the re-edit, because
+  " restoring 'fileencoding' marks the buffer modified again; see there.)
+  if &l:modified && !a:force
+    throw 'hexpair: this page has unwritten edits; :w patches them into the '
+          \ . 'file first, :HexPairUnhex! discards them'
+  endif
+  " Buffer and disk agreed the last time a page was read (s:CheckFresh()'s
+  " own test, so the same standard this plugin holds writes to); a change
+  " since then is a change no re-edit will preserve the knowledge of.
+  " Only when there IS a page: s:AbandonSetup() leaves a buffer holding the
+  " snapshot and no page state at all, and that buffer - re-read ++bin and
+  " never paged - is exactly the one this has to be able to rescue.
+  if get(b:, 'hexpair_page_active', 0)
+    call s:CheckFresh()
+  endif
+  if !filereadable(name)
+    throw 'hexpair: ' . name . ' cannot be read; the hex view is kept'
+  endif
+
+  " The cursor goes back to where it was in the plain view, and the
+  " snapshot already holds that: p.lnum / p.col. It is not computed back
+  " from the byte the cursor is on now, for two reasons. Mapping a hex-view
+  " byte into plain-view coordinates is lossy exactly where 'fileencoding'
+  " or 'fileformat' convert (the same caveat s:PreReloadPos() documents),
+  " and on a modified page s:PagedByteOffset() runs s:PagedScan() to
+  " recount the bytes - a whole-page validation this does not need, since
+  " the page's content is about to be thrown away for the file.
+
+  " 'paste' is GLOBAL, and it is switched on while the cursor is in a hex
+  " buffer (s:PasteOn()) - so it has to come off here, because the BufLeave
+  " that would have done it is about to be deleted with the rest of the
+  " paged arrangement and this buffer is never left. Without it an unhexed
+  " file comes home with the user's insert-mode mappings, abbreviations and
+  " automatic formatting silently switched off. It goes BEFORE
+  " b:undo_ftplugin below: switching 'paste' off restores the options it
+  " overrode, and only then may the ftplugin's undo revert them.
+  call s:PasteOff()
+
+  " The autocmds (BufWriteCmd, BufReadCmd, the highlights) belong to the
+  " paged arrangement, and ':edit' below fires BufReadCmd on its way out
+  " if they are still attached - which would render a page into a buffer
+  " that is about to be the whole file. Drop them first, then the
+  " arrangement they served.
+  augroup HexPairPagedBuffer
+    autocmd! * <buffer>
+  augroup END
+  call s:ClearMarkings()
+  call s:DropSpill()
+
+  " Nothing of hexpair's stays on the buffer: it is an ordinary buffer
+  " again, and every leftover is state the next entry into hex mode would
+  " read as this view's own - a diff target the user has forgotten, a
+  " cached page, a search's hit list. By PREFIX rather than name by name,
+  " because the hand-written list this replaces was already seven names
+  " short of the ones the plugin sets. Before the :edit, so nothing (a
+  " 'statusline' calling HexPairStatus(), say) can read the whole file as
+  " though it were still a page. p keeps the snapshot alive - the variable
+  " goes, the dict it named does not.
+  for hpvar in keys(b:)
+    if hpvar =~# '^hexpair_'
+      call remove(b:, hpvar)
+    endif
+  endfor
+
+  " The :edit re-reads the file, and HOW it reads it is fixed by the read
+  " options - 'binary', 'fileencoding', 'fileformat'. A plain :edit keeps
+  " every local value the paged view left there (the probes show none of
+  " them is reset by the re-read), so the read-affecting ones must be put
+  " back BEFORE the read: left at the ++bin values, the buffer would come
+  " back raw - no BOM strip, no CRLF folding, no transcode. From the
+  " snapshot, not from the global side: 'setlocal binary&' would reset to
+  " whatever the global value is, which is not necessarily what this
+  " buffer's plain view had.
+  let &l:binary = p.binary
+  let &l:fileencoding = p.fileencoding
+  let &l:fileformat = p.fileformat
+
+  " The xxd ftplugin's local options (tabstop 10 and friends) belong to a
+  " dump, not to the file's own view. Its undo must run while 'filetype'
+  " still names xxd - once the re-read's FileType event fires, ftdetect
+  " re-runs and the undo has been overwritten by whatever filetype the
+  " file's own name resolves to. 'filetype' is cleared rather than reset:
+  " an autocmd for an empty filetype cannot fire, so no ftplugin runs
+  " here, and the re-read re-detects the way the original opening did.
+  setlocal filetype=
+  if exists('b:undo_ftplugin')
+    execute b:undo_ftplugin
+    unlet b:undo_ftplugin
+  endif
+  unlet! b:did_ftplugin
+
+  " Restoring 'fileencoding' re-transcodes the buffer in place, which
+  " marks it modified - and a modified buffer makes an :edit first try to
+  " write it (E37, or a page-range write through autowrite), which is
+  " exactly what is not wanted: the :edit replaces this page with the whole
+  " file, so whatever the buffer holds is about to be thrown away. An
+  " unwritten edit to a page is not a write to the file, and the '!' above
+  " has already been refused or given. The flag is noise here, so it is
+  " cleared for real right before the read, not left to the option above.
+  setlocal nomodified
+
+  " The re-edit: same name, same window, ordinary read. It re-detects the
+  " filetype exactly the way the user's opening did - 'filetype' is empty
+  " and b:did_ftplugin is gone, so its FileType event fires the ftplugin
+  " for the file's own name. A :silent :edit can still fail (E13/E505 on
+  " the file), and the buffer is already de-paged by then - so the state
+  " below only gets written once the edit actually happened.
+  execute 'silent edit' fnameescape(name)
+
+  " The options the paged view and the ++bin reload set, back from the
+  " snapshot rather than assumed. A plain :edit keeps every local value -
+  " so the paged 'buftype', 'bufhidden', 'swapfile' would otherwise
+  " survive - and the ++bin reload's side effects, 'modeline' off,
+  " 'textwidth' 0 and 'expandtab' off, sit in the snapshot too. Restoring
+  " what was THERE, not the defaults, is the difference between an unhex
+  " that lands home and one that lands at the defaults.
+  let &l:buftype    = p.buftype
+  let &l:bufhidden  = p.bufhidden
+  let &l:swapfile   = p.swapfile
+  let &l:modifiable = p.modifiable
+  let &l:modeline   = p.modeline
+  let &l:textwidth  = p.textwidth
+  let &l:expandtab  = p.expandtab
+  " 'readonly' is the one that is not simply handed back. The :edit has
+  " just worked it out from the file itself, which is fresher than the
+  " snapshot: a file that has become read-only since would be presented as
+  " writable again by a restore. So only a 'readonly' the user had set
+  " BEFORE the toggle is re-asserted, and Vim's own answer is never
+  " overruled the other way.
+  if p.readonly
+    setlocal readonly
+  endif
+
+  " The plain view's own coordinates, into the re-opened whole file. They
+  " were taken while the plain view was on screen (s:ToHex), so they name a
+  " real line and column of it; clamp the line to the file in case it has
+  " grown or shrunk since, and the column is left to cursor() to clamp.
+  call cursor(p.lnum > line('$') ? line('$') : p.lnum, p.col)
+  redraw!
+  echomsg 'hexpair: ' . name . ' re-opened as text'
+endfunction
+
 " Undo s:SetupPagedBuffer() when the page never got loaded, so a buffer
 " is never left looking paged (acwrite, our BufWriteCmd) without the page
 " state a write would need.
@@ -7123,6 +7390,13 @@ function! s:AbandonSetup() abort
   setlocal buftype= bufhidden=
   unlet! b:hexpair_page_file b:hexpair_page_size b:hexpair_page_bufname
         \ b:hexpair_page_spill
+  " b:hexpair_plain is deliberately NOT dropped. By the time a page load
+  " can fail, s:PageSource() has already re-read the buffer ++bin, and the
+  " snapshot is then the only surviving record of what the plain view was:
+  " throwing it away leaves the buffer stuck in binary with nothing to
+  " restore, and the NEXT toggle would snapshot that ++bin state as though
+  " it were the plain one. Keeping it costs a cursor position that may have
+  " moved since; :HexPairUnhex is the way out of that buffer.
 endfunction
 
 " ---------------------------------------------------------------------------
@@ -7593,6 +7867,7 @@ endfunction
 " ---------------------------------------------------------------------------
 
 command! -bar HexPairToggle  call s:Toggle()
+command! -bar -bang HexPairUnhex call s:Unhex('<bang>' ==# '!')
 command! -bar HexPairGoHex   call s:PagedJumpTo('hex')
 command! -bar HexPairGoAscii call s:PagedJumpTo('ascii')
 command! -bar HexPairSwap    call s:PagedJumpTo('swap')
@@ -7649,6 +7924,7 @@ command! -bar -nargs=? HexPairVSplit call s:SplitView(1, <f-args>)
 if g:hexpair_short_commands
   for [s:flags, s:short, s:long] in [
         \ ['-bar', 'HPToggle', 'HexPairToggle'],
+        \ ['-bar -bang', 'HPUnhex', 'HexPairUnhex'],
         \ ['-bar', 'HPGoHex', 'HexPairGoHex'],
         \ ['-bar', 'HPGoAscii', 'HexPairGoAscii'],
         \ ['-bar', 'HPSwap', 'HexPairSwap'],
@@ -7750,11 +8026,16 @@ xnoremap <silent> <Plug>(HexPairDiffShow) :<C-U>call <SID>DiffShow(1)<CR>
 " No default key mappings are defined; map the <Plug> mappings (or the
 " commands directly) in your vimrc, e.g.:
 "   nmap <Leader>h <Plug>(HexPairToggle)
+"   nmap <Leader>U <Plug>(HexPairUnhex)
 "   nmap <Leader>< <Plug>(HexPairGoHex)
 "   nmap <Leader>> <Plug>(HexPairGoAscii)
 "   nmap <Leader>- <Plug>(HexPairSwap)
 "   nmap <Leader>r <Plug>(HexPairRefresh)
 nnoremap <silent> <Plug>(HexPairToggle)  :<C-U>HexPairToggle<CR>
+" The way back out of a paged view that came from a plain buffer of a whole
+" file: re-open it as text. It refuses a view opened as hex, where there is
+" no text view to return to.
+nnoremap <silent> <Plug>(HexPairUnhex)   :<C-U>HexPairUnhex<CR>
 nnoremap <silent> <Plug>(HexPairGoHex)   :<C-U>HexPairGoHex<CR>
 nnoremap <silent> <Plug>(HexPairGoAscii) :<C-U>HexPairGoAscii<CR>
 nnoremap <silent> <Plug>(HexPairSwap)    :<C-U>HexPairSwap<CR>

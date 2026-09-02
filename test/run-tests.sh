@@ -168,6 +168,11 @@ for name in ('mod12.bin', 'mod13.bin', 'mod14.bin', 'mod15.bin'):
 # :HexPairRefresh fixtures
 for name in ('ref1.bin', 'ref2.bin', 'ref3.bin', 'ref4.bin', 'ref5.bin'):
     open(os.path.join(w, name), 'wb').write(b'ABCDEFGH')
+# :HexPairUnhex fixtures: real text files (so a plain view exists to return
+# to), with known lines so content, cursor and line endings can be asserted
+open(os.path.join(w, 'unhex1.txt'), 'wb').write(b'first line\nsecond line\nthird line\n')
+open(os.path.join(w, 'unhex2.txt'), 'wb').write(b'one\r\ntwo\r\nthree\r\n')
+open(os.path.join(w, 'unhex3.txt'), 'wb').write(b'a b c\nx y z\n')
 # paged-mode fixture: 5000 bytes, byte i has value i % 256 - at 512
 # bytes/page that is 10 pages, the last one short (392 bytes)
 for name in ('paged21.bin', 'paged22.bin', 'paged23.bin', 'paged31.bin', 'paged32.bin', 'undo1.bin', 'layout1.bin', 'jump1.bin', 'paste1.bin', 'abandon1.bin', 'ulocal1.bin', 'src1.bin', 'off1.bin', 'multi.bin', 'multi2.bin', 'same1.bin', 'vis1.bin', 'pos1.bin', 'ip1.bin', 'ip2.bin', 'ip3.bin', 'w1.bin', 'w2.bin', 'w3.bin', 'w4.bin', 'w5.bin', 'sp1.bin', 'sp2.bin', 'sp3.bin', 'sp4.bin', 'tv1.bin', 'tv2.bin', 'tv3.bin', 'tv4.bin'):
@@ -934,6 +939,269 @@ check_path "goto! discards edits and jumps" \
     "['\" hexpair: page 5/10  bytes 2049-2560 of 5000  $WORK/paged31.bin', 0]" \
     "$(sed -n 2p "$WORK/t31.out")"
 
+# --- :HexPairUnhex: back to PLAIN from a toggled buffer ---------------------
+# The one case :HexPairToggle has a way back for: a plain buffer of a whole
+# file, toggled to hex, is re-opened as the ordinary, unpaged, non-binary
+# view it was before - same bytes, same options, cursor where it was. These
+# run WITHOUT -b on purpose: the whole point is the file was read as text,
+# the way `vim file.md` reads it, so the snapshot has a plain state to hand
+# back.
+cat > "$WORK/unhex1.vim" <<EOF
+source $PLUGIN
+let g:hexpair_page_size = 512
+let before = {'lines': getline(1, '\$'), 'l': line('.'), 'c': col('.'), 'bin': &l:binary, 'ff': &l:fileformat, 'ft': &l:filetype}
+call cursor(2, 3)
+let before.pos = [line('.'), col('.')]
+HexPairToggle
+let inhex = get(b:, 'hexpair_page_active', 0)
+HexPairUnhex
+call writefile([string([inhex, &l:binary, line('\$'), &l:modified, get(b:, 'hexpair_page_active', -1)]), string(before.pos == [line('.'), col('.')]), string(getline(1, '\$') == before.lines), string([&l:binary, &l:fileformat, &l:filetype] == [before.bin, before.ff, before.ft])], '$WORK/unhex1.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE "$WORK/unhex1.txt" -S "$WORK/unhex1.vim" < /dev/null
+check "unhex leaves the buffer de-paged, unmodified, non-binary" \
+    "[1, 0, 3, 0, -1]" "$(sed -n 1p "$WORK/unhex1.out")"
+check "the cursor is back where it was before the toggle" \
+    "1" "$(sed -n 2p "$WORK/unhex1.out")"
+check "the bytes are the file's again, every line" \
+    "1" "$(sed -n 3p "$WORK/unhex1.out")"
+check "and the view's options are the plain view's" \
+    "1" "$(sed -n 4p "$WORK/unhex1.out")"
+
+# The door it must refuse: a buffer opened AS hex (HexPairOpen) never had a
+# plain view, so there is nothing to return to, and it stays paged.
+cat > "$WORK/unhex2.vim" <<EOF
+source $PLUGIN
+let g:hexpair_page_size = 512
+HexPairOpen $WORK/unhex2.txt
+let openedas = get(b:, 'hexpair_page_active', 0)
+let snap = exists('b:hexpair_plain')
+redir => msg
+silent HexPairUnhex
+redir END
+let still = get(b:, 'hexpair_page_active', 0)
+call writefile([string([openedas, snap]), string(msg =~# 'opened as hex'), string(still)], '$WORK/unhex2.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/unhex2.vim" < /dev/null
+check "a view opened as hex has a page and no plain snapshot" \
+    "[1, 0]" "$(sed -n 1p "$WORK/unhex2.out")"
+check "and HexPairUnhex says so" "1" "$(sed -n 2p "$WORK/unhex2.out")"
+check "and leaves it paged, not half-reverted" "1" "$(sed -n 3p "$WORK/unhex2.out")"
+
+# Unwritten edits: a plain :edit would drop them silently, so without ! the
+# unhex refuses, and with ! it discards them and the file keeps its bytes.
+cat > "$WORK/unhex3.vim" <<EOF
+source $PLUGIN
+let g:hexpair_page_size = 512
+let file = '$WORK/unhex3.txt'
+HexPairToggle
+call append(line('.'), 'edited in the hex view')
+let modified = &l:modified
+redir => msg
+silent HexPairUnhex
+redir END
+let refused = [get(b:, 'hexpair_page_active', 0), &l:modified]
+HexPairUnhex!
+call writefile([string(modified), string(msg =~# 'unwritten edits'), string(refused), string([&l:binary, get(b:, 'hexpair_page_active', -1), line('\$')]), string(readfile(file))], '$WORK/unhex3.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE "$WORK/unhex3.txt" -S "$WORK/unhex3.vim" < /dev/null
+check "an edit in the hex view marks the page modified" "1" \
+    "$(sed -n 1p "$WORK/unhex3.out")"
+check "unhex without ! refuses to lose it" "1" \
+    "$(sed -n 2p "$WORK/unhex3.out")"
+check "and leaves the page and its edit in place" "[1, 1]" \
+    "$(sed -n 3p "$WORK/unhex3.out")"
+check "unhex! discards the edit and re-opens the file" "[0, -1, 2]" \
+    "$(sed -n 4p "$WORK/unhex3.out")"
+check "and the file on disk is untouched" "['a b c', 'x y z']" \
+    "$(sed -n 5p "$WORK/unhex3.out")"
+# 'paste' is GLOBAL and is switched on while the cursor is in a hex buffer;
+# the BufLeave that switches it back is one of the autocommands the unhex
+# deletes, and this buffer is never left - so the unhex has to put it back
+# itself, or the file comes home with the user's insert-mode mappings,
+# abbreviations and automatic formatting silently switched off. And nothing
+# of hexpair's may be left on the buffer either: a forgotten diff target or
+# a cached page would be read as this view's own state the next time hex
+# mode is entered.
+cat > "$WORK/unhex4.vim" <<EOF
+source $PLUGIN
+let g:hexpair_page_size = 512
+HexPairToggle
+let inhex = &paste
+HexPairUnhex
+call writefile([string([inhex, &paste]), string(filter(keys(b:), 'v:val =~# "^hexpair_"'))], '$WORK/unhex4.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE "$WORK/unhex1.txt" -S "$WORK/unhex4.vim" < /dev/null
+check "'paste' is on in the hex view and off again after the unhex" \
+    "[1, 0]" "$(sed -n 1p "$WORK/unhex4.out")"
+check "and the buffer keeps none of hexpair's own variables" "[]" \
+    "$(sed -n 2p "$WORK/unhex4.out")"
+# :saveas moves a view to another file, and the snapshot does not follow
+# it. Re-editing the remembered name would open a SECOND buffer and leave
+# this one paged with its autocommands already deleted - a hex view whose
+# :w has no BufWriteCmd left to run. The file the BUFFER holds is the one
+# to come back to.
+cat > "$WORK/unhex7.vim" <<EOF
+source $PLUGIN
+let g:hexpair_page_size = 512
+let here = bufnr('%')
+HexPairToggle
+saveas! $WORK/unhex7-saved.txt
+HexPairUnhex
+call writefile([string([bufnr('%') == here, fnamemodify(bufname('%'), ':t'), &l:buftype, &l:binary, get(b:, 'hexpair_page_active', -1)]), string(getline(1, '\$'))], '$WORK/unhex7.out')
+qa!
+EOF
+cp "$WORK/unhex1.txt" "$WORK/unhex7.txt"
+"$HEXPAIR_VIM" -es -u NONE "$WORK/unhex7.txt" -S "$WORK/unhex7.vim" < /dev/null
+check "a view saved elsewhere unhexes to the file it now holds" \
+    "[1, 'unhex7-saved.txt', '', 0, -1]" "$(sed -n 1p "$WORK/unhex7.out")"
+check "and that file's own text is what is in the buffer" \
+    "['first line', 'second line', 'third line']" "$(sed -n 2p "$WORK/unhex7.out")"
+# 'readonly' the user set before the toggle is set again: the paged view
+# clears it (a page is edited even where the file is not written by Vim),
+# so an unhex that did not put it back would hand a read-only file back
+# writable. The other direction is left to the :edit, which has just
+# worked 'readonly' out from the file itself - fresher than any snapshot.
+cat > "$WORK/unhex8.vim" <<EOF
+source $PLUGIN
+let g:hexpair_page_size = 512
+setlocal readonly
+HexPairToggle
+let inhex = &l:readonly
+HexPairUnhex
+call writefile([string([inhex, &l:readonly, &l:modifiable])], '$WORK/unhex8.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE "$WORK/unhex1.txt" -S "$WORK/unhex8.vim" < /dev/null
+check "a 'readonly' set before the toggle is set again after the unhex" \
+    "[0, 1, 1]" "$(cat "$WORK/unhex8.out")"
+
+# The other direction: a file that became read-only while the page was in
+# view must not come back writable. The :edit has just worked 'readonly'
+# out from the file itself, and that answer is the fresher of the two, so
+# it is never overruled by the snapshot's. Whether the permission bits mean
+# anything here is the environment's business, not this suite's - take a
+# throwaway file away from ourselves and see.
+echo x > "$WORK/unhexro"
+chmod 444 "$WORK/unhexro"
+unhex_ro_enforced=1
+(echo x >> "$WORK/unhexro") 2>/dev/null && unhex_ro_enforced=0
+chmod 644 "$WORK/unhexro"
+if [ "$unhex_ro_enforced" = 0 ]; then
+    echo "ok   - (skipped: read-only is not enforced here) a file that became read-only is not handed back writable"
+else
+    cp "$WORK/unhex1.txt" "$WORK/unhex12.txt"
+    cat > "$WORK/unhex12.vim" <<EOF
+source $PLUGIN
+let g:hexpair_page_size = 512
+let was = &l:readonly
+HexPairToggle
+call setfperm('$WORK/unhex12.txt', 'r--r--r--')
+HexPairUnhex
+call setfperm('$WORK/unhex12.txt', 'rw-r--r--')
+call writefile([string([was, &l:readonly])], '$WORK/unhex12.out')
+qa!
+EOF
+    "$HEXPAIR_VIM" -es -u NONE "$WORK/unhex12.txt" -S "$WORK/unhex12.vim" < /dev/null
+    check "a file that became read-only is not handed back writable" \
+        "[0, 1]" "$(cat "$WORK/unhex12.out")"
+fi
+# And the way back is a way back, not a one-way trip: the snapshot is gone
+# with the rest of the state, so a second toggle takes a fresh one of the
+# plain view that is on screen again.
+cat > "$WORK/unhex9.vim" <<EOF
+source $PLUGIN
+let g:hexpair_page_size = 512
+HexPairToggle
+HexPairUnhex
+HexPairToggle
+let again = [get(b:, 'hexpair_page_active', 0), exists('b:hexpair_plain')]
+HexPairUnhex
+call writefile([string(again), string([&l:binary, &l:buftype, get(b:, 'hexpair_page_active', -1), getline(1)])], '$WORK/unhex9.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE "$WORK/unhex1.txt" -S "$WORK/unhex9.vim" < /dev/null
+check "an unhexed buffer toggles to hex again" "[1, 1]" \
+    "$(sed -n 1p "$WORK/unhex9.out")"
+check "and comes back the same way the second time" \
+    "[0, '', -1, 'first line']" "$(sed -n 2p "$WORK/unhex9.out")"
+
+
+# A buffer that never entered hex mode has nothing to come back from, which
+# is not the same thing as a view opened as hex - and was told so with the
+# other one's message, naming :HexPairOpen at someone who had not used it.
+cat > "$WORK/unhex5.vim" <<EOF
+source $PLUGIN
+let g:hexpair_page_size = 512
+redir => msg
+silent HexPairUnhex
+redir END
+call writefile([string([msg =~# 'hex mode is not active', msg =~# 'opened as hex']), string([&l:buftype, get(b:, 'hexpair_page_active', -1)])], '$WORK/unhex5.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE "$WORK/unhex1.txt" -S "$WORK/unhex5.vim" < /dev/null
+check "a buffer that never entered hex mode is told that, not told about :HexPairOpen" \
+    "[1, 0]" "$(sed -n 1p "$WORK/unhex5.out")"
+check "and is left exactly as it was" "['', -1]" \
+    "$(sed -n 2p "$WORK/unhex5.out")"
+
+# The line endings are part of "the view it was": a paged buffer is forced
+# to 'fileformat' unix (line2byte() has to count one byte per break), so a
+# CRLF file that came back at that setting would show a ^M on every line.
+# 'fileformats' is set explicitly because -u NONE starts 'compatible',
+# where it is empty and no re-read would rediscover anything.
+cat > "$WORK/unhex6.vim" <<EOF
+source $PLUGIN
+set fileformats=unix,dos
+let g:hexpair_page_size = 512
+edit! $WORK/unhex2.txt
+let before = [&l:fileformat, getline(1)]
+HexPairToggle
+let inhex = &l:fileformat
+HexPairUnhex
+call writefile([string([before, inhex, &l:fileformat, getline(1)])], '$WORK/unhex6.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/unhex6.vim" < /dev/null
+check "a CRLF file comes back with the line endings it was read with" \
+    "[['dos', 'one'], 'unix', 'dos', 'one']" "$(cat "$WORK/unhex6.out")"
+
+# The toggle that gets half way: s:PageSource() has already re-read the
+# buffer ++bin by the time the page read can fail, so a failed toggle
+# leaves an ordinary text file showing as raw bytes. That buffer keeps its
+# snapshot - throwing it away left the user with no way back at all, and
+# the NEXT toggle recording the ++bin state as though it were the plain
+# one. An xxd that only ever fails is how the failure is reached; a
+# native-Windows Vim would not run a shell script named xxd, so there it
+# is skipped rather than quietly testing the successful path.
+if command -v cygpath >/dev/null 2>&1; then
+    echo "ok   - (skipped: a shell script cannot stand in for xxd.exe) a toggle that could not read its page leaves the file readable as text"
+    echo "ok   - (skipped: a shell script cannot stand in for xxd.exe) and the buffer it left in binary can still be unhexed"
+else
+    mkdir -p "$WORK/bad-xxd"
+    printf '#!/bin/sh\nexit 3\n' > "$WORK/bad-xxd/xxd"
+    chmod +x "$WORK/bad-xxd/xxd"
+    cat > "$WORK/unhex10.vim" <<EOF
+source $PLUGIN
+let g:hexpair_page_size = 512
+call cursor(2, 4)
+silent! HexPairToggle
+let stuck = [get(b:, 'hexpair_page_active', 0), exists('b:hexpair_plain'), &l:binary]
+HexPairUnhex
+call writefile([string(stuck), string([&l:binary, &l:buftype, line('.'), col('.'), getline(1, '\$')])], '$WORK/unhex10.out')
+qa!
+EOF
+    PATH="$WORK/bad-xxd:$PATH" "$HEXPAIR_VIM" -es -u NONE "$WORK/unhex1.txt" -S "$WORK/unhex10.vim" < /dev/null
+    check "a toggle that could not read its page leaves the file readable as text" \
+        "[0, 1, 1]" "$(sed -n 1p "$WORK/unhex10.out")"
+    check "and the buffer it left in binary can still be unhexed" \
+        "[0, '', 2, 4, ['first line', 'second line', 'third line']]" \
+        "$(sed -n 2p "$WORK/unhex10.out")"
+fi
+
 # --- Test 32: :HexPairOpen with a bad page number creates nothing ----------
 # Regression test: s:Open() used to enew + rename the buffer to
 # "<file> [hexpair page]" BEFORE validating the requested page, leaving
@@ -1688,12 +1956,18 @@ call setline(1, 'tampered')
 redir => msg
 HexPairToggle
 redir END
-call writefile([string([msg =~# 'unwritten changes', get(b:, 'hexpair_page_active', 0), &l:buftype, getline(1)])], '$WORK/tp2.out')
+call writefile([string([msg =~# 'unwritten changes', get(b:, 'hexpair_page_active', 0), &l:buftype, getline(1)]), string(exists('b:hexpair_plain'))], '$WORK/tp2.out')
 qa!
 EOF
 "$HEXPAIR_VIM" -es -b -u NONE "$WORK/src1.bin" -S "$WORK/tp2.vim" < /dev/null
 check "a modified file-backed buffer is refused, and left alone" \
-    "[1, 0, '', 'tampered']" "$(cat "$WORK/tp2.out")"
+    "[1, 0, '', 'tampered']" "$(sed -n 1p "$WORK/tp2.out")"
+# A refusal happens before anything about the buffer changes, so the plain
+# view is still on screen and the snapshot taken for it is not wanted: the
+# next attempt takes a fresh one, of a buffer whose cursor has moved since.
+# (Past the ++bin re-read the snapshot stays - see s:AbandonSetup().)
+check "and takes no plain-view snapshot it will not need" "0" \
+    "$(sed -n 2p "$WORK/tp2.out")"
 check "and the file is untouched" \
     "00000000: 00 01 02 03 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f  ................" \
     "$("$HEXPAIR_XXD" -s 0 -l 16 -g 1 "$WORK/src1.bin")"

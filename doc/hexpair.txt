@@ -68,10 +68,18 @@ WINDOWED TEXT     the same page's raw bytes as text, between the same two
                   banner lines.  Useful for reading strings, or for
                   pasting bytes in as text.
 
-There is deliberately NO way back to the plain buffer.  Once a buffer holds
-one page instead of the whole file, showing it as the file again would be a
-lie, and a plain |:w| would truncate the file down to that page.  Close and
-reopen the file if you want the ordinary view back.
+A buffer that TOGGLED from a plain buffer has a way back: |:HexPairUnhex|
+re-opens the whole file as the ordinary, unpaged, non-binary view it was
+before, with the 'binary', 'fileencoding', 'fileformat' and the other
+options it had then, and the cursor where it was.
+
+A buffer OPENED as hex (|:HexPairOpen|, vimhex) has no plain buffer to go
+back to - it may have had no text view at all, and its file may be far too
+large to load for the purpose - so |:HexPairUnhex| refuses it and names the
+file to |:edit| instead.  In neither case would a plain |:w| help: once a
+buffer holds one page instead of the whole file, showing it as the file
+again would be a lie, and a plain |:w| would truncate the file down to that
+page.
 
                                                         *hexpair-page-source*
 Where the pages come from depends on what the buffer was when hex mode was
@@ -148,6 +156,29 @@ Toggle hex mode with the mapping (|hexpair-mappings|) or the command:
                                                               *:HexPairToggle*
 :HexPairToggle          Toggle between the normal buffer content and the
                         hex dump view.  The same command switches back.
+
+                                                              *:HexPairUnhex*
+:HexPairUnhex[!]        The way out for a buffer that toggled from a plain
+                        buffer (|:HexPairToggle|): re-open the whole file as
+                        the ordinary, unpaged, non-binary view it was before
+                        - the bytes from the file, the 'binary',
+                        'fileencoding', 'fileformat' and the other options
+                        it had then, the cursor where it was.  The buffer is
+                        re-read, not converted: a page is not the file.
+                        ! discards unwritten edits to the page; without !
+                        the command refuses, because a plain |:edit| would
+                        otherwise lose them without a word.
+                        A buffer opened as hex (|:HexPairOpen|, vimhex) has
+                        no plain view to return to, so the command refuses
+                        and names the file to |:edit| instead.  So does a
+                        view paged from content with no file of its own
+                        (piped in), and one whose file has changed on disk
+                        since the page was read - reload the page
+                        (|:HexPairPageGoto|!) and try again.
+                        The file re-opened is the one the buffer holds when
+                        the command runs, which after a |:saveas| is the
+                        file it was saved as, not the one it was toggled
+                        from.
 
                               *:HexPairGoHex* *:HexPairGoAscii* *:HexPairSwap*
 :HexPairGoHex           Move the cursor to the HEX column, staying on the
@@ -462,6 +493,7 @@ The hex view shows which byte it was.
 3. Mappings                                                 *hexpair-mappings*
 
                                                         *<Plug>(HexPairToggle)*
+ *<Plug>(HexPairUnhex)*
  *<Plug>(HexPairGoHex)* *<Plug>(HexPairGoAscii)* *<Plug>(HexPairSwap)*
                                                        *<Plug>(HexPairRefresh)*
                             *<Plug>(HexPairGoOffset)* *<Plug>(HexPairGoOffsetForce)*
@@ -486,6 +518,7 @@ and so do the three that need a name typed - they ask for it: >
 
     " Views
     nmap <Leader>h <Plug>(HexPairToggle)
+    nmap <Leader>U <Plug>(HexPairUnhex)
     nmap <Leader>< <Plug>(HexPairGoHex)
     nmap <Leader>> <Plug>(HexPairGoAscii)
     nmap <Leader>- <Plug>(HexPairSwap)

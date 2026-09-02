@@ -222,6 +222,7 @@ you would rather pick your own keys:
 ```vim
 " Views
 nmap <Leader>h <Plug>(HexPairToggle)        " hex page view <-> windowed text view
+nmap <Leader>U <Plug>(HexPairUnhex)         " back to the plain, unpaged buffer (a toggled file only)
 nmap <Leader>< <Plug>(HexPairGoHex)         " cursor to the HEX column, same byte
 nmap <Leader>> <Plug>(HexPairGoAscii)       " cursor to the ASCII column, same byte
 nmap <Leader>- <Plug>(HexPairSwap)          " cursor to the opposite column
@@ -667,14 +668,25 @@ moves between them:
 | **Hex page** | the page as an xxd dump — offset, hex and ASCII columns — between two banner lines |
 | **Windowed text** | the same page's raw bytes as text, between the same banner lines |
 
-There is deliberately **no way back** to the plain buffer: once a buffer
-holds one page instead of the whole file, showing it as the file again
-would be a lie, and a plain `:w` would truncate the file down to that
-page. Close and reopen the file for the ordinary view.
+For a file you opened normally (`vim file.md`) and then toggled to hex with
+`:HexPairToggle`, `:HexPairUnhex` is the way back: it re-opens the whole
+file as the ordinary, unpaged, non-binary view it was before, with the
+`'binary'`, `'fileencoding'`, `'fileformat'` and the other options it had
+then, and the cursor where it was. The buffer is re-read, not converted,
+because a page is not the file and dressing it up as one would be a lie.
+
+A file opened **as** hex (`:HexPairOpen`, `vimhex`) has no plain buffer to
+go back to — it may have had no text view at all, and its file may be far
+too large to load for the purpose — so `:HexPairUnhex` refuses it and says
+so, naming the file to `:edit` instead. A paged view that was never backed
+by a file (e.g. piped into Vim) is refused for the same reason. In neither
+case would a plain `:w` help: it would truncate the file down to that one
+page.
 
 | Command | Description |
 |---|---|
 | `:HexPairToggle` | Move between the hex page view and the windowed text view |
+| `:HexPairUnhex[!]` | A buffer that toggled from a plain buffer: back to the ordinary, unpaged, non-binary view, re-opened with the options it had before; `!` discards unwritten edits to the page. A buffer opened as hex has no plain view to return to, and this says so |
 | `:HexPairGoHex` / `:HexPairGoAscii` / `:HexPairSwap` | Move the cursor between the HEX and ASCII columns, staying on the same byte |
 | `:HexPairRefresh` | Regenerate the offset and ASCII columns from the current hex payload, without writing |
 | `:HexPairOpen {file} [page]` | Open `{file}` paged, without loading it; `[page]` takes `$` and `+N`/`-N` too |
