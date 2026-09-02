@@ -2642,6 +2642,25 @@ for cp in [0x41, 0x7f, 0x80, 0x24f, 0x250, 0x4e2d, 0x1f600, 0x2fe0, 0x10ffff]
   call add(out, notes[len(notes) - 1][1])
 endfor
 call add(out, string(map([[0xef,0xbb,0xbf], [0xfe,0xff], [0xff,0xfe], [0xff,0xfe,0x00,0x00], [0x00,0x00,0xfe,0xff], [0x41,0x42]], 'HexPairPagedBomText(v:val)')))
+" How many notes each named code point gets: a name plus a block - except the
+" byte order mark, which is named and shown as one, and shown no block at all,
+" because its block is a Blocks.txt contiguity artefact (see the code).
+call add(out, string(map([0x00, 0x1b, 0x7f, 0x85, 0xa0, 0xfeff, 0xfffd], 'len(HexPairPagedCharNotes(v:val))')))
+" The full report of a BOM at the cursor: name and bom rows, no block row.
+let bl = HexPairPagedInspectLines([0xef, 0xbb, 0xbf], 1, 3)
+let hasname = 0
+let hasblock = 0
+let hasbom = 0
+for l in bl
+  if l =~# '^  name'
+    let hasname = 1
+  elseif l =~# '^  block'
+    let hasblock = 1
+  elseif l =~# '^  bom'
+    let hasbom = 1
+  endif
+endfor
+call add(out, string([hasname, hasblock, hasbom]))
 call writefile(out, '$WORK/tname.out')
 qa!
 EOF
@@ -2741,6 +2760,10 @@ check "an empty buffer has nothing to read, and says so not throws" \
 check "a byte order mark is recognised in each encoding that has one" \
     "['utf-8', 'utf-16be', 'utf-16le', 'utf-32le, or utf-16le followed by U+0000', 'utf-32be', '']" \
     "$(sed -n 17p "$WORK/tname.out")"
+check "a named code point gets a name and a block" \
+    "[2, 2, 2, 2, 2, 1, 2]" "$(sed -n 18p "$WORK/tname.out")"
+check "and the byte order mark is the one named without a block" \
+    "[1, 0, 1]" "$(sed -n 19p "$WORK/tname.out")"
 
 # ===========================================================================
 # Two views of one file

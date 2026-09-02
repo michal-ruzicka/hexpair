@@ -210,7 +210,15 @@ last byte, and on a short last line on its last existing byte.
                         (NBSP, SOFT HYPHEN, the zero-width joiners and
                         the bidi marks).  "block" is the Unicode block,
                         which is the "what script even is this" question,
-                        and is there for every code point that decodes.
+                        and is there for every code point that decodes -
+                        with one exception: the byte order mark is named
+                        but gets no block row.  U+FEFF is assigned to
+                        "Arabic Presentation Forms-B" only because
+                        Unicode lays out blocks by contiguity and FE70..
+                        FEFF is the range that happens to close the BMP;
+                        it is a format character that belongs to no
+                        script, so a block row would only add a script
+                        where there is none.
                         "bom" appears when the bytes at the cursor are a
                         byte order mark in any encoding - the one thing
                         the UTF-8 rows above cannot say, since ff fe is

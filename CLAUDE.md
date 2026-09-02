@@ -501,7 +501,16 @@ Key function map:
   and not about anything being generated: the literal is text until the
   function runs, so a Vim that never inspects a character pays nothing for
   14 KB of ranges. The table is DERIVED DATA and carries a licence notice;
-  see NOTICE.md. The rows describe the UTF-8 reading
+  see NOTICE.md. **One code point is named and given NO block row, on
+  purpose**: `U+FEFF`. Blocks.txt really does put it in *Arabic
+  Presentation Forms-B*, because Unicode lays blocks out by CONTIGUITY and
+  `FE70..FEFF` is the range that happens to close the BMP - so the row
+  asserted a script at a format character that belongs to none, and read as
+  "this byte is Arabic" to the one person most likely to be asking. The
+  table stays faithful to its source; the row is withheld. No other named
+  character needs this (the rest sit in General Punctuation or in a block
+  whose name is their home, and ALM really is an Arabic mark). The rows
+  describe the UTF-8 reading
   only, which is the one with no byte order to choose; `bom` is the single
   exception, because `ff fe` is not UTF-8 and is exactly what someone
   opening a file at offset 0 wants named. **No full character names**: that
@@ -670,6 +679,7 @@ come back**; each names the test that would catch it.
 | The window's markings survived a toggle to the text view and sat there at the columns the hex view had put them. SUPERSEDED: the answer was first to clear them, then (b7ea116) to draw them in the text view properly, one column per byte - so the guard is that they are drawn RIGHT there, not that they are absent | "and the text view marks its one column", "the text view marks one column per byte" |
 | A Windows `xxd` ends every dump line CRLF (`xxd.c`: `BIN_ASSIGN(fpo = stdout, revert)`, `BIN_WRITE(revert)` - text mode for a dump, binary only for `-r`), and the page loader read it through a `%!` filter, which leaves the CR to `'fileformats'` auto-detection. With `set fileformats=unix` in a vimrc nothing stripped it: a `^M` on every line of every page, cleared by `:HexPairRefresh` only because that path already went through `readfile()` | "a CRLF dump loads without a ^M at the end of the line" and the four checks with it - Windows CI uses the real `xxd.exe`, everywhere else a stand-in supplies the CRLF |
 | The page state was assigned before the dump was read, so a failed read left the buffer's bytes and its idea of which page they are disagreeing - and `:w` would have patched the old page's bytes in at the new page's offset | same block: the read and the shape check both happen before anything about the buffer changes |
+| The inspector reported the byte order mark as *Arabic Presentation Forms-B*. Blocks.txt says so, and Blocks.txt is right: blocks are laid out by CONTIGUITY and `FE70..FEFF` closes the BMP. But a format character belongs to no script, so the row asserted one where there is none | "and the byte order mark is the one named without a block" |
 
 **The Vim version floor is a claim that has to be run.** The plugin says
 everything but the splice works on Vim 8.0; it did not, for a year, and

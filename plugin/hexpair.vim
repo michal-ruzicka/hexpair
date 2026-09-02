@@ -4300,8 +4300,22 @@ function! HexPairPagedCharNotes(cp) abort
     let said = name[0] ==# '-' ? name[1] : printf('%s (%s)', name[0], name[1])
     call add(out, ['name', name[2] ==# '' ? said : said . ', ' . name[2]])
   endif
-  let block = s:BlockName(a:cp)
-  call add(out, ['block', block ==# '' ? 'no block - unassigned here' : block])
+  " One code point is named but does not get a block row. U+FEFF - the byte
+  " order mark - sits in 'Arabic Presentation Forms-B', and a hex reader who
+  " sees a byte order mark and an Arabic block reaches for the table to
+  " doubt. The assignment is a Blocks.txt artefact, not a truth: blocks are
+  " laid out by CONTIGUITY, and FE70..FEFF is the range that happens to close
+  " the BMP, so U+FEFF lands in it as the last code point of that range. It
+  " is a format character (category Cf), a byte order mark, and it belongs to
+  " no script. The name row already says what it is; the block row would only
+  " add a script where there is none. No other code point needs this: the
+  " other format characters the inspector names (NBSP, SHY, the zero-width
+  " and bidi marks) are in General Punctuation or a block whose name is their
+  " home, and their block reads as true.
+  if a:cp != 0xfeff
+    let block = s:BlockName(a:cp)
+    call add(out, ['block', block ==# '' ? 'no block - unassigned here' : block])
+  endif
   return out
 endfunction
 

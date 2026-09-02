@@ -101,6 +101,16 @@ and this project adheres to
   answering one in the other's language should not be a mistake.
 
 ### Fixed
+- **`:HexPairInspect` reported a byte order mark as belonging to *Arabic
+  Presentation Forms-B*.** `U+FEFF` really is assigned to that block in
+  `Blocks.txt`, but only because Unicode lays out blocks by contiguity and
+  `FE70..FEFF` is the range that happens to close the BMP — so the block row
+  read as *this byte is Arabic*, which it is not: it is a format character
+  that belongs to no script. The `name` and `bom` rows already say what it
+  is, so the `block` row is now omitted for the byte order mark and nothing
+  else. No other named character is affected: the other format characters
+  the inspector names sit in *General Punctuation* or a block whose name is
+  their home, and their block reads as true.
 - **`xxd` was located only when a page was opened**, so any other route
   into the readers died with `E121: Undefined variable` instead of a
   message naming `xxd`. It is resolved on demand now, and a missing `xxd`

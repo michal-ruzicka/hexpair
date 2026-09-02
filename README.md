@@ -727,8 +727,13 @@ a code point you cannot see — every C0 and C1 control, `DEL`, and the space
 and format characters a hex editor meets constantly; `block` is the Unicode
 block, which answers *what script even is this*; and `bom` appears when the
 bytes at the cursor are a byte order mark, which is the one thing the UTF-8
-rows cannot say, since `ff fe` is not UTF-8 at all. So an `ESC` at the start
-of a UTF-16LE file ends:
+rows cannot say, since `ff fe` is not UTF-8 at all. The byte order mark is
+the one named character that gets no `block` row: `U+FEFF` is assigned to
+*Arabic Presentation Forms-B* only because Unicode lays out blocks by
+contiguity and `FE70..FEFF` is the range that happens to close the BMP. It
+is a format character that belongs to no script, so a block row would only
+add a script where there is none — the name row already says what it is.
+So an `ESC` at the start of a UTF-16LE file ends:
 
 ```
   utf-8    U+001B (1 byte)
