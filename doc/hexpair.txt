@@ -285,7 +285,7 @@ last byte, and on a short last line on its last existing byte.
 
                         And nothing is marked on screen.  The marking is
                         drawn by the highlighting a paged buffer has and
-                        an ordinary one does not, so |:HexPairInspect!|
+                        an ordinary one does not, so `:HexPairInspect!`
                         has nothing to take off there and says as much.
 
                         The three text rows say what the bytes would be
@@ -628,8 +628,8 @@ their real keys (e.g. \h), not under <Leader>h.
 |<Plug>| is a special key that can never be typed.  The plugin hangs
 its functionality on <Plug>(HexPair...) targets and leaves the choice
 of real keys entirely to you - that is why it defines no key mappings
-of its own.  Mappings onto a <Plug> target must be created with |nmap|,
-NOT |nnoremap|: the "nore" variants forbid the remapping through which
+of its own.  Mappings onto a <Plug> target must be created with |:nmap|,
+NOT |:nnoremap|: the "nore" variants forbid the remapping through which
 the <Plug> target expands, so the mapping would do nothing.
 ==============================================================================
 4. Configuration                                       *hexpair-configuration*
@@ -788,7 +788,7 @@ g:hexpair_bind_pages    Whether a page turn in this window is passed on to
                                                   *g:hexpair_short_commands*
 g:hexpair_short_commands
                         Whether every command is also defined under a
-                        short "HP" name - |:HPFind| for |:HexPairFind|,
+                        short "HP" name - `:HPFind` for |:HexPairFind|,
                         :HPReplaceAllInPage for
                         |:HexPairReplaceAllInPage|, and so on for all of
                         them.  Default: 1. >
@@ -911,7 +911,7 @@ background and leave the foreground to |hl-Normal|, and Vim picks those
 backgrounds to suit its own Normal - readable with 'background' either
 way.  Every colour scheme shipped with Vim sets both.  So an override is
 usually taste, not repair; where it IS repair, the scheme in question
-makes |:diffthis| and |hlsearch| just as hard to read, and that is the
+makes |:diffthis| and 'hlsearch' just as hard to read, and that is the
 thing to fix.
 
 To see what yours does: >
@@ -955,7 +955,7 @@ filetype plugins are enabled (|:filetype-plugin-on|; any modern vimrc or
     'textwidth'     0    no automatic wrapping
     'autoindent'    off  no automatic indenting
 
-Everything is reverted through |b:undo_ftplugin| when the hex view is
+Everything is reverted through |undo_ftplugin| when the hex view is
 toggled off (also for buffers whose original filetype was empty, where no
 |FileType| event fires and the plugin runs the undo itself).
 
@@ -1545,7 +1545,8 @@ in the base mode (|hexpair-usage|): it is skipped entirely by cursor and
 highlighting logic and contributes no bytes, so it can never be confused
 with hex payload even though it contains ordinary decimal digits and
 letters.  It is given a comment-like appearance via the |HexPairPageBanner|
-highlight group (linked to |hl-Comment| by default - `xxd`'s bundled
+highlight group (linked to the standard Comment group,
+|highlight-groups|, by default - `xxd`'s bundled
 syntax file defines no comment group of its own to reuse).
 
                                                     *HexPairPageBanner*
@@ -1706,7 +1707,8 @@ it.  An absolute `source ~/.vim/pack/...` would be wrong on Windows for
 exactly that reason, even though Vim does expand `~` there.
 
 The path is spelled out because a vimrc runs BEFORE packages are added to
-'runtimepath' (|packload|), so a bare `runtime hexpair.vimrc` finds
+'runtimepath' (|packload-two-steps|), so a bare `runtime hexpair.vimrc`
+finds
 nothing at that point.  With a plugin manager, whose directories are on
 'runtimepath' by the time your vimrc reaches that line, the short form
 works: >

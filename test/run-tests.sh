@@ -1872,6 +1872,53 @@ cp "$ROOT/doc/hexpair.txt" "$WORK/doctags/"
 check "helptags accepts the help file" "ok" "$(sed -n 1p "$WORK/th1.out")"
 check "helptags found the plugin's tags" "1" \
     "$(test "$(sed -n 2p "$WORK/th1.out")" -gt 30 && echo 1 || echo 0)"
+# --- And every |reference| in the help goes somewhere -----------------------
+# :helptags only checks that the tags this file DEFINES are unique; a
+# reference to one that does not exist anywhere is silently a dead end, and
+# the reader finds out by pressing CTRL-] and being told there is no help.
+# Seven of them had accumulated - Vim's own tag is `undo_ftplugin` and not
+# `b:undo_ftplugin`, `:nmap` and not `nmap`, `'hlsearch'` and not
+# `hlsearch`, and a bang is not part of a tag name.
+#
+# Resolved against the tags of the Vim under test, so this says what that
+# Vim would actually do, and skipped where those tags are not built (a
+# runtime installed without them).
+cat > "$WORK/trt.vim" <<EOF
+call writefile([\$VIMRUNTIME], '$WORK/trt.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/trt.vim" < /dev/null 2>/dev/null
+VIMTAGS=$(sed -n 1p "$WORK/trt.out" 2>/dev/null)/doc/tags
+if [ -f "$VIMTAGS" ]; then
+    check "every reference in the help resolves to a tag" "" \
+        "$("$PY" - "$ROOT/doc/hexpair.txt" "$VIMTAGS" <<'PYEOF'
+import re, sys
+doc = open(sys.argv[1], encoding='utf-8').read()
+refs = set(re.findall(r'\|([^\s|]{2,})\|', doc))
+defs = set(re.findall(r'\*([^\s*]{2,})\*', doc))
+vim = {l.split('\t')[0] for l in open(sys.argv[2], encoding='utf-8', errors='replace')}
+print(' '.join(sorted(refs - defs - vim)), end='')
+PYEOF
+)"
+else
+    echo "ok   - (skipped: this Vim's runtime has no doc/tags) every reference in the help resolves to a tag"
+    CHECKS=$((CHECKS + 1))
+fi
+rm -f "$WORK/trt.vim" "$WORK/trt.out"
+
+# --- No comment form the supported Vim does not have -----------------------
+# The floor is Vim 8.0, where `"\ ` - a comment on a line-continuation - does
+# not exist yet: inside a continued expression it does not parse, and the
+# whole statement dies with it (E15). It is also the ONLY comment that works
+# inside a continued list literal, which is exactly why it got used, for the
+# generated block table's markers - and killed every `block` row of the
+# inspector on Vim 8.0 for as long as nobody ran one. So the rule is that a
+# continued literal carries no comment at all and anything that has to be
+# marked is marked outside it, and this is a static check because every Vim
+# this suite can be pointed at accepts the form.
+check "no line-continuation comment, which Vim 8.0 does not have" "0" \
+    "$(cat "$ROOT/plugin/hexpair.vim" "$ROOT/ftplugin/xxd.vim" \
+        "$ROOT/hexpair.vimrc" | grep -c '^[[:space:]]*"\\')"
 
 # --- No comment form the supported Vim does not have -----------------------
 # The floor is Vim 8.0, where `"\ ` - a comment on a line-continuation - does
