@@ -6198,7 +6198,11 @@ function! s:DiffShow(...) abort
     endif
     let [first, last] = [sel.first, sel.last]
   else
-    let first = s:PagedByteOffset()
+    " s:Here(), not s:PagedByteOffset(): this runs in the windowed text
+    " view as well, where a column is a byte and reading the position as a
+    " dump line's gives an offset off by however much of the page is above
+    " it - a plausible-looking byte, from the wrong place.
+    let first = s:Here()
     let last = first
   endif
 

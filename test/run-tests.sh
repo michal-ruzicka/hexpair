@@ -4311,6 +4311,34 @@ check "and refuses when nothing is being compared" \
     "hexpair: not comparing with anything - :HexPairDiff {file} first" \
     "$(sed -n 2p "$WORK/tdfshow2.out")"
 
+# And the same question asked from the WINDOWED TEXT VIEW, where a column
+# is a byte: reading the cursor as a dump line's position gives an offset
+# short by however much of the page is above it - a plausible byte, from
+# the wrong place, which is worse than an error.
+cat > "$WORK/tdfshow3.vim" <<EOF
+$(printf "$HEX")
+let out = []
+HexPairOpen $WORK/diffa.bin 3
+silent HexPairDiff $WORK/diffb.bin
+HexPairGoOffset 1501
+silent HexPairToggle
+call add(out, b:hexpair_view)
+redir => a
+silent HexPairDiffShow
+redir END
+call add(out, substitute(a, '^[\r\n]*', '', ''))
+call add(out, fnamemodify('$WORK/diffb.bin', ':~:.'))
+call writefile(out, '$WORK/tdfshow3.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tdfshow3.vim" < /dev/null
+diffbd=$(sed -n 3p "$WORK/tdfshow3.out")
+check "the text view is where it says it is" "text" \
+    "$(sed -n 1p "$WORK/tdfshow3.out")"
+check_path "and asked there, it answers about the byte under the cursor" \
+    "hexpair: byte 1501 (0x5dd): dc here, ee in $diffbd" \
+    "$(sed -n 2p "$WORK/tdfshow3.out")"
+
 # ===========================================================================
 # Finding bytes, and replacing them
 # ===========================================================================

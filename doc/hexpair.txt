@@ -1348,6 +1348,9 @@ HexPairOpenFile({file} [, {page}])
                         |<Plug>(HexPairDiffShow)| has a Normal-mode and a
                         Visual-mode form, `<Leader>D` in `hexpair.vimrc`.
 
+                        Both views answer it, about the byte the cursor is
+                        on in whichever one you are standing in.
+
 :HexPairDiffNext        Go to the next CHANGE, or the previous one -
 :HexPairDiffPrev        anywhere in the file, however many pages away.
 

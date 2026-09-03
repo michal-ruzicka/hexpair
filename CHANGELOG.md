@@ -9,6 +9,15 @@ and this project adheres to
 
 ## [v2.4.0-devel] – 2026-09-02
 
+### Fixed
+- **`:HexPairDiffShow` asked from the windowed text view reported the wrong
+  byte.** It read the cursor as a position in a *dump* — three columns per
+  byte, a line of bytes per line — where the text view has one column per
+  byte, so the offset came out short by however much of the page was above
+  the cursor. It answered about a real byte of the file, plausibly and
+  confidently, from the wrong place. It now asks the same question the
+  markings and the jumps ask, which is right in either view.
+
 ## [v2.3.0] – 2026-09-02
 
 ### Added
