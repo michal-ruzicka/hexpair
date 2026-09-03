@@ -84,16 +84,21 @@ Install the latest [release](https://github.com/michal-ruzicka/hexpair/releases)
 the two ready-made files, and you have all of it:
 
 ```sh
+# Download and install – see https://github.com/michal-ruzicka/hexpair/releases/latest
 curl -LO 'https://github.com/michal-ruzicka/hexpair/releases/download/vX.Y.Z/hexpair.vX.Y.Z.tar'
 mkdir -p ~/.vim/pack/plugins/start
-tar xvf hexpair.vX.Y.Z.tar -C ~/.vim/pack/plugins/start/
-vim -c 'helptags ALL' -c 'q'
-echo "let mapleader = ','" >> ~/.vimrc   # your <Leader>; must come first
-echo 'runtime pack/*/start/hexpair/hexpair.vimrc' >> ~/.vimrc
-echo 'source ~/.vim/pack/plugins/start/hexpair/hexpair.bashrc' >> ~/.bashrc
+tar xvf hexpair.vX.Y.Z.tar -C ~/.vim/pack/plugins/start/  # intall hexpair plugin in user's Vim configuration dir
+vim -c 'helptags ALL' -c 'q'             # regenerate helptags for your installation
+echo "let mapleader = ','" >> ~/.vimrc   # your <Leader> key (`\` is the default); must come first
+echo 'runtime pack/*/start/hexpair/hexpair.vimrc' >> ~/.vimrc  # load recommended hexpair keybindings on Vim start
+echo 'source ~/.vim/pack/plugins/start/hexpair/hexpair.bashrc' >> ~/.bashrc  # load `*hexpair*` shell function on Bash start
 
 # Start a new Bash for the shell functions, and a new Vim for the mappings:
+# hex editor
+vimhex                        # no parameters: print the usage and stop
 vimhex bigfile.bin            # the first page; also 3, '$', '$-5', @0x4a2000
+# hex diff
+vimhexdiff                    # no parameters: print the usage and stop
 vimhexdiff old.img new.img    # both side by side, each marking what differs
 ```
 
@@ -107,8 +112,8 @@ let mapleader = ','   " i.e. in Normal mode type `,h` to toggle hex <-> text
 
 " === Normal mode ====================================================
 
-"" Views
-<Leader>h   " hex page view <-> windowed text view
+" Views
+<Leader>h   " hex page view <-> text page view
 <Leader>u   " back to the plain, unpaged buffer (a toggled file only)
 <Leader>U   " ... discarding the page's unwritten edits
 <Leader><   " cursor to the HEX column, same byte
@@ -116,60 +121,58 @@ let mapleader = ','   " i.e. in Normal mode type `,h` to toggle hex <-> text
 <Leader>-   " cursor to the opposite column
 <Leader>r   " regenerate the offset and ASCII columns, without writing
 
-"" Moving around the file
+" Moving around the file
 <Leader>j   " next page
-<Leader>k   " previous page
 <Leader>J   " ... discarding unwritten edits
+<Leader>k   " previous page
 <Leader>K   " ... discarding unwritten edits
-<Leader>g   " ask which page: N, +N, -N, $
+<Leader>g   " ask which page: N, +N, -N, $, $-N
 <Leader>G   " ... discarding unwritten edits
 <Leader>b   " ask which byte: 1-based decimal or 0x..., +N and -N to step
 <Leader>B   " ... discarding unwritten edits
 <Leader>?   " where am I: page X of Y, the byte range, the size, the byte
 <Leader>=   " bring the other scroll-bound view onto the byte I am on
 
-"" Reading the bytes
+" Reading the bytes
 <Leader>i   " the bytes at the cursor as int8..64, float32/64, utf-8/16/32
 <Leader>I   " ask for a character, write its bytes in
 <Leader>s   " how many bytes the selection covers, and which (also in Visual)
 
-"" Marks - positions in the FILE, so a page turn does not disturb them
+" Marks – positions in the FILE, so a page turn does not disturb them
 <Leader>ml  " list them, with the page each falls on
-<Leader>ms  " ask for a name, mark the byte under the cursor
-<Leader>md  " ask which mark to drop
-<Leader>mg  " ask which mark to go to
+<Leader>ms  " set mark, ask for a name, mark the byte under the cursor
+<Leader>md  " delete mark, ask which mark to drop (use TAB to suggest/complete mark names)
+<Leader>mg  " go to mark, ask which mark to go to (use TAB to suggest/complete mark names)
 <Leader>mG  " ... discarding unwritten edits
 
-"" Searching the whole file, not the page
+" Searching the whole file, not the page
 <Leader>/   " ask for bytes to find ('?' matches any nibble)
 <Leader>t   " ask for text to find, as its bytes
 <Leader>f   " next match
 <Leader>F   " previous match
 <Leader>c   " stop marking the matches
 
-"" Your own unwritten edits
-<Leader>e   " next run of bytes you edited
-<Leader>E   " previous one
-<Leader>d   " what was here before you edited it (also in Visual)
+" Your own unwritten edits
+<Leader>e   " go to next run of edited (modified) but unsaved bytes
+<Leader>E   " ... but previous one
+<Leader>d   " show different to the original state, i.e. what was here before you edited it (also in Visual)
 
-"" Comparing with the file :HexPairDiff named
-<Leader>]   " next change - a run of differing bytes is one change
-<Leader>[   " previous one
-<Leader>D   " what that file has here (also in Visual)
+" Comparing with the file :HexPairDiff named
+<Leader>]   " go to next change – a run of differing bytes is one change
+<Leader>[   " ... but previous one
+<Leader>D   " show different to the file are are comparing to, i.e. what is here in the other file (also in Visual)
 <Leader>C   " stop comparing, and clear the marking
 
 " === Command mode - what takes an argument, so it has no key =========
 
-:HexPairOpen[!] {file} [page]  " page a file WITHOUT loading it; ! over a modified buffer
-:HexPairDiff[!] [file]         " compare with {file}, marking the bytes that differ
-                               " (no [file]: say what with; ! stops comparing)
-:HexPairReplace {bytes}        " over the match under the cursor
-:HexPairReplaceAllInPage {bytes} / {bytes}   " over every match on this page
-:HexPairSplit [page]           " a second view of this file, e.g. :HexPairSplit +1
-:HexPairVSplit [page]          " ... vertically
+:HPOpen[!] {file} [page]     " page a file WITHOUT loading it; ! over a modified buffer
+:HPDiff[!] [file]            " compare with {file}, marking the bytes that differ
+                             " (no [file]: say what with; ! stops comparing)
+:HPReplace {bytes}           " over the match under the cursor
+:HPReplaceAllInPage {bytes} / {bytes}   " over every match on this page
+:HPSplit [page]              " a second view of this file, e.g. :HPSplit +1
+:HPVSplit [page]             " ... vertically
 
-" Every command also answers to a short HP name - :HPOpen, :HPDiff,
-" :HPReplaceAllInPage - with the same arguments, bang and completion.
 " HexPairStatus() goes in 'statusline' and reports "hex 3/349 @0x50a01"
 " in a hex view and nothing anywhere else:
 "     set statusline=%f\ %h%w%m%r\ %{HexPairStatus()}%=%l,%c%V\ %P

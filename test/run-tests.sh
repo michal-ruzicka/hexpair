@@ -5324,6 +5324,28 @@ check "and lists no key it does not" "" "$qs_extra"
 # empty other side.
 check "and there are as many of them as there are" "37" \
     "$(wc -l < "$WORK/qs-mapped.txt" | tr -d ' ')"
+# The quick start types the SHORT command names, which is the point of
+# them - so those have to be commands, not a plausible abbreviation of
+# one. Asked of a Vim with the plugin loaded rather than of the alias
+# table in the source: what matters is that :HPOpen exists after
+# sourcing, which is also what g:hexpair_short_commands decides.
+sed -n 's/^:\(HP[A-Za-z]*\).*/\1/p' "$WORK/quickstart.md" | sort -u \
+    > "$WORK/qs-cmds.txt"
+# One statement a line: -u NONE starts in 'compatible', which puts C in
+# 'cpoptions' and turns a backslash continuation into a truncated
+# statement - the trap the gate-message test exists for.
+cat > "$WORK/tqscmd.vim" <<EOF
+source $PLUGIN
+let listed = readfile('$WORK/qs-cmds.txt')
+let missing = filter(copy(listed), 'exists(":" . v:val) != 2')
+call writefile(['undefined: ' . string(missing), 'listed: ' . len(listed)], '$WORK/tqscmd.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tqscmd.vim" < /dev/null
+check "and every short command it types is one" "undefined: []" \
+    "$(sed -n 1p "$WORK/tqscmd.out")"
+check "and it types six of them" "listed: 6" \
+    "$(sed -n 2p "$WORK/tqscmd.out")"
 
 # --- Leaving the window is not free, and not always allowed ---------------
 # Refreshing another window means going to it and back, which is also what
