@@ -224,7 +224,7 @@ you would rather pick your own keys:
 ```vim
 " Views
 nmap <Leader>h <Plug>(HexPairToggle)        " hex page view <-> windowed text view
-nmap <Leader>U <Plug>(HexPairUnhex)         " back to the plain, unpaged buffer (a toggled file only)
+nmap <Leader>u <Plug>(HexPairUnhex)         " back to the plain, unpaged buffer (a toggled file only)
 nmap <Leader>< <Plug>(HexPairGoHex)         " cursor to the HEX column, same byte
 nmap <Leader>> <Plug>(HexPairGoAscii)       " cursor to the ASCII column, same byte
 nmap <Leader>- <Plug>(HexPairSwap)          " cursor to the opposite column
@@ -271,6 +271,7 @@ nmap <Leader>C <Plug>(HexPairDiffClear)     " stop comparing, clear the marking
 " asking (like the ! commands) - handy for skimming through a file.
 nnoremap <silent> <Leader>J :HexPairPageNext!<CR>
 nnoremap <silent> <Leader>K :HexPairPagePrev!<CR>
+nnoremap <silent> <Leader>U :HexPairUnhex!<CR>
 nmap <Leader>G <Plug>(HexPairPageGotoForce)
 nmap <Leader>B <Plug>(HexPairGoOffsetForce)
 ```

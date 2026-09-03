@@ -5254,6 +5254,9 @@ endfor
 call sort(missing)
 call add(out, 'unmapped targets: ' . string(missing))
 call add(out, string([maparg(',d', 'n'), maparg(',d', 'x')]))
+" The capital that is not a <Plug> target at all: a bang command mapped
+" directly, which is the file's own rule for a force variant.
+call add(out, string([maparg(',u', 'n'), maparg(',U', 'n')]))
 call writefile(out, '$WORK/tvimrc.out')
 qa!
 EOF
@@ -5283,6 +5286,9 @@ check "and leaves no <Plug> target without a key" "unmapped targets: []" \
 check "and the what-was-here question in both modes" \
     "['<Plug>(HexPairModifiedShow)', '<Plug>(HexPairModifiedShow)']" \
     "$(sed -n 4p "$WORK/tvimrc.out")"
+check "the way back out is the lowercase key, the capital discarding" \
+    "['<Plug>(HexPairUnhex)', ':HexPairUnhex!<CR>']" \
+    "$(sed -n 5p "$WORK/tvimrc.out")"
 
 # --- Leaving the window is not free, and not always allowed ---------------
 # Refreshing another window means going to it and back, which is also what

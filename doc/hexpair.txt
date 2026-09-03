@@ -179,6 +179,10 @@ Toggle hex mode with the mapping (|hexpair-mappings|) or the command:
                         the command runs, which after a |:saveas| is the
                         file it was saved as, not the one it was toggled
                         from.
+                        `hexpair.vimrc` puts the bare command on `<Leader>u`
+                        and the discarding one on `<Leader>U`, which is the
+                        same lowercase/capital pair every other force
+                        variant there uses.
 
                               *:HexPairGoHex* *:HexPairGoAscii* *:HexPairSwap*
 :HexPairGoHex           Move the cursor to the HEX column, staying on the
@@ -519,7 +523,7 @@ and so do the three that need a name typed - they ask for it: >
 
     " Views
     nmap <Leader>h <Plug>(HexPairToggle)
-    nmap <Leader>U <Plug>(HexPairUnhex)
+    nmap <Leader>u <Plug>(HexPairUnhex)
     nmap <Leader>< <Plug>(HexPairGoHex)
     nmap <Leader>> <Plug>(HexPairGoAscii)
     nmap <Leader>- <Plug>(HexPairSwap)
@@ -575,6 +579,7 @@ and so do the three that need a name typed - they ask for it: >
     " commands do; handy for reading through a file rather than editing it
     nnoremap <silent> <Leader>J :HexPairPageNext!<CR>
     nnoremap <silent> <Leader>K :HexPairPagePrev!<CR>
+    nnoremap <silent> <Leader>U :HexPairUnhex!<CR>
     nmap <Leader>G <Plug>(HexPairPageGotoForce)
     nmap <Leader>B <Plug>(HexPairGoOffsetForce)
 <

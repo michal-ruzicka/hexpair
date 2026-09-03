@@ -27,6 +27,18 @@ and this project adheres to
   holds no NUL and so spells one as a line break. See
   `:help :HexPairModifiedShow`.
 
+### Changed
+- **`hexpair.vimrc` moves `:HexPairUnhex` to `<Leader>u`, and gives
+  `<Leader>U` the bang.** The way back out of a paged view refuses over
+  unwritten edits to the page, and `:HexPairUnhex!` discards them — which
+  is exactly the relation `<Leader>j`/`<Leader>J`, `<Leader>g`/`<Leader>G`,
+  `<Leader>b`/`<Leader>B` and `<Leader>mg`/`<Leader>mG` already have in
+  that file, so it was the one force variant with no key and the one
+  lowercase key left unused. **If you have `<Leader>U` in your fingers,
+  it now discards.** The plugin itself is unchanged: it defines no
+  mappings, `:HexPairUnhex[!]` is what it always was, and a key you have
+  mapped yourself is still left alone.
+
 ### Fixed
 - **`:HexPairDiffShow` asked from the windowed text view reported the wrong
   byte.** It read the cursor as a position in a *dump* — three columns per

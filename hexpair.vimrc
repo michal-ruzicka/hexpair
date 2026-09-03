@@ -64,8 +64,11 @@ call s:Map('n', '<Leader>h', '<Plug>(HexPairToggle)')
 " The way back out: a plain buffer of a whole file toggled to hex comes
 " back to its ordinary, unpaged, non-binary text view with the options it
 " had before. A view opened as hex (vimhex, :HexPairOpen) has no such text
-" view, so this refuses it and says why.
-call s:Map('n', '<Leader>U', '<Plug>(HexPairUnhex)')
+" view, so this refuses it and says why. The capital discards unwritten
+" edits to the page rather than refusing over them, which is what every
+" other capital here does.
+call s:Map('n', '<Leader>u', '<Plug>(HexPairUnhex)')
+call s:Map('n', '<Leader>U', ':HexPairUnhex!<CR>')
 
 " Move between the columns of a dump: to the hex one, to the ASCII one, or
 " to whichever one the cursor is not in - staying on the same byte.
