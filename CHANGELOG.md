@@ -9,6 +9,24 @@ and this project adheres to
 
 ## [v2.4.0-devel] – 2026-09-02
 
+### Added
+- **`:HexPairModifiedShow`, what a byte was before you edited it.** The
+  marking of unwritten edits covers the **new** byte, so what the file still
+  has there is exactly what the screen no longer shows — and no marking can
+  show it. This says it: the byte under the cursor, or every byte of a
+  Visual selection, as the buffer holds it now beside what the page held
+  when it was read from disk, in the same two aligned rows
+  `:HexPairDiffShow` uses (`here` over `disk`). Bytes an *insert* has added
+  have nothing behind them at all, and come out as `--` with the heading
+  saying where the page as read stopped, rather than as a plausible `00`.
+  An untouched byte says so instead of refusing. It is `:HexPairDiffShow`
+  asked of this view's own file instead of another one, so it is
+  `<Leader>d` in `hexpair.vimrc` — the lowercase of that one's
+  `<Leader>D` — with a Normal-mode and a Visual-mode form. Both views
+  answer it; the text view inherits its one blind spot, that a Vim string
+  holds no NUL and so spells one as a line break. See
+  `:help :HexPairModifiedShow`.
+
 ### Fixed
 - **`:HexPairDiffShow` asked from the windowed text view reported the wrong
   byte.** It read the cursor as a position in a *dump* — three columns per

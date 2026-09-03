@@ -5001,6 +5001,146 @@ check "and stops at the last of them" \
     "hexpair: no edit after byte 29 on this page | txt 1/1+ @0x1d (29)" \
     "$(sed -n 3p "$WORK/tmodjump2.out")"
 
+# --- :HexPairModifiedShow - what I changed here, and what was there -------
+# The other side of :HexPairDiffShow: the buffer as it stands now against
+# the page as it was READ from disk. The marking says which bytes are
+# edited and covers the NEW byte, so what the file has there is exactly
+# what the screen no longer shows. The text is a pure function, so every
+# shape of it is checked without a cursor or Visual mode.
+cat > "$WORK/tmodshow.vim" <<EOF
+$(printf "$HEX")
+let out = []
+call extend(out, HexPairPagedModifiedShowText(100, 'ff', '63', 5000))
+call extend(out, HexPairPagedModifiedShowText(100, '63', '63', 5000))
+call extend(out, HexPairPagedModifiedShowText(5000, '41', '', 5000))
+call extend(out, HexPairPagedModifiedShowText(100, '00ff020304', '0001020304', 5000))
+call extend(out, HexPairPagedModifiedShowText(4998, '00010203', '0001', 5000))
+call extend(out, HexPairPagedModifiedShowText(0, '', '', 5000))
+call writefile(out, '$WORK/tmodshow.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tmodshow.vim" < /dev/null
+check "one byte, edited since the page was read" \
+    "hexpair: byte 101 (0x65): ff here, 63 on disk" \
+    "$(sed -n 1p "$WORK/tmodshow.out")"
+check "one byte, untouched" \
+    "hexpair: byte 101 (0x65): 63 here and on disk" \
+    "$(sed -n 2p "$WORK/tmodshow.out")"
+# An insert grows the page past what was read, so the last bytes of it are
+# in no file yet - the case the marking cannot express, since it marks them
+# as edited like any other.
+check "one byte that was inserted, not overwritten" \
+    "hexpair: byte 5001 (0x1389): 41 here, inserted since the page was read - the page as read ends at byte 5000 (0x1388)" \
+    "$(sed -n 3p "$WORK/tmodshow.out")"
+check "a run, in two rows that line up" \
+    "hexpair: bytes 101-105 (0x65-0x69), 1 of 5 edited" \
+    "$(sed -n 4p "$WORK/tmodshow.out")"
+check "the bytes here" "  here  00 ff 02 03 04" "$(sed -n 5p "$WORK/tmodshow.out")"
+check "and the disk's beneath them" "  disk  00 01 02 03 04" \
+    "$(sed -n 6p "$WORK/tmodshow.out")"
+check "a run that runs off the end of the page as read says so" \
+    "hexpair: bytes 4999-5002 (0x1387-0x138a), 2 of 4 edited - the page as read ends at byte 5000 (0x1388)" \
+    "$(sed -n 7p "$WORK/tmodshow.out")"
+# Dashes, not blanks: a byte that was not there has to look different from
+# a byte that happened to be 00.
+check "and every byte with nothing behind it is a dash" "  disk  00 01 -- --" \
+    "$(sed -n 9p "$WORK/tmodshow.out")"
+check "and no bytes at all is not a crash" "hexpair: no bytes here to compare" \
+    "$(sed -n 10p "$WORK/tmodshow.out")"
+
+# End to end through the command, in the hex view: two bytes typed over,
+# then the same question on a byte nobody touched.
+cat > "$WORK/tmodshow2.vim" <<EOF
+$(printf "$HEX")
+let out = []
+HexPairOpen $WORK/short1.bin 1
+call setline(3, substitute(getline(3), '^\\(00000010: \\)\\S\\S \\S\\S', '\\1ff ee', ''))
+HexPairGoOffset 17
+redir => a
+silent HexPairModifiedShow
+redir END
+call add(out, substitute(a, '^[\\r\\n]*', '', ''))
+HexPairGoOffset 19
+redir => b
+silent HexPairModifiedShow
+redir END
+call add(out, substitute(b, '^[\\r\\n]*', '', ''))
+" A dump with a non-hex character in it has no bytes to report, and the
+" byte under the cursor cannot be numbered either - the count of the bytes
+" above it is that same scan. Say which character, not E716.
+call setline(4, substitute(getline(4), '^\\(00000020: \\)\\S\\S', '\\1zz', ''))
+redir => c
+silent! HexPairModifiedShow
+redir END
+call add(out, substitute(c, '^[\\r\\n]*', '', ''))
+call writefile(out, '$WORK/tmodshow2.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tmodshow2.vim" < /dev/null
+check "the command says what the byte under the cursor was" \
+    "hexpair: byte 17 (0x11): ff here, 10 on disk" \
+    "$(sed -n 1p "$WORK/tmodshow2.out")"
+check "and on an untouched byte, that it is untouched" \
+    "hexpair: byte 19 (0x13): 12 here and on disk" \
+    "$(sed -n 2p "$WORK/tmodshow2.out")"
+check "a page that no longer scans is refused by name" \
+    "hexpair: invalid character 'z' in the hex area (line 4, column 11)" \
+    "$(sed -n 3p "$WORK/tmodshow2.out")"
+
+# And from the windowed text view, where a column is a byte and the live
+# side is the buffer's own string rather than a dump's hex.
+cat > "$WORK/tmodshow3.vim" <<EOF
+$(printf "$HEX")
+let out = []
+HexPairOpen $WORK/tmark1.bin 1
+HexPairToggle
+call setline(2, 'ABxyEFGHIJ')
+HexPairGoOffset 3
+redir => a
+silent HexPairModifiedShow
+redir END
+call add(out, b:hexpair_view . ' | ' . substitute(a, '^[\\r\\n]*', '', ''))
+call writefile(out, '$WORK/tmodshow3.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tmodshow3.vim" < /dev/null
+check "the text view answers about its own column" \
+    "text | hexpair: byte 3 (0x3): 78 here, 43 on disk" \
+    "$(sed -n 1p "$WORK/tmodshow3.out")"
+
+# The Visual-mode form, through the <Plug> target a key would reach it by:
+# a run of bytes rather than one, and the selection put back afterwards.
+# ('compatible', which -u NONE starts in, puts '<' in 'cpoptions' and turns
+# <Plug> into six literal characters - see the mappings-file block below.)
+cat > "$WORK/tmodshow4.vim" <<EOF
+$(printf "$HEX")
+set cpoptions-=<
+xmap gz <Plug>(HexPairModifiedShow)
+let out = []
+HexPairOpen $WORK/short1.bin 1
+call setline(3, substitute(getline(3), '^\\(00000010: \\)\\S\\S \\S\\S', '\\1ff ee', ''))
+HexPairGoOffset 17
+call feedkeys('v3l', 'x')
+redir => a
+silent call feedkeys('gz', 'x')
+redir END
+call extend(out, filter(split(a, "\n"), 'v:val !=# ""'))
+" The selection is put back rather than spent on the question.
+call add(out, string([getpos("'<")[1 : 2], getpos("'>")[1 : 2]]))
+call writefile(out, '$WORK/tmodshow4.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tmodshow4.vim" < /dev/null
+check "a Visual selection is reported as a run" \
+    "hexpair: bytes 17-18 (0x11-0x12), 2 of 2 edited" \
+    "$(sed -n 1p "$WORK/tmodshow4.out")"
+check "with the buffer's bytes on one row" "  here  ff ee" \
+    "$(sed -n 2p "$WORK/tmodshow4.out")"
+check "and the file's on the other" "  disk  10 11" \
+    "$(sed -n 3p "$WORK/tmodshow4.out")"
+check "and the selection survives the question" "[[3, 11], [3, 14]]" \
+    "$(sed -n 4p "$WORK/tmodshow4.out")"
+
 # --- Everything a user is given is in the release tarball -------------------
 # pack-release.py carries the file list by hand, and a new file that users
 # are told to source can be added to the repo, documented, and then simply
@@ -5113,6 +5253,7 @@ for line in split(execute('map <Plug>'), '\n')
 endfor
 call sort(missing)
 call add(out, 'unmapped targets: ' . string(missing))
+call add(out, string([maparg(',d', 'n'), maparg(',d', 'x')]))
 call writefile(out, '$WORK/tvimrc.out')
 qa!
 EOF
@@ -5139,6 +5280,9 @@ check "in Visual mode too, and puts 'cpoptions' back" \
     "$(sed -n 2p "$WORK/tvimrc.out")"
 check "and leaves no <Plug> target without a key" "unmapped targets: []" \
     "$(sed -n 3p "$WORK/tvimrc.out")"
+check "and the what-was-here question in both modes" \
+    "['<Plug>(HexPairModifiedShow)', '<Plug>(HexPairModifiedShow)']" \
+    "$(sed -n 4p "$WORK/tvimrc.out")"
 
 # --- Leaving the window is not free, and not always allowed ---------------
 # Refreshing another window means going to it and back, which is also what

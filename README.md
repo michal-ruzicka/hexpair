@@ -118,7 +118,9 @@ code, releases and issue tracker.
   a dump does not look exactly like everything around it, and
   `:HexPairModifiedNext` / `:HexPairModifiedPrev` move between the runs of
   them the way `:HexPairDiffNext` moves between changes against another
-  file. The marking groups link to
+  file. `:HexPairModifiedShow` says what was *there before* — at the
+  cursor, or over a Visual selection — which is the one thing a marking
+  cannot show, since the byte it covers is the new one. The marking groups link to
   your colour scheme's diff and search colours rather than naming colours
   of their own — with stock Vim and with every scheme it ships, that
   resolves to something readable on a light and a dark background alike,
@@ -256,6 +258,8 @@ nmap <Leader>f <Plug>(HexPairFindNext)      " next match of the last pattern
 nmap <Leader>F <Plug>(HexPairFindPrev)      " previous match
 nmap <Leader>e <Plug>(HexPairModifiedNext)  " next run of bytes you edited
 nmap <Leader>E <Plug>(HexPairModifiedPrev)  " previous one
+nmap <Leader>d <Plug>(HexPairModifiedShow)  " what was here before you edited it
+xmap <Leader>d <Plug>(HexPairModifiedShow)  " ... for a whole selection
 nmap <Leader>] <Plug>(HexPairDiffNext)      " next change against that file
 nmap <Leader>[ <Plug>(HexPairDiffPrev)      " previous one
 nmap <Leader>D <Plug>(HexPairDiffShow)      " what that file has here
@@ -910,6 +914,26 @@ surprising part: everything here writes one page at a time, and a
 file-wide replace would be a different mechanism with a different failure
 to recover from, not a bigger version of this one. Step the pages to
 cover a file.
+
+What you have changed and not yet written is marked as you type it, and
+`:HexPairModifiedShow` says what the bytes it marks *used to be*:
+
+```vim
+:HexPairModifiedShow          " the byte under the cursor, or a selection
+```
+
+```
+hexpair: bytes 17-18 (0x11-0x12), 2 of 2 edited
+  here  ff ee
+  disk  10 11
+```
+
+The marking covers the **new** byte, so the old one is exactly what the
+screen no longer shows — and bytes an insert has *added* have nothing
+behind them at all, which comes out as `--` rather than as a plausible
+`00`. It is `:HexPairDiffShow` below asked of this view's own file instead
+of another one, down to the two rows, and `<Leader>d` is the lowercase of
+that one's `<Leader>D`.
 
 Comparing with another file works the same way round:
 

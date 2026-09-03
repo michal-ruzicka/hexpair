@@ -508,6 +508,7 @@ The hex view shows which byte it was.
                   *<Plug>(HexPairDiffNext)* *<Plug>(HexPairDiffPrev)*
                                                      *<Plug>(HexPairDiffShow)*
          *<Plug>(HexPairModifiedNext)* *<Plug>(HexPairModifiedPrev)*
+                                                 *<Plug>(HexPairModifiedShow)*
                  *<Plug>(HexPairFindClear)* *<Plug>(HexPairDiffClear)*
                                                        *<Plug>(HexPairMarks)*
 The plugin defines NO key mappings by default; it only provides the
@@ -555,6 +556,9 @@ and so do the three that need a name typed - they ask for it: >
     " Walking your own edits
     nmap <Leader>e <Plug>(HexPairModifiedNext)
     nmap <Leader>E <Plug>(HexPairModifiedPrev)
+    " What was here before I edited it - a byte, or a whole selection
+    nmap <Leader>d <Plug>(HexPairModifiedShow)
+    xmap <Leader>d <Plug>(HexPairModifiedShow)
 
     " Comparing with another file
     nmap <Leader>] <Plug>(HexPairDiffNext)
@@ -1403,6 +1407,37 @@ HexPairOpenFile({file} [, {page}])
                         written only ever exist on the page in view.  Both
                         views walk their own - see |hexpair-marking-views|
                         for the one thing the text view cannot tell apart.
+
+                                                     *:HexPairModifiedShow*
+:HexPairModifiedShow    What was HERE before you edited it: the byte under
+                        the cursor, or every byte of a Visual selection, as
+                        the buffer holds it now beside what the page held
+                        when it was read from disk.
+
+                        |:HexPairDiffShow| against this view's own file
+                        instead of another one, and the same two aligned
+                        rows - `here` over `disk` - so the pair reads the
+                        same way whichever asked.  The marking answers
+                        "which bytes did I change" and covers the NEW byte,
+                        so what the file has there is exactly what the
+                        screen no longer shows; this is that byte.  An
+                        untouched byte says so rather than refusing.
+
+                        Bytes an INSERT has added are past the end of the
+                        page as read, and there is nothing behind them yet:
+                        they are shown as `--` and the heading says where
+                        the page as read stopped.  A long selection is
+                        summarised and the listing stops after 32 bytes.
+                        |<Plug>(HexPairModifiedShow)| has a Normal-mode and
+                        a Visual-mode form, `<Leader>d` in `hexpair.vimrc`
+                        - the lowercase of the `<Leader>D` that asks the
+                        same question of another file.
+
+                        Both views answer it.  In the windowed text view it
+                        inherits that view's one blind spot: a Vim string
+                        holds no NUL, so a NUL and a line break read alike
+                        there (|hexpair-marking-views|).  The hex view is
+                        exact.
 
                         *:HexPairMark* *:HexPairGoMark* *:HexPairMarks*
                                                      *:HexPairMarkDelete*

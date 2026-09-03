@@ -5921,10 +5921,10 @@ function! HexPairPagedDiffText(theirs, base, len, differing, first) abort
         \ a:differing, a:len, a:theirs, a:first + 1, a:first + 1)
 endfunction
 
-" How many bytes to spell out before :HexPairDiffShow stops listing them.
-" A Visual selection can cover a whole page, and a message of eight thousand
-" bytes is not a message.
-let s:diffshowmax = 32
+" How many bytes :HexPairDiffShow and :HexPairModifiedShow spell out before
+" they stop listing them. A Visual selection can cover a whole page, and a
+" message of eight thousand bytes is not a message.
+let s:showmax = 32
 
 " What |:HexPairDiffShow| says: the byte under the cursor, or the bytes
 " under a Visual selection, beside what the file being compared with holds
@@ -5964,7 +5964,7 @@ function! HexPairPagedDiffShowText(name, first, mine, theirs, othersize) abort
   " Two aligned rows, so the pairs line up under each other and a run that
   " the other file does not reach reads as a row of dashes rather than as
   " an absence to be inferred.
-  let shown = bytes > s:diffshowmax ? s:diffshowmax : bytes
+  let shown = bytes > s:showmax ? s:showmax : bytes
   let differ = 0
   let mrow = []
   let trow = []
@@ -6399,6 +6399,51 @@ function! s:DiffSearch(from, forward) abort
   return at < 0 ? -1 : s:AgreementBefore(other, at, total) + 1
 endfunction
 
+" The page as the BUFFER now holds it, as flat hex - the live side of
+" every comparison whose other side is b:hexpair_page_hex, the page as it
+" was READ from disk.
+"
+" Both views can say it, and neither can say it cheaply: the hex view has
+" to scan the whole page to know that its dump is still a dump, and the
+" text view has to walk its bytes one at a time to spell them. So it is
+" kept against b:changedtick, which is what makes pressing the key twice
+" free and lets more than one caller ask in the same redraw.
+"
+" An empty answer means "cannot be told", not "no bytes": a dump with a
+" stray character in it has no byte string, and a text view whose banner
+" was edited away has no body. Every caller has to read it that way -
+" a page that really holds no bytes is empty on both sides, and
+" b:hexpair_livehex_err says which of the two happened, so a caller that
+" has a message line can say why rather than shrugging.
+"
+" In the text view this inherits the one thing that view cannot spell: a
+" Vim string holds no NUL, so a NUL and a line break come back the same
+" (|hexpair-marking-views|). The hex view is exact.
+function! s:LiveHex() abort
+  if get(b:, 'hexpair_livehex_tick', -1) == b:changedtick
+    return b:hexpair_livehex
+  endif
+  let [hex, err] = ['', '']
+  if s:IsHexView()
+    let scan = s:PagedScan(0)
+    if empty(scan.err)
+      let hex = tolower(substitute(join(scan.lines, ''), '[^0-9a-fA-F]', '', 'g'))
+    else
+      let err = 'hexpair: ' . scan.err.msg
+    endif
+  else
+    try
+      let hex = HexPairPagedTextToHex(join(s:TextViewLines(), "\n"))
+    catch /^hexpair:/
+      let err = v:exception
+    endtry
+  endif
+  let b:hexpair_livehex_tick = b:changedtick
+  let b:hexpair_livehex = hex
+  let b:hexpair_livehex_err = err
+  return hex
+endfunction
+
 " The edited bytes of THIS PAGE as [offset, length] runs, page-relative.
 "
 " Page-scoped is the whole truth rather than a limitation: turning a page
@@ -6418,10 +6463,9 @@ function! s:ModifiedRuns() abort
   endif
   let runs = []
   if s:IsHexView()
-    let scan = s:PagedScan(0)
-    if empty(scan.err)
-      let flat = substitute(join(scan.lines, ''), '[^0-9a-fA-F]', '', 'g')
-      let runs = HexPairPagedDifferingByteRuns(tolower(flat), hex)
+    let live = s:LiveHex()
+    if live !=# ''
+      let runs = HexPairPagedDifferingByteRuns(live, hex)
     endif
   else
     " The text view compares in its own spelling, line by line, the way
@@ -6500,6 +6544,145 @@ function! s:ModifiedJump(forward) abort
   call s:GotoOffset(string(abs + 1), 0)
   echo printf('hexpair: edit %d of %d on this page, at byte %d (0x%x)',
         \ nth, len(runs), abs + 1, abs + 1)
+endfunction
+
+" What |:HexPairModifiedShow| says: the bytes at the cursor - or under a
+" Visual selection - as the buffer holds them NOW, beside what the page
+" held when it was read from disk. The other way round from
+" |:HexPairDiffShow|, which reports the page as read against another file
+" and leaves unwritten edits out of it on purpose: this command is about
+" exactly those edits, so here the live buffer is the side that speaks
+" first and the file is what it is held against.
+"
+" a:mine and a:theirs are flat hex over the same offsets, a:theirs
+" possibly shorter when an insert has grown the page past what was read;
+" a:pageend is the last byte the page as read holds, 1-based, which is
+" what says how far "on disk" reaches. Offsets are 1-based and inclusive,
+" like every other message here, so they can be typed straight into
+" |:HexPairGoOffset|. Pure, so the wording is testable without a cursor or
+" a Visual selection.
+function! HexPairPagedModifiedShowText(first, mine, theirs, pageend) abort
+  let bytes = strlen(a:mine) / 2
+  if bytes <= 0
+    return ['hexpair: no bytes here to compare']
+  endif
+  let have = strlen(a:theirs) / 2
+  let ends = printf('the page as read ends at byte %d (0x%x)',
+        \ a:pageend, a:pageend)
+
+  if bytes == 1
+    let mine = strpart(a:mine, 0, 2)
+    if have < 1
+      return [printf('hexpair: byte %d (0x%x): %s here, inserted since the '
+            \ . 'page was read - %s', a:first + 1, a:first + 1, mine, ends)]
+    endif
+    let theirs = strpart(a:theirs, 0, 2)
+    if mine ==# theirs
+      return [printf('hexpair: byte %d (0x%x): %s here and on disk',
+            \ a:first + 1, a:first + 1, mine)]
+    endif
+    return [printf('hexpair: byte %d (0x%x): %s here, %s on disk',
+          \ a:first + 1, a:first + 1, mine, theirs)]
+  endif
+
+  " Two aligned rows, exactly as |:HexPairDiffShow| draws them, so that a
+  " run of bytes reads the same way whichever of the two put it there.
+  let shown = bytes > s:showmax ? s:showmax : bytes
+  let edited = 0
+  let mrow = []
+  let trow = []
+  let i = 0
+  while i < bytes
+    let mine = strpart(a:mine, i * 2, 2)
+    let theirs = i < have ? strpart(a:theirs, i * 2, 2) : ''
+    if mine !=# theirs
+      let edited += 1
+    endif
+    if i < shown
+      call add(mrow, mine)
+      call add(trow, theirs ==# '' ? '--' : theirs)
+    endif
+    let i += 1
+  endwhile
+
+  let out = [printf('hexpair: bytes %d-%d (0x%x-0x%x), %d of %d edited%s',
+        \ a:first + 1, a:first + bytes, a:first + 1, a:first + bytes,
+        \ edited, bytes, have < bytes ? printf(' - %s', ends) : '')]
+  call add(out, printf('  here  %s', join(mrow, ' ')))
+  call add(out, printf('  disk  %s', join(trow, ' ')))
+  if bytes > shown
+    call add(out, printf('  ... and %d more, not shown', bytes - shown))
+  endif
+  return out
+endfunction
+
+" :HexPairModifiedShow - what I changed here, and what was there before.
+"
+" The marking says WHICH bytes are edited and no more, and the byte it
+" covers is the NEW one: what the file has there is exactly what the
+" screen no longer shows. This is that byte - or a whole Visual selection,
+" since "what did I overwrite" is as reasonable a question about a run as
+" about one byte - beside the page as it was read from disk.
+"
+" |:HexPairDiffShow|'s shape throughout, down to the two rows and the
+" 32-byte cap, because it is the same question against a different file:
+" that one against |:HexPairDiff|'s, this one against the view's own.
+"
+" a:reselect mirrors s:Selection() and s:DiffShow(): asking from the
+" command line ends Visual mode, and losing the selection to look at it is
+" not a trade worth making, so the gv comes first and the message last.
+function! s:ModifiedShow(...) abort
+  if !s:RequirePaged()
+    return
+  endif
+  " The live bytes come first, and not only because the answer needs them:
+  " an empty result is "cannot be told" as well as "no bytes" - on a page
+  " that holds bytes it means the dump or the banner no longer reads as
+  " one - and finding the cursor's byte on a modified page COUNTS the
+  " bytes above it by scanning that same page. Asking here turns a page
+  " that does not scan into the message saying so, before anything tries
+  " to number a byte on it.
+  let live = s:LiveHex()
+  if live ==# '' && b:hexpair_page_len > 0
+    echohl ErrorMsg
+    echomsg get(b:, 'hexpair_livehex_err', '') !=# ''
+          \ ? b:hexpair_livehex_err
+          \ : 'hexpair: this page cannot be read as bytes'
+    echohl None
+    return
+  endif
+
+  let reselect = a:0 && a:1
+  if reselect
+    let sel = HexPairPagedSelectionBytes(getpos("'<"), getpos("'>"),
+          \ visualmode())
+    if empty(sel)
+      echo 'hexpair: the selection covers no bytes'
+      return
+    endif
+    let [first, last] = [sel.first, sel.last]
+  else
+    let first = s:Here()
+    let last = first
+  endif
+
+  let at = first - b:hexpair_page_base
+  let span = last - first + 1
+  let mine = strpart(live, at * 2, span * 2)
+  " The page as it was READ, which past an insert simply stops - strpart()
+  " beyond the end gives '' and the text function reads that as "not there
+  " yet" rather than as an error.
+  let theirs = strpart(get(b:, 'hexpair_page_hex', ''), at * 2, span * 2)
+  let lines = HexPairPagedModifiedShowText(first, mine, theirs,
+        \ b:hexpair_page_base + b:hexpair_page_len)
+
+  if reselect
+    normal! gv
+  endif
+  " More than one line gets Vim's hit-enter prompt, which is what keeps a
+  " multi-line report on the screen long enough to read - and after Visual
+  " mode, what stops "-- VISUAL --" painting over it.
+  echo join(lines, "\n") . (len(lines) > 1 || reselect ? "\n" : '')
 endfunction
 
 function! s:DiffJump(forward) abort
@@ -7924,6 +8107,7 @@ command! -bar HexPairDiffNext call s:DiffJump(1)
 command! -bar HexPairDiffPrev call s:DiffJump(0)
 command! -bar HexPairModifiedNext call s:ModifiedJump(1)
 command! -bar HexPairModifiedPrev call s:ModifiedJump(0)
+command! -bar HexPairModifiedShow call s:ModifiedShow()
 command! -bar -nargs=? HexPairSplit  call s:SplitView(0, <f-args>)
 command! -bar -nargs=? HexPairVSplit call s:SplitView(1, <f-args>)
 
@@ -7969,6 +8153,7 @@ if g:hexpair_short_commands
         \ ['-bar', 'HPDiffPrev', 'HexPairDiffPrev'],
         \ ['-bar', 'HPModifiedNext', 'HexPairModifiedNext'],
         \ ['-bar', 'HPModifiedPrev', 'HexPairModifiedPrev'],
+        \ ['-bar', 'HPModifiedShow', 'HexPairModifiedShow'],
         \ ['-bar -bang -nargs=*', 'HPFind', 'HexPairFind'],
         \ ['-bar -nargs=+', 'HPFindText', 'HexPairFindText'],
         \ ['-bar', 'HPFindNext', 'HexPairFindNext'],
@@ -8041,6 +8226,10 @@ nnoremap <silent> <Plug>(HexPairDiffClear) :<C-U>HexPairDiff!<CR>
 " has, and for the same reason.
 nnoremap <silent> <Plug>(HexPairDiffShow) :<C-U>HexPairDiffShow<CR>
 xnoremap <silent> <Plug>(HexPairDiffShow) :<C-U>call <SID>DiffShow(1)<CR>
+" The same pair, asked of this view's own file rather than another one:
+" what the bytes here were before they were edited.
+nnoremap <silent> <Plug>(HexPairModifiedShow) :<C-U>HexPairModifiedShow<CR>
+xnoremap <silent> <Plug>(HexPairModifiedShow) :<C-U>call <SID>ModifiedShow(1)<CR>
 
 " No default key mappings are defined; map the <Plug> mappings (or the
 " commands directly) in your vimrc, e.g.:

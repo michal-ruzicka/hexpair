@@ -159,6 +159,13 @@ call s:Map('n', '<Leader>c', '<Plug>(HexPairFindClear)')
 " than to what another file has.
 call s:Map('n', '<Leader>e', '<Plug>(HexPairModifiedNext)')
 call s:Map('n', '<Leader>E', '<Plug>(HexPairModifiedPrev)')
+" What the file on disk has here - the byte under the cursor, or a whole
+" Visual selection - beside what the buffer now holds. The marking says
+" which bytes you changed; the byte it covers is the new one, and this is
+" what the old one was. The lowercase of <Leader>D, which asks the same
+" question of another file.
+call s:Map('n', '<Leader>d', '<Plug>(HexPairModifiedShow)')
+call s:Map('x', '<Leader>d', '<Plug>(HexPairModifiedShow)')
 
 " --- Comparing with another file -----------------------------------------
 " Next and previous CHANGE against the file :HexPairDiff compares with - a
