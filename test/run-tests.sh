@@ -5290,6 +5290,41 @@ check "the way back out is the lowercase key, the capital discarding" \
     "['<Plug>(HexPairUnhex)', ':HexPairUnhex!<CR>']" \
     "$(sed -n 5p "$WORK/tvimrc.out")"
 
+# --- The quick-start key list is the mappings file, not a copy of it ------
+# README.md opens with a complete list of the keys hexpair.vimrc defines,
+# which is the first thing anyone reads and the easiest thing to forget
+# when a mapping is added, moved or dropped. Neither list is generated, so
+# the agreement is checked instead - in both directions, since a key that
+# only the README has is as wrong as one only the file has.
+sed -n '/^## TL;DR: Quick Start$/,/^## Features$/p' "$ROOT/README.md" \
+    > "$WORK/quickstart.md"
+# The keys each side names. '<Leader>' is stripped off both, so what is
+# compared is the key itself.
+sed -n "s/^call s:Map('[nx]', '<Leader>\\([^']*\\)'.*/\\1/p" \
+    "$ROOT/hexpair.vimrc" | sort -u > "$WORK/qs-mapped.txt"
+sed -n 's/^<Leader>\([^ ]*\)  *".*/\1/p' "$WORK/quickstart.md" | sort -u \
+    > "$WORK/qs-listed.txt"
+# A key may hold a regex or a glob character - ?, [, ], /, <, > and - are
+# all in there - so the comparison is by whole line, never by pattern, and
+# globbing is off while the shell holds one in a variable.
+set -f
+qs_missing=
+while IFS= read -r key; do
+    grep -qxF "$key" "$WORK/qs-listed.txt" || qs_missing="$qs_missing $key"
+done < "$WORK/qs-mapped.txt"
+qs_extra=
+while IFS= read -r key; do
+    grep -qxF "$key" "$WORK/qs-mapped.txt" || qs_extra="$qs_extra $key"
+done < "$WORK/qs-listed.txt"
+set +f
+check "the quick start lists every key hexpair.vimrc maps" "" "$qs_missing"
+check "and lists no key it does not" "" "$qs_extra"
+# A count, for the same reason the suite keeps one of its own: a block of
+# the list that stops being extracted at all would agree with an equally
+# empty other side.
+check "and there are as many of them as there are" "37" \
+    "$(wc -l < "$WORK/qs-mapped.txt" | tr -d ' ')"
+
 # --- Leaving the window is not free, and not always allowed ---------------
 # Refreshing another window means going to it and back, which is also what
 # ENDS a Visual selection and would take Insert mode with it: in

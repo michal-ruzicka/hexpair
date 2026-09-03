@@ -28,6 +28,12 @@ and this project adheres to
   `:help :HexPairModifiedShow`.
 
 ### Changed
+- **`README.md` opens with a *TL;DR: Quick Start*.** Install, source, run —
+  and then the complete key and command reference on one screen, which is
+  what the sixty-odd pages under it were not. Complete is the point, so a
+  test now holds the list against `hexpair.vimrc` in both directions: a key
+  the mappings file defines and the quick start does not, or the other way
+  round, fails the suite.
 - **`hexpair.vimrc` moves `:HexPairUnhex` to `<Leader>u`, and gives
   `<Leader>U` the bang.** The way back out of a paged view refuses over
   unwritten edits to the page, and `:HexPairUnhex!` discards them — which
