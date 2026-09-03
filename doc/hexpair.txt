@@ -1870,10 +1870,10 @@ clears only that selection; the other is kept, so nothing that is still
 fine has to be selected again, and naming a new partner for it opens the
 comparison straight away.
 
-README.md, under "Windows: vimhex
-and vimhexdiff outside Vim", has the registry entries, and
-vimhex-contex-entry.add.reg/.remove.reg ship ready-made versions of them,
-with nothing to edit for a default install: the paths are written against
+README.md, under "vimhex and vimhexdiff on Windows", has the registry
+entries, and vimhex-contex-entry.add.reg/.remove.reg ship ready-made
+versions of them, with nothing to edit for a default install: the paths
+are written against
 %USERPROFILE%\vimfiles\pack\plugins\start\hexpair.  Installed elsewhere?
 Re-generate rather than edit: >
 

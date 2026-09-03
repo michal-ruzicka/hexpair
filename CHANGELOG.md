@@ -153,7 +153,7 @@ and this project adheres to
   actually cheaper there than anywhere else**: neither Vim nor `xxd` can
   shorten a file except by rewriting it, so a shrinking write copies the
   whole file on every other platform, while `.NET`'s `SetLength` truncates
-  in place. `README.md`'s *Windows and the 2 GiB limit* has the table of
+  in place. `README.md`'s *2 GiB Limit on Windows* has the table of
   what runs where. Every write past the limit reads back what it wrote
   before reporting success; `g:hexpair_verify_writes = 0` opts out.
 
@@ -203,7 +203,7 @@ and this project adheres to
   `long` is 64 bits. `xxd -r` and `xxd -o` share the limit, so the page you
   look at, the bytes a diff compares and the bytes a `:w` puts back were
   all affected. Everything past that limit now goes through PowerShell —
-  see **Windows and the 2 GiB limit** in `README.md`.
+  see **2 GiB Limit on Windows** in `README.md`.
 - **A nonsensical `g:hexpair_bytes_per_line` was accepted.** Zero passed
   the "page size must be a multiple of it" check, because Vim answers
   `512 % 0` with `0` rather than an error, and a negative one passed for

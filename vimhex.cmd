@@ -38,7 +38,7 @@ REM console `vim`, which is what running this from a cmd window asks for.
 REM
 REM Put this file's directory on PATH. The plugin's own directory is the
 REM obvious one, since an update of the plugin then updates the command too.
-REM See README.md, "Windows: vimhex and vimhexdiff outside Vim".
+REM See README.md, "vimhex and vimhexdiff on Windows".
 REM ===========================================================================
 
 setlocal

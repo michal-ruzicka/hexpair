@@ -54,8 +54,8 @@ REM Set VIMHEX_VIM to use a particular Vim - "gvim" for the GUI, or a full
 REM path such as "C:\Program Files\Vim\vim91\gvim.exe". The default is the
 REM console `vim`, which is what running this from a cmd window asks for.
 REM
-REM Put this file's directory on PATH; see README.md, "Windows: vimhex and
-REM vimhexdiff outside Vim", which also has the context-menu entries.
+REM Put this file's directory on PATH; see README.md, "vimhex and
+REM vimhexdiff on Windows", which also has the context-menu entries.
 REM ===========================================================================
 
 setlocal

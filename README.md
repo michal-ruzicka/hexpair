@@ -49,7 +49,7 @@ editing an 8 KiB one.
 > bits and `xxd` seeks natively, so files of any size work the ordinary
 > way — the ceiling is 2⁶³−1 bytes, eight exbibytes, which is not a limit
 > anyone is going to meet.
-> See [Windows and the 2 GiB limit](#windows-and-the-2-gib-limit).
+> See [2 GiB Limit on Windows](#2-gib-limit-on-windows).
 
 **The hex*pair* name:** hex and text, always paired. *Within a line* —
 the byte under the cursor and its character light up together, whichever

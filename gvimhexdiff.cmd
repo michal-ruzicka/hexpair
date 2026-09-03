@@ -24,7 +24,7 @@ REM Delegates to vimhexdiff.cmd, in this SAME directory, rather than
 REM duplicating its argument parsing and its side-selection state - that
 REM keeps ONE source of truth for both. Keep the two files together: copy
 REM both, or neither, wherever this goes.
-REM See README.md, "Windows: vimhex and vimhexdiff outside Vim".
+REM See README.md, "vimhex and vimhexdiff on Windows".
 REM ===========================================================================
 
 setlocal
