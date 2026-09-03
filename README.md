@@ -183,6 +183,32 @@ Everything below says the same at length: what each of those does, how
 paging keeps a file's size from mattering, what a write costs, and how to
 change any of it.
 
+## Outline
+
+`README.md` is long, so here is its shape. Everything after *Features* is
+the same ground as the *Quick Start* above, walked slowly.
+
+1. [TL;DR: Quick Start](#tldr-quick-start)
+2. [Features](#features)
+3. [Installation](#installation)
+    1. [Verifying Releases](#verifying-releases)
+4. [Usage](#usage)
+    1. [Reading the Bytes](#reading-the-bytes)
+    2. [Writing a Character in](#writing-a-character-in)
+    3. [Searching, Replacing, Comparing](#searching-replacing-comparing)
+    4. [Marks](#marks)
+    5. [Two Views of One File](#two-views-of-one-file)
+    6. [Configuration](#configuration)
+    7. [Windows](#windows)
+        1. [`vimhex` and `vimhexdiff` on Windows](#vimhex-and-vimhexdiff-on-windows)
+        2. [Windows Explorer Context Menu](#windows-explorer-context-menu)
+        3. [2 GiB Limit on Windows](#2-gib-limit-on-windows)
+5. [Pages](#pages)
+6. [What it costs](#what-it-costs)
+7. [Requirements](#requirements)
+8. [Contributing](#contributing)
+9. [License](#license)
+
 ## Features
 
 - **Pair highlighting.** In the hex view, the byte under the cursor is

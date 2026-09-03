@@ -28,6 +28,11 @@ and this project adheres to
   `:help :HexPairModifiedShow`.
 
 ### Changed
+- **`README.md` has an outline.** A clickable list of its own sections, in
+  document order, between the quick start and the features — 1400 lines is
+  past the point where scrolling to find out what is even in a file is
+  reasonable. Held against the headings by a test, both directions and the
+  order, so a renamed or added section cannot leave it behind.
 - **The `$-N` jumps are in the README now.** `:HexPairPageGoto`,
   `:HexPairGoOffset` and `:HexPairOpen`'s `[page]` have taken `$-N` — N back
   from the end, the thing a bare `-N` cannot say — since v2.3.0, and every

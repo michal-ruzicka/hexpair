@@ -5347,6 +5347,64 @@ check "and every short command it types is one" "undefined: []" \
 check "and it types six of them" "listed: 6" \
     "$(sed -n 2p "$WORK/tqscmd.out")"
 
+# --- The outline is the README's own heading structure ---------------------
+# README.md carries a clickable outline of itself, which is a hand-kept
+# copy of its own headings - the same thing the quick-start list is, and
+# the same thing that rots. Every heading must be in it, in document
+# order, under an anchor that resolves; and it must link nothing that is
+# not a heading, which is what a renamed section leaves behind.
+"$PY" - "$ROOT/README.md" > "$WORK/toutline.out" <<'OUTLINE'
+import re, sys
+
+src = open(sys.argv[1], encoding='utf-8').read().split('\n')
+# Fenced blocks hold shell comments that start with '#'; blank them out
+# rather than parsing them as headings.
+lines, fence = [], False
+for line in src:
+    if line.startswith('```'):
+        fence = not fence
+        lines.append('')
+        continue
+    lines.append('' if fence else line)
+
+def slug(text):
+    # GitHub's rule, for the punctuation this file actually uses:
+    # lowercase, drop everything but word characters, spaces and hyphens,
+    # then spaces to hyphens.
+    return re.sub(r'\s+', '-', re.sub(r'[^\w\s-]', '', text.strip().lower()))
+
+# Every section heading below the title, in order - except the outline's
+# own, which would be a link to the list you are reading.
+heads = []
+for line in lines:
+    m = re.match(r'^(#{2,6})\s+(.*)$', line)
+    if m and m.group(2).strip() != 'Outline':
+        heads.append(slug(m.group(2)))
+
+# And what the outline links to, in the order it lists them.
+inside, linked = False, []
+for line in lines:
+    m = re.match(r'^(#{2,6})\s+(.*)$', line)
+    if m:
+        inside = m.group(2).strip() == 'Outline'
+        continue
+    if inside:
+        linked += re.findall(r'\]\(#([^)]*)\)', line)
+
+print('order: ' + ('match' if heads == linked else 'DIFFER'))
+print('missing: ' + repr([h for h in heads if h not in linked]))
+print('stale: ' + repr([l for l in linked if l not in heads]))
+print('sections: %d' % len(heads))
+OUTLINE
+check "the outline lists every section, in document order" "order: match" \
+    "$(sed -n 1p "$WORK/toutline.out")"
+check "and leaves none of them out" "missing: []" \
+    "$(sed -n 2p "$WORK/toutline.out")"
+check "and links no section that is gone" "stale: []" \
+    "$(sed -n 3p "$WORK/toutline.out")"
+check "and there are as many sections as there are" "sections: 20" \
+    "$(sed -n 4p "$WORK/toutline.out")"
+
 # --- Leaving the window is not free, and not always allowed ---------------
 # Refreshing another window means going to it and back, which is also what
 # ENDS a Visual selection and would take Insert mode with it: in
