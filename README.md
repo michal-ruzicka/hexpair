@@ -1357,11 +1357,13 @@ own bytes are hashed when it is read and again before it is patched.
 `g:hexpair_page_confirm = 0` answers the resize question automatically,
 for scripts.
 
-Only a write that **shortens** a file, and `:w {file}`, need a newer Vim
-than the rest of the plugin: `+num64` and patch 9.0.0795+, for
+Only a write that **shortens** a file, `:w {file}`, and one that
+**inserts** bytes with more than half the file after them need a newer
+Vim than the rest of the plugin: `+num64` and patch 9.0.0795+, for
 `readblob()`, checked when such a write is attempted and refusing just
-that write. Viewing, navigating, same-length writes and inserts run on
-Vim 8.0 with nothing but `xxd`. Details: `:help hexpair-paged`.
+that write. Viewing, navigating, same-length writes and inserts with no
+more than half the file behind them run on Vim 8.0 with nothing but
+`xxd`. Details: `:help hexpair-paged`.
 
 ## What it costs
 

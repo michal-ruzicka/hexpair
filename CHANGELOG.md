@@ -59,6 +59,16 @@ and this project adheres to
   mapped yourself is still left alone.
 
 ### Fixed
+- **The version gate was documented as two operations where it is three.**
+  `README.md`'s *Pages* section and `:help hexpair-paged` both said that
+  only shortening a file and `:w {file}` need Vim 9.0.0795, and then listed
+  inserts among the things that run on the 8.0 floor. An insert with more
+  than half the file after it goes through the splice, because moving that
+  much of a tail costs more than rewriting the file, and the splice is
+  exactly what `readblob()`'s offset is for — so that write is refused on
+  8.0 like the other two, and the refusal message has always said so. The
+  help even counted "the three operations above" two sentences after naming
+  two. `Requirements` had it right all along.
 - **`:HexPairDiffShow` asked from the windowed text view reported the wrong
   byte.** It read the cursor as a position in a *dump* — three columns per
   byte, a line of bytes per line — where the text view has one column per
