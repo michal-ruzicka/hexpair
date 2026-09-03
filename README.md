@@ -87,11 +87,11 @@ the two ready-made files, and you have all of it:
 # Download and install – see https://github.com/michal-ruzicka/hexpair/releases/latest
 curl -LO 'https://github.com/michal-ruzicka/hexpair/releases/download/vX.Y.Z/hexpair.vX.Y.Z.tar'
 mkdir -p ~/.vim/pack/plugins/start
-tar xvf hexpair.vX.Y.Z.tar -C ~/.vim/pack/plugins/start/  # intall hexpair plugin in user's Vim configuration dir
+tar xvf hexpair.vX.Y.Z.tar -C ~/.vim/pack/plugins/start/  # install it into your own Vim configuration directory
 vim -c 'helptags ALL' -c 'q'             # regenerate helptags for your installation
 echo "let mapleader = ','" >> ~/.vimrc   # your <Leader> key (`\` is the default); must come first
 echo 'runtime pack/*/start/hexpair/hexpair.vimrc' >> ~/.vimrc  # load recommended hexpair keybindings on Vim start
-echo 'source ~/.vim/pack/plugins/start/hexpair/hexpair.bashrc' >> ~/.bashrc  # load `*hexpair*` shell function on Bash start
+echo 'source ~/.vim/pack/plugins/start/hexpair/hexpair.bashrc' >> ~/.bashrc  # load the vimhex/vimhexdiff shell functions on Bash start
 
 # Start a new Bash for the shell functions, and a new Vim for the mappings:
 # hex editor
@@ -140,9 +140,9 @@ let mapleader = ','   " i.e. in Normal mode type `,h` to toggle hex <-> text
 
 " Marks – positions in the FILE, so a page turn does not disturb them
 <Leader>ml  " list them, with the page each falls on
-<Leader>ms  " set mark, ask for a name, mark the byte under the cursor
-<Leader>md  " delete mark, ask which mark to drop (use TAB to suggest/complete mark names)
-<Leader>mg  " go to mark, ask which mark to go to (use TAB to suggest/complete mark names)
+<Leader>ms  " set a mark: ask for a name, mark the byte under the cursor
+<Leader>md  " drop a mark: ask which one (TAB completes the names)
+<Leader>mg  " go to a mark: ask which one (TAB completes the names)
 <Leader>mG  " ... discarding unwritten edits
 
 " Searching the whole file, not the page
@@ -153,14 +153,14 @@ let mapleader = ','   " i.e. in Normal mode type `,h` to toggle hex <-> text
 <Leader>c   " stop marking the matches
 
 " Your own unwritten edits
-<Leader>e   " go to next run of edited (modified) but unsaved bytes
-<Leader>E   " ... but previous one
-<Leader>d   " show different to the original state, i.e. what was here before you edited it (also in Visual)
+<Leader>e   " go to the next run of bytes edited and not yet written
+<Leader>E   " ... the previous one
+<Leader>d   " what was here before you edited it (also in Visual)
 
 " Comparing with the file :HexPairDiff named
-<Leader>]   " go to next change – a run of differing bytes is one change
-<Leader>[   " ... but previous one
-<Leader>D   " show different to the file are are comparing to, i.e. what is here in the other file (also in Visual)
+<Leader>]   " go to the next change – a run of differing bytes is one change
+<Leader>[   " ... the previous one
+<Leader>D   " what the file you are comparing with has here (also in Visual)
 <Leader>C   " stop comparing, and clear the marking
 
 " === Command mode - what takes an argument, so it has no key =========
@@ -173,6 +173,7 @@ let mapleader = ','   " i.e. in Normal mode type `,h` to toggle hex <-> text
 :HPSplit [page]              " a second view of this file, e.g. :HPSplit +1
 :HPVSplit [page]             " ... vertically
 
+" Short names for the :HexPair... commands below; same arguments and bang.
 " HexPairStatus() goes in 'statusline' and reports "hex 3/349 @0x50a01"
 " in a hex view and nothing anywhere else:
 "     set statusline=%f\ %h%w%m%r\ %{HexPairStatus()}%=%l,%c%V\ %P
@@ -723,9 +724,9 @@ hexpair: bytes 17-18 (0x11-0x12), 2 of 2 edited
 The marking covers the **new** byte, so the old one is exactly what the
 screen no longer shows — and bytes an insert has *added* have nothing
 behind them at all, which comes out as `--` rather than as a plausible
-`00`. It is `:HexPairDiffShow` below asked of this view's own file instead
-of another one, down to the two rows, and `<Leader>d` is the lowercase of
-that one's `<Leader>D`.
+`00`. It is the `:HexPairDiffShow` below, asked of this view's own file
+instead of another one and down to the two rows, so `<Leader>d` is the
+lowercase of that one's `<Leader>D`.
 
 Comparing with another file works the same way round:
 
@@ -744,7 +745,7 @@ Backwards works the same way and lands on a change's first byte, so from
 the middle of one it goes to that change's own start, as `[c` does in a
 diff.
 
-and the shell wrapper opens two files that way in one go:
+And the shell wrapper opens two files that way in one go:
 
 ```sh
 vimhexdiff old.img new.img
