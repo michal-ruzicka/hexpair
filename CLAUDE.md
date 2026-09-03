@@ -572,6 +572,21 @@ Key function map:
    buffer and before a banner or a ruler is anywhere near them.)
    The text view has no ruler, so its own header is always the one
    banner line, matched by exact text (`s:TextBodyRange()`).
+8. **The byte under the cursor is `s:Here()`** in anything both views
+   can run. `s:PagedByteOffset()` reads a *dump* — three columns per
+   byte, one line of bytes per line — and in the windowed text view it
+   returns a plausible offset from the wrong place rather than an error.
+   `s:TextByteOffset()` is the other half; `s:Here()` is the dispatch,
+   and it is the only one a command should name.
+9. **The live bytes of a page are `s:LiveHex()`**, cached against
+   `b:changedtick`; `b:hexpair_page_hex` is the page as it was READ, and
+   every comparison of the two (the modified marking, `<Leader>e`/`E`,
+   `:HexPairModifiedShow`) holds one against the other in that order. An
+   empty `s:LiveHex()` means "cannot be told", not "no bytes" — check it
+   against `b:hexpair_page_len` before reading it as an empty page, and
+   ask it BEFORE numbering a byte, because `s:PagedScan()`'s error result
+   has no `bytes` key and `s:PagedLineBase()` on a modified page would
+   raise E716.
 
 ## Testing
 
@@ -663,6 +678,9 @@ come back**; each names the test that would catch it.
 | The progress line of a scan was echoed and then wiped by the `redraw!` on the next line, dozens of times a second: it was never readable, and a 70 GiB search looked like a hang with a flicker | not testable headlessly (`vim -es` has no message line) — the tmux recipe above, and `echo` + plain `redraw` is the fix |
 | `CTRL-C` could not stop a scan: every block read caught it (a bare `:catch` catches `Vim:Interrupt` too) and read the next block, so it only worked if pressed between two reads | "a scan says how far it has got" pins the message; the catch is `/^hexpair:/` now, and E608 forbids re-throwing what a catch-all would have swallowed |
 | A jump to a byte on another page levelled the scroll-bound windows *before* the cursor arrived, and `:syncbind` swallows the next scroll Vim would have followed — so `vimhexdiff` came apart at every page boundary | "and takes the bound window to that byte, not to the page" |
+| `:HexPairDiffShow` in the windowed text view reported a real byte of the file, from the wrong place: it read the cursor with `s:PagedByteOffset()`, so the offset was short by however much of the page was above it. Invariant 8 | "and asked there, it answers about the byte under the cursor" |
+| A page whose dump no longer scans has no byte to number either — the count of the bytes above the cursor is that same scan, and `s:PagedScan()` returns `{'err': ...}` with no `bytes` key, so `s:PagedLineBase()` raises **E716: Key not present in Dictionary: "bytes"** and the command then answers about byte 1. `:HexPairModifiedShow` asks `s:LiveHex()` first for exactly this and says which character broke the page. **STILL OPEN elsewhere, reproduced 2026-09-03:** `:HexPairPages` (`<Leader>?`) and `:HexPairInspect` (`<Leader>i`) both hit it — put a `zz` in a dump line, leave the cursor on a dump line, run either. `:HexPairModifiedNext`/`Prev` do not (`s:ModifiedRuns()` returns no runs first), though they then say "nothing edited on this page" about a page that cannot be read at all. `HexPairStatus()` is safe on purpose: it counts the lines arithmetically because it runs on every redraw. The fix is not one line — `s:PagedLineBase()` has to fail in a way each caller can report — which is why it was left rather than bolted on | "a page that no longer scans is refused by name" covers the one command that guards it |
+| README's quick-start key list is a hand-kept copy of `hexpair.vimrc`, which is the thing that rots: a mapping added, moved or dropped leaves the first screen anyone reads wrong | "the quick start lists every key hexpair.vimrc maps" + the two with it — both directions and a count, since two empty lists agree |
 | The `<Plug>`-coverage test was vacuous: `map <Plug>` under `-u NONE` reads `<Plug>` as six literal characters ('compatible' puts `<` in `'cpoptions'`), and the plugin was never sourced in that script, so there were no targets to miss | "and leaves no `<Plug>` target without a key" — `set cpoptions-=<`, the plugin sourced, and the keys looked for in the mappings *file* rather than in `map` (where every target is its own left-hand side) |
 | A jump synced the scroll-bound windows only when it crossed a page boundary, so the same keystroke took the other window along or left it behind depending on how far it happened to go | "a jump inside a page takes the bound view along too" and "which is the same rule as across a page" |
 | `vimhexdiff` opened with its two windows on different parts of two files: everything it does runs inside `VimEnter`, and `'scrollbind'` syncs only movement made after the main loop has seen the window bound | "and :HexPairSyncViews is the way back" and the block around it — the startup now ends in `:HexPairSyncViews` |
