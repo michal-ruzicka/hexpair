@@ -1805,6 +1805,20 @@ from it.
 
 Set $VIMHEX_VIM to use a particular Vim.
 
+                                                        *hexpair-vimhex-gui*
+The same file defines `gvimhex` and `gvimhexdiff`, which are those two
+commands again, taking the same arguments, with $VIMHEX_VIM defaulting to
+`gvim` rather than `vim`: >
+
+    gvimhex bigfile.bin
+    gvimhexdiff old.img new.img
+<
+A $VIMHEX_VIM already set in the environment is left alone, so it still
+names the Vim when you have pointed it at a particular gVim.  They
+delegate to `vimhex` and `vimhexdiff` rather than repeating them, so all
+four share one argument grammar.  cmd.exe gets the same four
+(|hexpair-vimhex-windows|).
+
 Three things in it are not incidental, and are commented in the file
 itself so they survive being copied out of it:
 
@@ -1842,7 +1856,8 @@ Path and truncates the result at 1024 characters.
 They default to the console `vim`; set $VIMHEX_VIM to `gvim`, or to a full
 path, for another one.
 
-gvimhex.cmd and gvimhexdiff.cmd are the same two commands again, defaulting
+gvimhex.cmd and gvimhexdiff.cmd are the same two commands again
+(|hexpair-vimhex-gui| is the Bash pair), defaulting
 $VIMHEX_VIM to `gvim` instead - for a double-click or a context-menu verb,
 where there is no console for `vim` to run in and no way to pass
 $VIMHEX_VIM.  They call vimhex.cmd/vimhexdiff.cmd rather than duplicating

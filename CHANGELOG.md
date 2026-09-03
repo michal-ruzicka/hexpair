@@ -28,6 +28,16 @@ and this project adheres to
   `:help :HexPairModifiedShow`.
 
 ### Changed
+- **`gvimhex` and `gvimhexdiff` are documented.** `hexpair.bashrc` has
+  defined them all along — `vimhex` and `vimhexdiff` with `VIMHEX_VIM`
+  defaulting to `gvim` — and said so only in its own comments: neither the
+  README nor `:help hexpair-vimhex` mentioned them, so the only way to find
+  out you had them was to read the file you had sourced. Both now list all
+  four, and `:help hexpair-vimhex-gui` is the section for the pair.
+- **A usage message names the command you typed.** `gvimhex` with no
+  arguments answered `usage: vimhex ...`, because the argument check lives
+  in the function it delegates to. It reads the caller now, so all four say
+  their own name; the grammar is still defined once.
 - **`README.md` has an outline.** A clickable list of its own sections, in
   document order, between the quick start and the features — 1400 lines is
   past the point where scrolling to find out what is even in a file is

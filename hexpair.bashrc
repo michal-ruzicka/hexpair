@@ -67,11 +67,29 @@
 # arguments, but opening gVim instead - VIMHEX_VIM defaults to "gvim"
 # rather than "vim" there; a VIMHEX_VIM already set in the environment is
 # left alone.
+#
+#     gvimhex bigfile.bin
+#     gvimhexdiff old.img new.img
+
+# The name to put in a usage message. gvimhex and gvimhexdiff delegate to
+# these two, so the argument check runs under a name the user may not have
+# typed - and being told about vimhex when you typed gvimhex is a wrong
+# answer to "what does this take". FUNCNAME[1] is the caller: one of ours
+# when it delegated, and "main", "source" or a function of the user's own
+# when the command was typed directly, which is why only our two names are
+# taken and everything else falls back to this function's own.
+_hexpair_called_as()
+{
+    case "${FUNCNAME[2]:-}" in
+        gvimhex|gvimhexdiff) echo "${FUNCNAME[2]}" ;;
+        *)                   echo "$1" ;;
+    esac
+}
 
 vimhex()
 {
     if [ $# -lt 1 ] || [ $# -gt 2 ]; then
-        echo "usage: vimhex FILE|- [PAGE|@BYTE]" >&2
+        echo "usage: $(_hexpair_called_as vimhex) FILE|- [PAGE|@BYTE]" >&2
         return 1
     fi
 
@@ -124,7 +142,7 @@ vimhex()
 vimhexdiff()
 {
     if [ $# -ne 2 ]; then
-        echo "usage: vimhexdiff FILE1 FILE2" >&2
+        echo "usage: $(_hexpair_called_as vimhexdiff) FILE1 FILE2" >&2
         return 1
     fi
 

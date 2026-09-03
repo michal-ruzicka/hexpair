@@ -100,6 +100,7 @@ vimhex bigfile.bin            # the first page; also 3, '$', '$-5', @0x4a2000
 # hex diff
 vimhexdiff                    # no parameters: print the usage and stop
 vimhexdiff old.img new.img    # both side by side, each marking what differs
+# gvimhex and gvimhexdiff are those two again, in gVim rather than in the terminal
 ```
 
 And that is the whole of it, from a Vim that already has it:
@@ -480,8 +481,24 @@ cat bigfile.bin | vimhex -      # piped input
 
 `:HexPairPages` reports the byte under the cursor in exactly the form
 `@BYTE` takes, so you can note where you were and come straight back to
-it later. Set `VIMHEX_VIM` to pick a particular Vim. Details are in the
-file's own comments and in `:help hexpair-vimhex`.
+it later. Set `VIMHEX_VIM` to pick a particular Vim.
+
+The same file defines `gvimhex` and `gvimhexdiff`: those two commands
+again, taking the same arguments, with `VIMHEX_VIM` defaulting to `gvim`
+instead of `vim`.
+
+```sh
+gvimhex bigfile.bin
+gvimhexdiff old.img new.img
+```
+
+A `VIMHEX_VIM` you have already set is left alone, so it still names the
+Vim when you have pointed it at a particular gVim. All four are one
+argument grammar — the `g` pair delegates rather than repeating it — and
+`cmd.exe` gets the same four as `vimhex.cmd`, `vimhexdiff.cmd`,
+`gvimhex.cmd` and `gvimhexdiff.cmd` (see
+[`vimhex` and `vimhexdiff` on Windows](#vimhex-and-vimhexdiff-on-windows)).
+Details are in the file's own comments and in `:help hexpair-vimhex`.
 
 A buffer hexpair has touched is in one of two views, and `:HexPairToggle`
 moves between them:
@@ -1016,7 +1033,8 @@ They default to the console `vim`. Set `VIMHEX_VIM` for another one —
 `gvim` for the GUI, or a full path such as
 `C:\Program Files\Vim\vim91\gvim.exe`.
 
-`gvimhex.cmd` and `gvimhexdiff.cmd` are the same two commands again,
+`gvimhex.cmd` and `gvimhexdiff.cmd` are the same two commands again
+(`gvimhex`/`gvimhexdiff` in `hexpair.bashrc` are the Bash pair),
 defaulting to `gvim` instead — for double-clicking a file, or wiring into
 the Explorer context menu below, where there is no console for `vim` to run
 in and no way to pass `VIMHEX_VIM` in anyway. They delegate to
