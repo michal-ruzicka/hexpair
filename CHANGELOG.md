@@ -28,6 +28,12 @@ and this project adheres to
   `:help :HexPairModifiedShow`.
 
 ### Changed
+- **The `$-N` jumps are in the README now.** `:HexPairPageGoto`,
+  `:HexPairGoOffset` and `:HexPairOpen`'s `[page]` have taken `$-N` — N back
+  from the end, the thing a bare `-N` cannot say — since v2.3.0, and every
+  place the README listed the forms stopped at `$`. Both prompts
+  (`<Leader>g`, `<Leader>b`) too, and `<Leader>b` had not been shown taking
+  `+N`/`-N` either.
 - **`README.md` opens with a *TL;DR: Quick Start*.** Install, source, run —
   and then the complete key and command reference on one screen, which is
   what the sixty-odd pages under it were not. The commands there are typed

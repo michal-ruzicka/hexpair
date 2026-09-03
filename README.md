@@ -128,7 +128,7 @@ let mapleader = ','   " i.e. in Normal mode type `,h` to toggle hex <-> text
 <Leader>K   " ... discarding unwritten edits
 <Leader>g   " ask which page: N, +N, -N, $, $-N
 <Leader>G   " ... discarding unwritten edits
-<Leader>b   " ask which byte: 1-based decimal or 0x..., +N and -N to step
+<Leader>b   " ask which byte: 1-based decimal or 0x..., +N, -N, $, $-N
 <Leader>B   " ... discarding unwritten edits
 <Leader>?   " where am I: page X of Y, the byte range, the size, the byte
 <Leader>=   " bring the other scroll-bound view onto the byte I am on
@@ -339,8 +339,8 @@ nmap <Leader>r <Plug>(HexPairRefresh)       " regenerate offsets/ASCII, no write
 " Moving around the file
 nmap <Leader>j <Plug>(HexPairPageNext)      " next page
 nmap <Leader>k <Plug>(HexPairPagePrev)      " previous page
-nmap <Leader>g <Plug>(HexPairPageGoto)      " prompt for a page (N, +N, -N, $)
-nmap <Leader>b <Plug>(HexPairGoOffset)      " prompt for a byte, 1-based (0x... ok)
+nmap <Leader>g <Plug>(HexPairPageGoto)      " prompt for a page (N, +N, -N, $, $-N)
+nmap <Leader>b <Plug>(HexPairGoOffset)      " prompt for a byte, 1-based (0x..., +N, -N, $, $-N)
 nmap <Leader>? <Plug>(HexPairPages)         " where am I: page, range, cursor byte
 nmap <Leader>= <Plug>(HexPairSyncViews)     " bring the other bound view to my byte
 
@@ -486,9 +486,9 @@ page.
 | `:HexPairUnhex[!]` | A buffer that toggled from a plain buffer: back to the ordinary, unpaged, non-binary view, re-opened with the options it had before; `!` discards unwritten edits to the page. A buffer opened as hex has no plain view to return to, and this says so |
 | `:HexPairGoHex` / `:HexPairGoAscii` / `:HexPairSwap` | Move the cursor between the HEX and ASCII columns, staying on the same byte |
 | `:HexPairRefresh` | Regenerate the offset and ASCII columns from the current hex payload, without writing |
-| `:HexPairOpen {file} [page]` | Open `{file}` paged, without loading it; `[page]` takes `$` and `+N`/`-N` too |
-| `:HexPairPageNext[!]` / `:HexPairPagePrev[!]` / `:HexPairPageGoto[!] {page}` | Turn pages (`!` discards unwritten changes); `{page}` is a number, `+N`/`-N` to step, or `$` for the last one |
-| `:HexPairGoOffset[!] {byte}` | Jump to a byte, decimal or `0x`-prefixed, turning the page if needed; 1-based, like the banner. `+N` / `-N` step from where the cursor is |
+| `:HexPairOpen {file} [page]` | Open `{file}` paged, without loading it; `[page]` takes `+N`/`-N`, `$` and `$-N` too |
+| `:HexPairPageNext[!]` / `:HexPairPagePrev[!]` / `:HexPairPageGoto[!] {page}` | Turn pages (`!` discards unwritten changes); `{page}` is a number, `+N`/`-N` to step, `$` for the last one, or `$-N` for N back from it |
+| `:HexPairGoOffset[!] {byte}` | Jump to a byte, decimal or `0x`-prefixed, turning the page if needed; 1-based, like the banner. `+N` / `-N` step from where the cursor is, `$` is the last byte and `$-N` is N back from it (`$-0x10` too) |
 | `:HexPairPages` | Report page X of Y, the offsets covered, the file size and the byte under the cursor |
 | `:HexPairSyncViews` | Bring every scroll-bound view onto the byte this one is on |
 | `:HexPairInspect[!]` | Read the bytes at the cursor as numbers: 8/16/32/64-bit, unsigned and signed, both endiannesses, and both IEEE 754 floats — and mark them on the page; `!` unmarks them |
@@ -1292,16 +1292,16 @@ is ever read.
 
 | Command | Description |
 |---|---|
-| `:HexPairOpen {file} [page]` | Open `{file}` paged at `[page]` (1-based, default 1; `$` and `+N`/`-N` work here too) without loading it |
+| `:HexPairOpen {file} [page]` | Open `{file}` paged at `[page]` (1-based, default 1; `+N`/`-N`, `$` and `$-N` work here too) without loading it |
 | `:HexPairPageNext[!]` / `:HexPairPagePrev[!]` | Turn the page; refuses to discard unwritten changes without `!` |
-| `:HexPairPageGoto[!] {page}` | Jump to page `{page}`: a number, `+N` / `-N` to step, or `$` for the last one |
-| `:HexPairGoOffset[!] {byte}` | Jump to a byte, decimal or `0x`-prefixed; 1-based, like the banner |
+| `:HexPairPageGoto[!] {page}` | Jump to page `{page}`: a number, `+N` / `-N` to step, `$` for the last one, or `$-N` for N back from it |
+| `:HexPairGoOffset[!] {byte}` | Jump to a byte, decimal or `0x`-prefixed; 1-based, like the banner. `+N` / `-N` step from the cursor, `$` is the last byte, `$-N` is N back from it |
 | `:HexPairPages` | Report the current page, total pages, the byte range shown, and the byte under the cursor |
 | `:HexPairSplit [page]` / `:HexPairVSplit [page]` | A second view of the same file in another window, at `[page]` — see [above](#two-views-of-one-file) |
 
 `<Plug>(HexPairPageGoto)` (mapping example above) prompts for a page
 with `input()` instead of requiring a typed `:HexPairPageGoto {page}` —
-press the key, type a number (or `+2`, `-1`, `$`), Enter.
+press the key, type a number (or `+2`, `-1`, `$`, `$-5`), Enter.
 `<Plug>(HexPairPageGotoForce)` is the same prompt but discards unsaved
 changes without asking, like the `{N}` variant with `!`.
 

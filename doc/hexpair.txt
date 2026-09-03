@@ -588,8 +588,9 @@ the command line or a shell wrapper (see |hexpair-paged| for one).
 
 |<Plug>(HexPairPageGoto)| and |<Plug>(HexPairGoOffset)| prompt with
 |input()| for the number a bare <Plug> target cannot carry: press the
-key, type a page (a number, +N or -N to step, $ for the last) or a byte
-offset (decimal, or 0x-prefixed), Enter.  An empty answer cancels.
+key, type a page (a number, +N or -N to step, $ for the last, $-N for N
+back from it) or a byte offset (decimal or 0x-prefixed, with the same
++N, -N, $ and $-N), Enter.  An empty answer cancels.
 
 |<Plug>(HexPairSelection)| is the one target worth mapping in TWO modes:
 in Visual mode it reports the selection you are making, in Normal mode
