@@ -3740,62 +3740,6 @@ call add(out, HexPairStatus())
 HexPairGoOffset 1100
 silent HexPairDiffNext
 call add(out, HexPairStatus())
-" The Blob half of the same four questions, asked of the same bytes.
-" Appended after everything above so the line numbers of the checks that
-" were here first do not move.
-call add(out, string([HexPairPagedBlobFirstAgreement(0z001122, 0z001122), HexPairPagedBlobFirstAgreement(0zff1122, 0z001122), HexPairPagedBlobFirstAgreement(0zffee22, 0z0011dd), HexPairPagedBlobFirstAgreement(0z001122, 0z0011)]))
-call add(out, string([HexPairPagedBlobLastAgreement(0z001122, 0z001122), HexPairPagedBlobLastAgreement(0z0011ff, 0z001100), HexPairPagedBlobLastAgreement(0zffee22, 0z0011dd), HexPairPagedBlobLastAgreement(0z001122, 0z0011)]))
-call add(out, string([HexPairPagedBlobFirstDifference(0zabcdef, 0zabcdef), HexPairPagedBlobFirstDifference(0zabcdef, 0zab99ef), HexPairPagedBlobFirstDifference(0zabcd, 0zabcdef), HexPairPagedBlobFirstDifference(0z, 0z)]))
-call add(out, string([HexPairPagedBlobLastDifference(0zabcdef, 0zabcdef), HexPairPagedBlobLastDifference(0zabcdef, 0z99cdef), HexPairPagedBlobLastDifference(0zabcd, 0zabcdef), HexPairPagedBlobLastDifference(0z, 0z)]))
-" And the two families held against each other over bytes nobody chose by
-" hand: a pseudo-random block, spoiled in a run, at the very front, at the
-" very end and not at all, each also truncated - asked of both readers and
-" required to answer alike. Which reader a Vim uses is decided by a has(),
-" so what has to be true is that it cannot matter.
-let mismatches = []
-let seed = 12345
-let bytes = []
-for i in range(4096)
-  let seed = (seed * 1103515245 + 12345) % 2147483648
-  call add(bytes, seed / 65536 % 256)
-endfor
-function! Hexof(l) abort
-  return join(map(copy(a:l), 'printf("%02x", v:val)'), '')
-endfunction
-function! Blobof(l) abort
-  let b = 0z
-  for v in a:l
-    call add(b, v)
-  endfor
-  return b
-endfunction
-function! Halve(n) abort
-  return a:n < 0 ? -1 : a:n / 2
-endfunction
-for spoil in [[], [[100, 0xff]], [[0, 0x01], [1, 0x02], [2, 0x03]], [[4095, 0x00]]]
-  for cut in [4096, 4000, 1]
-    let other = copy(bytes)[0 : cut - 1]
-    for pair in spoil
-      if pair[0] < len(other)
-        let other[pair[0]] = pair[1]
-      endif
-    endfor
-    let mh = Hexof(bytes)
-    let th = Hexof(other)
-    let mb = Blobof(bytes)
-    let tb = Blobof(other)
-    let hexans = [Halve(HexPairPagedFirstDifference(mh, th)),
-          \ Halve(HexPairPagedLastDifference(mh, th)),
-          \ HexPairPagedFirstAgreement(mh, th), HexPairPagedLastAgreement(mh, th)]
-    let blobans = [HexPairPagedBlobFirstDifference(mb, tb),
-          \ HexPairPagedBlobLastDifference(mb, tb),
-          \ HexPairPagedBlobFirstAgreement(mb, tb), HexPairPagedBlobLastAgreement(mb, tb)]
-    if hexans != blobans
-      call add(mismatches, printf('spoil %s cut %d: hex %s blob %s', string(spoil), cut, string(hexans), string(blobans)))
-    endif
-  endfor
-endfor
-call add(out, empty(mismatches) ? 'the two agree' : join(mismatches, ' ;; '))
 call writefile(out, '$WORK/trun.out')
 qa!
 EOF
@@ -3823,22 +3767,116 @@ check "and again to the one before that" "hex 1/10 @0x2 (2)" \
     "$(sed -n 8p "$WORK/trun.out")"
 check "forwards from inside it skips to the next" "hex 10/10 @0x1388 (5000)" \
     "$(sed -n 9p "$WORK/trun.out")"
-# The Blob readers answer the same four questions in bytes. Where the hex
-# ones count nibbles - the two differences - the caller halves, so these
-# are the numbers the jumps above actually run on.
-check "the Blob reader agrees about the first agreement" "[0, 1, -1, 0]" \
-    "$(sed -n 10p "$WORK/trun.out")"
-check "and about the last" "[2, 1, -1, 1]" \
-    "$(sed -n 11p "$WORK/trun.out")"
-check "the first difference comes back in bytes" "[-1, 1, 2, -1]" \
-    "$(sed -n 12p "$WORK/trun.out")"
-check "and so does the last" "[-1, 0, 2, -1]" \
-    "$(sed -n 13p "$WORK/trun.out")"
-# The property that matters is not any one of those numbers: which reader
-# a Vim uses is decided by a has(), so what has to hold is that it cannot
-# change where a jump lands.
-check "hex and Blob answer alike over bytes nobody chose" "the two agree" \
-    "$(sed -n 14p "$WORK/trun.out")"
+
+# --- The two comparison readers answer alike -------------------------------
+# A comparison reads its blocks as raw bytes where readblob() takes an
+# offset and a size, and as hex out of xxd where it does not. Which of the
+# two a Vim uses is decided by a has(), so the property that has to hold is
+# that it CANNOT MATTER: both readers answer the same four questions, and a
+# jump has to land on the same byte either way.
+#
+# Behind the predicate, and not only because the Blob functions would have
+# nothing to read without it: a Blob literal is Vim 8.1.0735 and CI runs
+# this suite against 8.0.0000, where these lines have to be skipped rather
+# than parsed. A legacy :if that is false does not evaluate what is inside
+# it, which is what makes that work.
+cat > "$WORK/tblobcmp.vim" <<EOF
+source $PLUGIN
+source $WORK/tblobcmp-lib.vim
+let out = []
+if HexPairPagedBlobRangeSupported()
+  call add(out, string([HexPairPagedBlobFirstAgreement(0z001122, 0z001122), HexPairPagedBlobFirstAgreement(0zff1122, 0z001122), HexPairPagedBlobFirstAgreement(0zffee22, 0z0011dd), HexPairPagedBlobFirstAgreement(0z001122, 0z0011)]))
+  call add(out, string([HexPairPagedBlobLastAgreement(0z001122, 0z001122), HexPairPagedBlobLastAgreement(0z0011ff, 0z001100), HexPairPagedBlobLastAgreement(0zffee22, 0z0011dd), HexPairPagedBlobLastAgreement(0z001122, 0z0011)]))
+  call add(out, string([HexPairPagedBlobFirstDifference(0zabcdef, 0zabcdef), HexPairPagedBlobFirstDifference(0zabcdef, 0zab99ef), HexPairPagedBlobFirstDifference(0zabcd, 0zabcdef), HexPairPagedBlobFirstDifference(0z, 0z)]))
+  call add(out, string([HexPairPagedBlobLastDifference(0zabcdef, 0zabcdef), HexPairPagedBlobLastDifference(0zabcdef, 0z99cdef), HexPairPagedBlobLastDifference(0zabcd, 0zabcdef), HexPairPagedBlobLastDifference(0z, 0z)]))
+  call add(out, Compare())
+else
+  for i in range(5)
+    call add(out, 'no Blob reader here')
+  endfor
+endif
+call writefile(out, '$WORK/tblobcmp.out')
+qa!
+EOF
+# The property check itself, in functions so that nothing in it runs on a
+# Vim that has no Blobs: a function body is stored as text and only parsed
+# when it is called.
+#
+# No backslash continuation lines anywhere in here. This suite runs Vim
+# without -N, so 'compatible' is on and 'cpoptions' carries C, which turns
+# a leading backslash back into an ordinary character - the plugin gets
+# away with continuations because it sets cpo&vim on the way in and puts
+# it back on the way out, and a file sourced after it does not.
+cat > "$WORK/tblobcmp-lib.vim" <<'VIMEOF'
+" 4096 bytes nobody chose by hand, from a seeded generator so the same
+" bytes are compared on every machine.
+function! Bytes() abort
+  let seed = 12345
+  let out = []
+  for i in range(4096)
+    let seed = (seed * 1103515245 + 12345) % 2147483648
+    call add(out, seed / 65536 % 256)
+  endfor
+  return out
+endfunction
+
+function! Hexof(l) abort
+  return join(map(copy(a:l), 'printf("%02x", v:val)'), '')
+endfunction
+
+function! Blobof(l) abort
+  let b = 0z
+  for v in a:l
+    call add(b, v)
+  endfor
+  return b
+endfunction
+
+" The hex differences count nibbles, which their callers halve; everything
+" else already counts bytes.
+function! Halve(n) abort
+  return a:n < 0 ? -1 : a:n / 2
+endfunction
+
+" The same bytes spoiled four ways - not at all, in the middle, at the very
+" front and at the very end - each also truncated, so a shorter side is
+" covered too.
+function! Compare() abort
+  let mine = Bytes()
+  let mh = Hexof(mine)
+  let mb = Blobof(mine)
+  let bad = []
+  for spoil in [[], [[100, 0xff]], [[0, 0x01], [1, 0x02], [2, 0x03]], [[4095, 0x00]]]
+    for cut in [4096, 4000, 1]
+      let other = copy(mine)[0 : cut - 1]
+      for pair in spoil
+        if pair[0] < len(other)
+          let other[pair[0]] = pair[1]
+        endif
+      endfor
+      let th = Hexof(other)
+      let tb = Blobof(other)
+      let hexans = [Halve(HexPairPagedFirstDifference(mh, th)), Halve(HexPairPagedLastDifference(mh, th)), HexPairPagedFirstAgreement(mh, th), HexPairPagedLastAgreement(mh, th)]
+      let blobans = [HexPairPagedBlobFirstDifference(mb, tb), HexPairPagedBlobLastDifference(mb, tb), HexPairPagedBlobFirstAgreement(mb, tb), HexPairPagedBlobLastAgreement(mb, tb)]
+      if hexans != blobans
+        call add(bad, printf('spoil %s cut %d: hex %s blob %s', string(spoil), cut, string(hexans), string(blobans)))
+      endif
+    endfor
+  endfor
+  return empty(bad) ? 'the two agree' : join(bad, ' ;; ')
+endfunction
+VIMEOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tblobcmp.vim" < /dev/null
+check_splice "the Blob reader agrees about the first agreement" "[0, 1, -1, 0]" \
+    "$(sed -n 1p "$WORK/tblobcmp.out")"
+check_splice "and about the last" "[2, 1, -1, 1]" \
+    "$(sed -n 2p "$WORK/tblobcmp.out")"
+check_splice "the first difference comes back in bytes, not nibbles" "[-1, 1, 2, -1]" \
+    "$(sed -n 3p "$WORK/tblobcmp.out")"
+check_splice "and so does the last" "[-1, 0, 2, -1]" \
+    "$(sed -n 4p "$WORK/tblobcmp.out")"
+check_splice "hex and Blob answer alike over bytes nobody chose" "the two agree" \
+    "$(sed -n 5p "$WORK/tblobcmp.out")"
 
 # --- A file that is longer differs from where it grows --------------------
 cat > "$WORK/tdf2.vim" <<EOF
