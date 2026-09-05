@@ -2565,17 +2565,36 @@ function! HexPairPagedResizeIsInPlaceForTest(newlen, pagelen, base, total) abort
   return s:ResizeIsInPlace(a:newlen)
 endfunction
 
+" How wide the lines of flat hex are asked to be, in bytes. Every line
+" break xxd prints is one more character for the strip below to find and
+" take out, and -p wraps at 30 bytes by default - so the widest line xxd
+" will portably agree to is the cheapest to read. That is 256, its own
+" ceiling for -c (s:bytesperlinemax); newer versions accept more in -p
+" mode and -c 0 for no wrapping at all, and neither can be assumed.
+"
+" Measured over an 8 MiB block: the strip goes from 76 ms to 43 ms, some
+" 8% off a whole-file scan. Dropping the line breaks entirely would save
+" another 40 ms of that - which is why -c 0 is worth naming here and not
+" worth probing for, since the read it hangs off costs 170 ms either way.
+let s:flatcols = 256
+
 " The whole of a file as flat lowercase hex. Shared by both readers: xxd -p
 " over a file it does not have to seek in, which is the fast part of xxd and
 " the part that was never in question.
 function! s:HexFromFile(file) abort
-  let out = s:Run(printf('%s -p %s', s:Xxd(), shellescape(a:file)))
-  " xxd -p prints hex and line breaks and nothing else, so the line breaks
-  " are all there is to remove - the CR because a Windows xxd ends its lines
-  " with one. Two passes over a single character each, rather than one over
-  " a collection: measured on the 2 MB of hex a 1 MiB block comes to, 16 ms
-  " against 51 ms, and a scan of a large file is thousands of those.
-  return substitute(substitute(out, '\n', '', 'g'), '\r', '', 'g')
+  let out = s:Run(printf('%s -p -c %d %s', s:Xxd(), s:flatcols,
+        \ shellescape(a:file)))
+  return s:Flatten(out)
+endfunction
+
+" What xxd -p printed, as one run of hex digits. It prints hex and line
+" breaks and nothing else, so the line breaks are all there is to remove -
+" the CR because a Windows xxd ends its lines with one. Two passes over a
+" single character each, rather than one over a collection: measured on
+" the 2 MB of hex a 1 MiB block comes to, 16 ms against 51 ms, and a scan
+" of a large file is thousands of those.
+function! s:Flatten(out) abort
+  return substitute(substitute(a:out, '\n', '', 'g'), '\r', '', 'g')
 endfunction
 
 function! s:FileHex(file, off, len) abort
@@ -2594,9 +2613,9 @@ function! s:FileHex(file, off, len) abort
     return s:SeekReadHex(a:file, a:off, a:len)
   endif
   try
-    let out = s:Run(printf('%s -p -s %d -l %d %s', s:Xxd(), a:off, a:len,
-          \ shellescape(a:file)))
-    return substitute(substitute(out, '\n', '', 'g'), '\r', '', 'g')
+    let out = s:Run(printf('%s -p -c %d -s %d -l %d %s', s:Xxd(),
+          \ s:flatcols, a:off, a:len, shellescape(a:file)))
+    return s:Flatten(out)
   catch /^hexpair:/
     " A read that failed - a file that went away, an xxd that could not
     " open it - is an empty block, and the caller finds nothing in it.

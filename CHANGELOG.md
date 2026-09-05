@@ -28,6 +28,14 @@ and this project adheres to
   `:help :HexPairModifiedShow`.
 
 ### Changed
+- **A file-wide scan asks `xxd` for wider lines.** `:HexPairFind` and
+  `:HexPairDiffNext` read the file as flat hex, which means taking the line
+  breaks back out of what `xxd -p` printed — and `-p` wraps at 30 bytes, so
+  a megabyte of file arrived as some 35 000 of them. It is asked for `-c
+  256` now, xxd's own ceiling and therefore the fewest breaks that can be
+  asked for portably: a ninth as many, and about 8% off the wall time of a
+  whole-file scan. Nothing about the result changes — the breaks were being
+  removed either way.
 - **`gvimhex` and `gvimhexdiff` are documented.** `hexpair.bashrc` has
   defined them all along — `vimhex` and `vimhexdiff` with `VIMHEX_VIM`
   defaulting to `gvim` — and said so only in its own comments: neither the
