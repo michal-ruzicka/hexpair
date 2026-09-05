@@ -47,6 +47,9 @@
 "   g:hexpair_page_size        bytes per page (default 128 KiB)
 "   g:hexpair_page_confirm     set to 0 to skip the confirmation a
 "                              length-changing write asks for
+"   g:hexpair_scan_block       bytes a file-wide scan (:HexPairFind,
+"                              :HexPairDiffNext) reads at a time
+"                              (default 8 MiB)
 "   g:hexpair_ruler            set to 1 for a line numbering the byte
 "                              columns of the dump (default 0)
 "   g:hexpair_show_modified    set to 0 to stop marking the bytes edited
@@ -117,6 +120,38 @@ endif
 " project's `vim -es -u NONE` harness.
 if !exists('g:hexpair_page_confirm')
   let g:hexpair_page_confirm = 1
+endif
+
+" How much of the file |:HexPairFind| and |:HexPairDiffNext| take in at a
+" time. Not a page and nothing to do with one: a scan reads the FILE, so
+" this is the only thing that decides what a scan costs in memory, and it
+" is the same for a 1 MiB file and a 1 TiB one.
+"
+" A block costs one xxd process, and then holds the block as hex - twice
+" the block, plus the copies substitute() makes taking the line breaks
+" out, which measured at some eight bytes of Vim per byte of block for a
+" search and sixteen for a comparison, which holds two blocks at once.
+"
+" So the setting trades processes against memory, and it is worth
+" understanding that the trade runs out. Measured over a 256 MiB file
+" scanned end to end, block against wall time and peak RSS:
+"
+"     1 MiB   10.3 s    19 MB       16 MiB   8.1 s   142 MB
+"     4 MiB    8.4 s    44 MB       64 MiB   7.9 s   536 MB
+"     8 MiB    8.4 s    77 MB      128 MiB   8.2 s  1036 MB
+"
+" A process costs about 8 ms to start, so raising the block from 1 MiB to
+" 8 MiB is where nearly all of that 8 ms x 256 goes away. Past it there
+" is nothing left to buy: what a scan spends is xxd turning bytes into
+" hex (some 64 MB/s) and Vim reading, stripping and matching two
+" characters for every byte, and none of that cares how the file is cut
+" up. 64 MiB is seven times the memory of 8 MiB for half a percent of the
+" time, and it is a legal setting rather than a recommended one.
+"
+" The default is therefore 8 MiB: the knee of that curve, and 77 MB of a
+" scan is still a number a plugin may spend without asking.
+if !exists('g:hexpair_scan_block')
+  let g:hexpair_scan_block = 8 * 1024 * 1024
 endif
 
 " A ruler line under the top banner, numbering the byte columns of the
@@ -370,10 +405,52 @@ function! HexPairPagedSizeError(size, bytesperline) abort
   return ''
 endfunction
 
-" Blocks the file-wide comparison reads in. Smaller than the write's,
-" because two of them are held as hex at once - a megabyte of file is two
-" megabytes of hex on each side.
-let s:diffblock = 1024 * 1024
+" The range g:hexpair_scan_block is allowed. The floor is where a process
+" per block stops being noise - 8 ms of it against 20 ms of work, and it
+" only gets worse below that - and it is also comfortably longer than any
+" pattern that could be typed at a : prompt, which the scan needs (see
+" s:FindScan()). The ceiling is a memory limit and nothing else: a
+" comparison holds two blocks as hex, so 1 GiB of block is some 16 GiB of
+" Vim, which is past the point where naming a larger number could be
+" doing anyone a favour.
+"
+" Neither is a correctness boundary, unlike s:pagesizemax: a block is
+" handed to xxd's -l as a page is, and 1 GiB is well inside the 32-bit
+" number that takes.
+let s:scanblockmin = 1024 * 1024
+let s:scanblockmax = 1024 * 1024 * 1024
+
+" Same shape as HexPairPagedSizeError(): the value is taken as an argument
+" rather than read from g: here, so the suite can exercise the branches
+" without setting global state.
+function! HexPairPagedScanBlockError(block) abort
+  if a:block < s:scanblockmin || a:block > s:scanblockmax
+    return printf('hexpair: g:hexpair_scan_block (%d) must be between %d '
+          \ . 'and %d bytes (1 MiB to 1 GiB) - below that a scan spends '
+          \ . 'its time starting one xxd per block, and above it a '
+          \ . 'comparison holds two blocks of hex at sixteen bytes of '
+          \ . 'Vim per byte of block. The default is 8 MiB.',
+          \ a:block, s:scanblockmin, s:scanblockmax)
+  endif
+  return ''
+endfunction
+
+" The block every file-wide scan reads in, checked as it is read.
+"
+" Checked HERE rather than when the view is opened, which is where
+" g:hexpair_page_size is checked, because the two are not the same kind of
+" setting: a page size is baked into the buffer at :HexPairOpen and a scan
+" block is not baked into anything, so this one can be changed between two
+" presses of the same key and has to be believed when it is. Each scan
+" reads it once, into a local - so a value that changes mid-scan cannot
+" move a block seam under the loop that is walking them.
+function! s:ScanBlock() abort
+  let err = HexPairPagedScanBlockError(g:hexpair_scan_block)
+  if !empty(err)
+    throw err
+  endif
+  return g:hexpair_scan_block
+endfunction
 
 " How much of two runs of hex is compared at once when counting the bytes
 " that differ (HexPairPagedCountDifferences()). Measured over a 128 KiB
@@ -5353,16 +5430,25 @@ function! s:FindScan(from, forward) abort
   let total = b:hexpair_page_total
   let pat = s:find.hex
   let span = s:find.bytes - 1
+  " The forward scan steps on by the block LESS the overlap, so a block
+  " that is not longer than the pattern would step by nothing and read the
+  " same bytes for ever. g:hexpair_scan_block cannot be set that small
+  " (s:scanblockmin is a megabyte) and no pattern typed at a : prompt comes
+  " near it - but the block is a setting now and the pattern is input, and
+  " a loop that cannot advance is not a thing to leave standing on the
+  " strength of both.
+  let block = s:ScanBlock()
+  let block = block > span ? block : span + 1
   if a:forward
     let off = a:from
     while off < total
       call s:Progress('searching', off, total)
-      let len = s:diffblock < total - off ? s:diffblock : total - off
+      let len = block < total - off ? block : total - off
       let idx = HexPairPagedFindInHex(s:FileHex(file, off, len), pat, 0, 1)
       if idx >= 0
         return off + idx / 2
       endif
-      if len < s:diffblock
+      if len < block
         return -1
       endif
       let off += len - span
@@ -5372,7 +5458,7 @@ function! s:FindScan(from, forward) abort
   let end = a:from
   while end > 0
     call s:Progress('searching back', total - end, total)
-    let start = end - s:diffblock
+    let start = end - block
     let start = start < 0 ? 0 : start
     " Read past the block's end by the pattern's span, so a match that
     " starts inside it and reaches beyond is found whole.
@@ -5569,6 +5655,13 @@ function! s:FindFrom(from, forward) abort
     endif
   catch /^Vim:Interrupt$/
     call s:Stopped()
+    return
+  " A scan is where g:hexpair_scan_block is read, so it is also where a
+  " bad one is found - the same way |:HexPairDiffNext| reports it.
+  catch /^hexpair:/
+    echohl ErrorMsg
+    echomsg v:exception
+    echohl None
     return
   endtry
   echohl ErrorMsg
@@ -6311,9 +6404,10 @@ endfunction
 " beyond the first block. If they never agree again, the end of the
 " longer file.
 function! s:AgreementAfter(other, from, total) abort
+  let block = s:ScanBlock()
   let off = a:from
   while off < a:total
-    let len = s:diffblock < a:total - off ? s:diffblock : a:total - off
+    let len = block < a:total - off ? block : a:total - off
     let mine   = s:FileHex(b:hexpair_page_file, off, len)
     let theirs = s:FileHex(a:other, off, len)
     if mine ==# theirs
@@ -6332,9 +6426,10 @@ endfunction
 " And backwards: the last byte BEFORE a:before at which they agree, or -1
 " when the change reaches the start of the file.
 function! s:AgreementBefore(other, before, total) abort
+  let block = s:ScanBlock()
   let end = a:before
   while end > 0
-    let len = s:diffblock < end ? s:diffblock : end
+    let len = block < end ? block : end
     let start = end - len
     let mine   = s:FileHex(b:hexpair_page_file, start, len)
     let theirs = s:FileHex(a:other, start, len)
@@ -6353,10 +6448,11 @@ endfunction
 
 " The next byte at or after a:from at which the two files differ, or -1.
 function! s:DifferenceAfter(other, from, total) abort
+  let block = s:ScanBlock()
   let off = a:from
   while off < a:total
     call s:Progress('comparing', off, a:total)
-    let len = s:diffblock < a:total - off ? s:diffblock : a:total - off
+    let len = block < a:total - off ? block : a:total - off
     let idx = HexPairPagedFirstDifference(
           \ s:FileHex(b:hexpair_page_file, off, len),
           \ s:FileHex(a:other, off, len))
@@ -6370,10 +6466,11 @@ endfunction
 
 " The last byte before a:before at which they differ, or -1.
 function! s:DifferenceBefore(other, before, total) abort
+  let block = s:ScanBlock()
   let off = a:before
   while off > 0
     call s:Progress('comparing back', a:total - off, a:total)
-    let len = s:diffblock < off ? s:diffblock : off
+    let len = block < off ? block : off
     let start = off - len
     let idx = HexPairPagedLastDifference(
           \ s:FileHex(b:hexpair_page_file, start, len),

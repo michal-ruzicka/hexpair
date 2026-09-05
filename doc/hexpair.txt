@@ -844,6 +844,57 @@ g:hexpair_split_views   Whether a window that ends up showing a page a
                         the temporary file it pages belongs to that buffer
                         - so a :split of one stays an ordinary split.
 
+                                                        *g:hexpair_scan_block*
+g:hexpair_scan_block    How much of the FILE a file-wide scan reads at a
+                        time - |:HexPairFind|, |:HexPairFindNext| and the
+                        comparison behind |:HexPairDiffNext|.  Default:
+                        8 MiB (8 * 1024 * 1024).  Must be between 1 MiB
+                        and 1 GiB. >
+
+    let g:hexpair_scan_block = 32 * 1024 * 1024
+<
+                        Nothing to do with |g:hexpair_page_size|: a page
+                        is what you are shown, a block is what a scan
+                        reads and never displays.  This is the only thing
+                        that decides what a scan costs in memory, and it
+                        costs the same for a 1 MiB file and a 1 TiB one.
+
+                        Each block is one `xxd` process, and is then held
+                        as hex - about eight bytes of Vim per byte of
+                        block for a search, sixteen for a comparison,
+                        which holds a block of each file at once.  So a
+                        bigger block spends memory to start fewer
+                        processes, and the trade runs out early.
+                        Measured on a 256 MiB file scanned end to end:
+>
+                            1 MiB   10.3 s    19 MB
+                            4 MiB    8.4 s    44 MB
+                            8 MiB    8.4 s    77 MB
+                           16 MiB    8.1 s   142 MB
+                           64 MiB    7.9 s   536 MB
+                          128 MiB    8.2 s  1036 MB
+<
+                        A process costs some 8 ms to start, so going from
+                        1 MiB to 8 MiB is where nearly all of that goes
+                        away.  Past it there is nothing left to buy: what
+                        a scan spends is xxd turning bytes into hex (some
+                        64 MB/s) and Vim reading, stripping and matching
+                        two characters for every byte of the file, and
+                        none of that cares how the file is cut up.  The
+                        larger values are legal, not recommended.
+
+                        The limits are cost boundaries, not correctness
+                        ones - unlike |g:hexpair_page_size|'s cap.  Below
+                        1 MiB a scan spends its time starting processes;
+                        above 1 GiB a comparison would want some 16 GiB
+                        of Vim.
+
+                        It is read at the start of each scan, not when
+                        the view is opened, so changing it takes effect
+                        on the next search or jump.  A bad value is
+                        reported there too, by the command that tried to
+                        use it.
+
                                                              *g:hexpair_debug*
 g:hexpair_debug         Trace every mapping between a cursor position and
                         a byte offset to |:messages|, for diagnosing a
@@ -1387,7 +1438,8 @@ HexPairOpenFile({file} [, {page}])
                         side by side this way.
 
                                                         *hexpair-progress*
-                        Both files are read a megabyte at a time, so
+                        Both files are read a block at a time
+                        (|g:hexpair_scan_block|, 8 MiB by default), so
                         neither has to fit in memory - but on a large one
                         that takes long enough to look like a hang, so
                         from 16 MB up the scan says how far it has got: >

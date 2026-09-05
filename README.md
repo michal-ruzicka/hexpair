@@ -917,6 +917,13 @@ values shown are the defaults, so uncomment a line only to change one.
 " and asks first. Set it to 0 to answer yes automatically, e.g. in a script.
 " let g:hexpair_page_confirm = 1
 
+" How much of the FILE a file-wide scan reads at a time - :HexPairFind and
+" the comparison behind :HexPairDiffNext. Nothing to do with a page: this
+" is what a scan costs in memory, and it is the same for any size of file.
+" Between 1 MiB and 1 GiB; bigger buys fewer xxd processes and little else
+" past 8 MiB - see "What it costs" below.
+" let g:hexpair_scan_block = 8 * 1024 * 1024
+
 " Keep the global 'paste' option on while the cursor is in a hex buffer,
 " and restore it when the cursor leaves. 0 leaves 'paste' alone.
 " let g:hexpair_paste = 1
@@ -1409,6 +1416,32 @@ The one exception to all of this is `:HexPairToggle` on a file you have
 already opened normally: by the time you press it, Vim has read the whole
 file into the buffer. That is exactly what `:HexPairOpen` (and `vimhex`)
 exist to avoid — they read only the page they show.
+
+**A file-wide scan** — `:HexPairFind`, and the comparison behind
+`:HexPairDiffNext` — is the other thing that reads more than a page, and
+it reads the file in blocks of `g:hexpair_scan_block` (8 MiB by default,
+between 1 MiB and 1 GiB). That block is the whole of what a scan costs in
+memory, whatever the file's size: about eight bytes of Vim per byte of
+block for a search, sixteen for a comparison, which holds a block of each
+file at once. Each block is one `xxd` process, so a bigger one starts
+fewer of them — and that is all it buys, which runs out early. Scanning a
+256 MiB file end to end:
+
+| Block | Time | Memory |
+|---|---|---|
+| 1 MiB | 10.3 s | 19 MB |
+| 4 MiB | 8.4 s | 44 MB |
+| **8 MiB** (default) | **8.4 s** | **77 MB** |
+| 16 MiB | 8.1 s | 142 MB |
+| 64 MiB | 7.9 s | 536 MB |
+| 128 MiB | 8.2 s | 1036 MB |
+
+A process costs some 8 ms to start, so 1 MiB → 8 MiB is where nearly all
+of that goes away; past it there is nothing left to buy. What a scan
+actually spends is `xxd` turning bytes into hex (some 64 MB/s here) and
+Vim reading, stripping and matching two characters for every byte of the
+file, and none of that cares how the file is cut up. The larger values
+are legal, not recommended.
 
 ## Requirements
 

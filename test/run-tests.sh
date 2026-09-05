@@ -258,6 +258,22 @@ _fd[700:705] = b'hello'
 open(os.path.join(w, 'find1.bin'), 'wb').write(bytes(_fd))
 open(os.path.join(w, 'rep1.bin'), 'wb').write(bytes(_fd))
 open(os.path.join(w, 'rep2.bin'), 'wb').write(bytes(_fd))
+# fixtures whose only occurrence of a pattern STRADDLES a SCAN BLOCK
+# boundary, which is a different seam from a page's: a scan reads the file
+# in blocks of g:hexpair_scan_block and the smallest one allowed is 1 MiB,
+# so this is the smallest file that has such a seam in it. The needle sits
+# across it (bytes 1048575-1048578, 1-based), and there is one more early
+# on so a backward scan has somewhere to go; the ramp filler cannot contain
+# the needle, since consecutive bytes of it always rise by one.
+_sm = bytearray(bytes(i % 256 for i in range(1024 * 1024 + 2048)))
+_sm[1000:1004] = b'\xde\xad\xbe\xef'
+_sm[1024 * 1024 - 2:1024 * 1024 + 2] = b'\xde\xad\xbe\xef'
+open(os.path.join(w, 'seam1.bin'), 'wb').write(bytes(_sm))
+# and the same file with ONE byte changed just past the seam, so a
+# comparison has to cross it to find the change
+_sm2 = bytearray(_sm)
+_sm2[1024 * 1024 + 5] ^= 0xff
+open(os.path.join(w, 'seam2.bin'), 'wb').write(bytes(_sm2))
 # a fixture whose only occurrence of a pattern STRADDLES a page boundary:
 # with the 512-byte pages the suite uses, "64 20" sits at the last byte of
 # page 1 and the first of page 2
@@ -881,6 +897,37 @@ check "xxd's own 256-column ceiling is allowed" "''" \
 check "and one column past it is not" \
     "hexpair: g:hexpair_bytes_per_line (257) must be between 1 and 256 - xxd's own limit for -c. Any value in that range works and it need not divide anything, but g:hexpair_page_size must be a multiple of it." \
     "$(sed -n 9p "$WORK/t26.out")"
+
+# --- Test 26b: g:hexpair_scan_block validation -----------------------------
+# The other size setting, and the other kind of boundary: this one is a
+# cost limit at both ends rather than a correctness one, so both ends are
+# checked exactly - the value itself and the one next to it.
+cat > "$WORK/t26b.vim" <<EOF
+source $PLUGIN
+let out = []
+call add(out, string(HexPairPagedScanBlockError(8 * 1024 * 1024)))
+call add(out, string(HexPairPagedScanBlockError(1024 * 1024)))
+call add(out, HexPairPagedScanBlockError(1024 * 1024 - 1))
+call add(out, string(HexPairPagedScanBlockError(1024 * 1024 * 1024)))
+call add(out, HexPairPagedScanBlockError(1024 * 1024 * 1024 + 1))
+call add(out, HexPairPagedScanBlockError(0))
+call writefile(out, '$WORK/t26b.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/t26b.vim" < /dev/null
+check "the default scan block passes" "''" "$(sed -n 1p "$WORK/t26b.out")"
+check "so does the smallest one allowed" "''" "$(sed -n 2p "$WORK/t26b.out")"
+scanblockmsg="must be between 1048576 and 1073741824 bytes (1 MiB to 1 GiB) - below that a scan spends its time starting one xxd per block, and above it a comparison holds two blocks of hex at sixteen bytes of Vim per byte of block. The default is 8 MiB."
+check "one byte under it is not" \
+    "hexpair: g:hexpair_scan_block (1048575) $scanblockmsg" \
+    "$(sed -n 3p "$WORK/t26b.out")"
+check "the largest one allowed passes" "''" "$(sed -n 4p "$WORK/t26b.out")"
+check "and one byte over it does not" \
+    "hexpair: g:hexpair_scan_block (1073741825) $scanblockmsg" \
+    "$(sed -n 5p "$WORK/t26b.out")"
+check "nor does a zero" \
+    "hexpair: g:hexpair_scan_block (0) $scanblockmsg" \
+    "$(sed -n 6p "$WORK/t26b.out")"
 
 # --- Test 27: hex-digit width boundary clamping (fabricated total, no real -
 # multi-GiB fixture needed - the bounds/page-count functions are pure) -----
@@ -4613,6 +4660,79 @@ check "and the text view lands on the character it belongs to" \
 # Two bytes of a character replaced by two ASCII ones: the same two bytes.
 check "an edit is marked byte for byte, not character for character" \
     "[[2, 19, 2]]" "$(sed -n 8p "$WORK/tmb.out")"
+
+# ===========================================================================
+# A scan crosses its own block seams
+# ===========================================================================
+# A file-wide scan reads g:hexpair_scan_block bytes at a time, and a match
+# or a change that lies ACROSS one of those seams belongs to no single
+# block. Blocks are made to overlap for exactly that reason, and the
+# overlap is the part of the loop no smaller fixture can reach: with the
+# smallest block the setting allows, the seam is a megabyte in.
+#
+# Both block sizes are asked the same questions: the minimum, where the
+# needle straddles the first seam, and the default, where the whole file
+# is one block and there is no seam at all. The two must answer alike -
+# that is what says the seam is handled rather than merely survived.
+for scanblock in "1024 * 1024" "8 * 1024 * 1024"; do
+    cat > "$WORK/tseam.vim" <<EOF
+source $PLUGIN
+let g:hexpair_page_size = 4096
+let g:hexpair_scan_block = $scanblock
+function! Msg(m) abort
+  let lines = filter(split(a:m, "\n"), 'v:val =~# "hexpair:"')
+  return empty(lines) ? '' : matchstr(lines[-1], 'hexpair:.*')
+endfunction
+let out = []
+HexPairOpen $WORK/seam1.bin
+redir => m1
+silent HexPairFind de ad be ef
+redir END
+call add(out, Msg(m1))
+redir => m2
+silent HexPairFindNext
+redir END
+call add(out, Msg(m2))
+" Backwards over the seam: from the straddling match, the previous one is
+" the early copy, and the one before THAT wraps round to the straddler.
+redir => m3
+silent HexPairFindPrev
+redir END
+call add(out, Msg(m3))
+redir => m4
+silent HexPairFindPrev
+redir END
+call add(out, Msg(m4))
+HexPairDiff $WORK/seam2.bin
+redir => m5
+silent HexPairDiffNext
+redir END
+call add(out, Msg(m5))
+call add(out, fnamemodify('$WORK/seam2.bin', ':~:.'))
+call writefile(out, '$WORK/tseam.out')
+qa!
+EOF
+    "$HEXPAIR_VIM" -es -u NONE -S "$WORK/tseam.vim" < /dev/null
+    check "a match early in the file is found (block $scanblock)" \
+        "hexpair: bytes de ad be ef at byte 1001 (0x3e9)" \
+        "$(sed -n 1p "$WORK/tseam.out")"
+    # 1048575 is the last byte of the first megabyte: two of the needle's
+    # four bytes are in the first block and two are in the second.
+    check "and one lying across a block seam is found whole (block $scanblock)" \
+        "hexpair: bytes de ad be ef at byte 1048575 (0xfffff)" \
+        "$(sed -n 2p "$WORK/tseam.out")"
+    check "the backward scan crosses the seam too (block $scanblock)" \
+        "hexpair: bytes de ad be ef at byte 1001 (0x3e9)" \
+        "$(sed -n 3p "$WORK/tseam.out")"
+    check "and wraps to the straddling one (block $scanblock)" \
+        "hexpair: bytes de ad be ef at byte 1048575 (0xfffff) (wrapped)" \
+        "$(sed -n 4p "$WORK/tseam.out")"
+    # The change is six bytes past the seam, so the comparison has to read
+    # a second block to reach it - the shape a whole-file diff has.
+    check_path "a comparison reaches a change past the first block (block $scanblock)" \
+        "hexpair: next change at byte 1048582 (0x100006) against $(sed -n 6p "$WORK/tseam.out")" \
+        "$(sed -n 5p "$WORK/tseam.out")"
+done
 
 # ===========================================================================
 # Property: any shape of dump writes the bytes it spells

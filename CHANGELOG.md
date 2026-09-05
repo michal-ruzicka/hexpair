@@ -10,6 +10,24 @@ and this project adheres to
 ## [v2.4.0-devel] – 2026-09-02
 
 ### Added
+- **`g:hexpair_scan_block`, how much of the file a scan reads at a time.**
+  `:HexPairFind` and the comparison behind `:HexPairDiffNext` read the file
+  in blocks, and the block was a fixed megabyte — which meant one `xxd`
+  process, and about 8 ms of starting it, for every megabyte of a file that
+  can be terabytes. It is a setting now, between 1 MiB and 1 GiB, and the
+  default is **8 MiB**: that is where the process cost has essentially gone
+  (a 256 MiB scan goes from 10.3 s to 8.4 s) and where the trade stops
+  paying — 64 MiB is seven times the memory for another half a percent of
+  the time, because what a scan really spends is `xxd` turning bytes into
+  hex and Vim matching two characters for every byte of the file. Nothing
+  to do with `g:hexpair_page_size`: a page is what you are shown, a block
+  is what a scan reads and never displays, and the block is the whole of
+  what a scan costs in memory whatever the size of the file — some eight
+  bytes of Vim per byte of block for a search, sixteen for a comparison,
+  which holds a block of each file at once. Read at the start of each
+  scan, so it takes effect on the next search rather than on the next
+  `:HexPairOpen`. The measurements are in the README under *What it costs*
+  and in `:help g:hexpair_scan_block`.
 - **`:HexPairModifiedShow`, what a byte was before you edited it.** The
   marking of unwritten edits covers the **new** byte, so what the file still
   has there is exactly what the screen no longer shows — and no marking can
