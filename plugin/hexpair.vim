@@ -2238,6 +2238,18 @@ function! HexPairPagedSeekReadHexForTest(file, off, len) abort
   return s:SeekReadHex(a:file, a:off, a:len)
 endfunction
 
+" The Blob half of it, so that the reader a scan uses past 2 GiB is held
+" against the same range read the ordinary way. Same reason and same
+" shape: PowerShell only runs on Windows CI, and a small offset there
+" exercises the code a 120 GiB file would.
+function! HexPairPagedSeekReadBlobForTest(file, off, len) abort
+  return s:SeekReadBlob(a:file, a:off, a:len)
+endfunction
+
+function! HexPairPagedFileBlobForTest(file, off, len) abort
+  return s:FileBlob(a:file, a:off, a:len)
+endfunction
+
 " And the xxd side of the same comparison.
 function! HexPairPagedFileHexForTest(file, off, len) abort
   return s:FileHex(a:file, a:off, a:len)
@@ -2398,6 +2410,28 @@ function! s:SeekReadHex(file, off, len) abort
   endif
   try
     return s:HexFromFile(raw)
+  finally
+    call delete(raw)
+  endtry
+endfunction
+
+" ... and as raw bytes, which is the same temp file read straight in. The
+" mirror of s:SeekReadHex() one line down, and cheaper than it by exactly
+" the work it does not do: no xxd, no pipe carrying twice the bytes as
+" text, no line breaks to take back out.
+"
+" readblob() needs no offset here - the temp file holds the range and
+" nothing else - which is what makes this usable past the 2 GiB where
+" readblob() with an offset is the thing that cannot be trusted. A block
+" is at most g:hexpair_scan_block, so the temp file is nowhere near any
+" limit of its own.
+function! s:SeekReadBlob(file, off, len) abort
+  let raw = s:SeekReadRaw(a:file, a:off, a:len)
+  if raw ==# ''
+    return 0z
+  endif
+  try
+    return readblob(raw)
   finally
     call delete(raw)
   endtry
@@ -2726,18 +2760,33 @@ endfunction
 " spelled: a scan compares and searches, and hex was only ever the form
 " xxd could hand a range over in.
 "
-" A read past the end of the file is an empty Blob rather than an error,
-" which is the same answer s:FileHex() gives and the same one the callers
-" already handle. A file that went away throws E484/E485 from readblob()
-" itself; caught here for the same reason the hex reader catches its own
-" failure - a scan reads many blocks and one that cannot be read is an
-" empty one, not the end of the world. Vim's own errors carry the command
-" that raised them ("Vim(let):E484: ..."), which is what keeps CTRL-C
-" ("Vim:Interrupt", no command) out of this catch: swallowing THAT is how
-" a scan of a large file became uninterruptible once already.
+" a:off + a:len, and the same s:XxdCanSeek() the hex reader asks, because
+" READBLOB() SHARES XXD'S CEILING AND SHARES IT SILENTLY: past 2 GiB on
+" Windows it returns an empty Blob and success (s:CopyRange() records the
+" same thing, which is why the copy goes through PowerShell there). An
+" empty block is indistinguishable from a block whose bytes are all gone,
+" so a scan that believed it would answer "no match" and "no change" for
+" everything past the 2 GiB mark of a large file - on files that size,
+" which is the whole reason this plugin exists. The check is named for
+" xxd and is really the platform's 32-bit file offset, which Vim's own
+" reader has too.
+"
+" A read past the END OF THE FILE is a different thing and is an empty
+" Blob rather than an error, which is what s:FileHex() answers there too
+" and what the callers already handle. A file that went away throws
+" E484/E485 from readblob() itself; caught here for the same reason the
+" hex reader catches its own failure - a scan reads many blocks and one
+" that cannot be read is an empty one, not the end of the world. Vim's
+" own errors carry the command that raised them ("Vim(let):E484: ..."),
+" which is what keeps CTRL-C ("Vim:Interrupt", no command) out of this
+" catch: swallowing THAT is how a scan of a large file became
+" uninterruptible once already.
 function! s:FileBlob(file, off, len) abort
   if a:len <= 0
     return 0z
+  endif
+  if !s:XxdCanSeek(a:off + a:len)
+    return s:SeekReadBlob(a:file, a:off, a:len)
   endif
   try
     return readblob(a:file, a:off, a:len)
@@ -5523,7 +5572,12 @@ function! s:FindInBlock(file, off, len, limit, forward) abort
       return at
     endif
     " Declined: let the block's bytes go before the hex reader builds its
-    " own copy of them, which is twice their size again.
+    " own copy of them, which is twice their size again. The block is then
+    " read a second time, which past 2 GiB on Windows is a second
+    " PowerShell start - accepted rather than worked around, because it
+    " takes a pattern whose every byte is common in that block to get
+    " here, and spelling the hex from the Blob in hand would mean a temp
+    " file and a write on the path that is not rare.
     unlet blob
   endif
   let idx = HexPairPagedFindInHex(s:FileHex(a:file, a:off, a:len),

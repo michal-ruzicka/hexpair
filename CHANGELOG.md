@@ -75,7 +75,11 @@ and this project adheres to
   went from **12.4 s to 0.28 s**, and the memory from 113 MB to 47 MB.
   Nothing about the answers changes, and a Vim without that patch keeps the
   `xxd` reader — the suite holds the two against each other and requires
-  them to agree.
+  them to agree. Past 2 GiB on native Windows `readblob()` shares `xxd`'s
+  32-bit limit, and answers an out-of-range read with an empty Blob *and*
+  success, so there the bytes come out of the temp file PowerShell already
+  writes for that case — the fast comparison still applies, only the read in
+  front of it is the slow one.
 - **A file-wide scan asks `xxd` for wider lines.** `:HexPairFind` and
   `:HexPairDiffNext` read the file as flat hex, which means taking the line
   breaks back out of what `xxd -p` printed — and `-p` wraps at 30 bytes, so

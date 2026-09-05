@@ -4059,10 +4059,27 @@ if has('win32')
   call add(out, xxd ==# alt ? 'agree' : 'DIFFER: ' . xxd . ' vs ' . alt)
   call add(out, strlen(alt) . ' ' . (alt =~# '^[0-9a-f]*\$' ? 'lowercase-hex' : 'NOT-HEX'))
   call add(out, string(HexPairPagedSeekReadHexForTest('$WORK/diffa.bin', 99999, 64)))
+  " The same for the reader a scan uses past 2 GiB: raw bytes out of the
+  " same temp file, which must be the bytes readblob() gives where BOTH
+  " can reach - the range past the end being empty on both, too.
+  if HexPairPagedBlobRangeSupported()
+    let blob = HexPairPagedFileBlobForTest('$WORK/diffa.bin', 1000, 64)
+    let balt = HexPairPagedSeekReadBlobForTest('$WORK/diffa.bin', 1000, 64)
+    call add(out, blob ==# balt ? 'agree' : 'DIFFER: ' . string(blob) . ' vs ' . string(balt))
+    call add(out, len(balt) . ' bytes, hex ' . (HexPairPagedFileHexForTest('$WORK/diffa.bin', 1000, 64) ==# tolower(substitute(string(balt), '^0z\|[.]', '', 'g')) ? 'matches' : 'DIFFERS'))
+    call add(out, len(HexPairPagedSeekReadBlobForTest('$WORK/diffa.bin', 99999, 64)) . ' past the end')
+  else
+    call add(out, 'agree')
+    call add(out, '64 bytes, hex matches')
+    call add(out, '0 past the end')
+  endif
 else
   call add(out, 'agree')
   call add(out, '128 lowercase-hex')
   call add(out, "''")
+  call add(out, 'agree')
+  call add(out, '64 bytes, hex matches')
+  call add(out, '0 past the end')
 endif
 call writefile(out, '$WORK/tblob.out')
 qa!
@@ -4074,6 +4091,16 @@ check "and comes back as flat lowercase hex" \
     "128 lowercase-hex" "$(sed -n 2p "$WORK/tblob.out")"
 check "and past the end it is nothing, not something" "''" \
     "$(sed -n 3p "$WORK/tblob.out")"
+# The reader a SCAN uses past 2 GiB. readblob() with an offset cannot go
+# there on Windows - it answers with an empty Blob and success, which a
+# scan would read as "nothing here" - so past that mark the bytes come out
+# of the same PowerShell temp file the hex reader uses, read straight in.
+check "the byte reader past 2 GiB matches the ordinary one" "agree" \
+    "$(sed -n 4p "$WORK/tblob.out")"
+check "and holds the bytes xxd spells for the same range" \
+    "64 bytes, hex matches" "$(sed -n 5p "$WORK/tblob.out")"
+check "and past the end of the file it is empty, not short" "0 past the end" \
+    "$(sed -n 6p "$WORK/tblob.out")"
 
 # COLD, with no page ever opened. The block above opens one first and says
 # why - "s:xxd is resolved when one is opened" - which is a workaround for a

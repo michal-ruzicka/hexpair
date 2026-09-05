@@ -1343,6 +1343,20 @@ was designed and built in Stage 2 - see "What Stage 2 decided".
   forms, because the two answer in different units and merging them puts
   the nibble trap back. `s:CmpPair()` picks the form once per block and
   the four `s:Cmp*()` dispatchers normalise to BYTES.
+  - **`readblob()` SHARES xxd's 32-bit ceiling on Windows and shares it
+    SILENTLY** - past 2 GiB it returns an empty Blob *and* success
+    (`read_blob()` uses a plain `struct stat`, so `st_size` overflows;
+    `hexpair-windows-2gib` has the detail). `s:FileBlob()` therefore asks
+    the same `s:XxdCanSeek(off + len)` the hex reader asks, and past it
+    reads `s:SeekReadBlob()` - the temp file PowerShell already writes for
+    that case, read straight in, which is `s:SeekReadHex()` minus the xxd
+    and minus the strip. **Do not "simplify" that check away**: without
+    it a scan reports "no match" and "no change" for everything past the
+    2 GiB mark of a large file on Windows, silently, and the platform it
+    happens on is not the one this is developed on. The suite pins it
+    with `HexPairPagedSeekReadBlobForTest()` against
+    `HexPairPagedFileBlobForTest()`, in the `has('win32')` branch that
+    only Windows CI runs.
 - **A search on the byte reader walks ONE byte of the pattern**, since
   Vim has no multi-byte Blob search: `index()` finds a byte value, the
   rest is checked by hand. That loop is a builtin call per candidate,

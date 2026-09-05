@@ -941,6 +941,22 @@ g:hexpair_scan_block    How much of the FILE a file-wide scan reads at a
                         byte reader is asked a question with a known
                         answer before it is trusted with a file.
 
+                        Past 2 GiB on native Windows the byte reader
+                        still applies, but it cannot use |readblob()|
+                        with an offset to get there: that shares xxd's
+                        32-bit limit and, worse, ANSWERS an out-of-range
+                        read with an empty Blob and success
+                        (|hexpair-windows-2gib|).  A scan that believed
+                        it would report "no match" and "no change" for
+                        everything past the 2 GiB mark.  So the same rule
+                        the rest of the plugin follows applies here: past
+                        that offset PowerShell writes the block to a temp
+                        file and the bytes are read out of THAT, which
+                        has no offset to seek to.  The comparison and the
+                        search are then the fast ones; the read in front
+                        of them is the slow one, and it is what dominates
+                        there.
+
                         It is read at the start of each scan, not when
                         the view is opened, so changing it takes effect
                         on the next search or jump.  A bad value is
@@ -1174,10 +1190,14 @@ variable and the bytes come back through a temp file, so a path with a
 space or a quote survives.
 
 PowerShell does ONLY the seek: it writes the page's raw bytes to a temp
-file, and xxd reads both the dump and the flat hex out of that, where there
-is no seeking to do.  xxd's limit was never its formatting.  What is left
-is one process start a page, a few hundred milliseconds; a file-wide scan
-pays it per block.
+file, and what needs them reads that, where there is no seeking to do.
+xxd's limit was never its formatting.  The page's dump and its flat hex
+come out of it through xxd; a file-wide SCAN reads it straight in with
+|readblob()| instead, since a temp file holding one block starts at 0 and
+is nowhere near any limit - so the byte readers of
+|hexpair-scan-readers| work here too, and only the read in front of them
+is the slow one.  What is left is one process start a page, a few hundred
+milliseconds; a file-wide scan pays it per block.
 
 Writing past the limit goes the same way.  `xxd -r` has the same 32-bit
 offsets, so every step that moves bytes is PowerShell's: an overwrite
@@ -1208,8 +1228,11 @@ the start would hand xxd a range it can begin and not finish. >
 
   operation              elsewhere, and <2 GiB       past 2 GiB on Windows
   ---------------------  --------------------------  ---------------------
-  read page/diff/search  xxd -s -l                   PowerShell seeks into
+  read a page            xxd -s -l                   PowerShell seeks into
                                                      a temp; xxd reads that
+  read for diff/search   readblob, or xxd -s -l      PowerShell seeks into
+                         (|hexpair-scan-readers|)    a temp; readblob or
+                                                     xxd reads that
   draw the page          xxd -g 1 -c N               same, offsets
                                                      renumbered in Vim
   overwrite, same size   xxd -r                      PowerShell, verified

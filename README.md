@@ -1439,6 +1439,13 @@ Vim 8.0.0000 too. Over a 256 MiB file:
 | `:HexPairFind` over the whole file | **2.0 s** | 9.1 s |
 | memory | 23 MB | 97 MB |
 
+Past 2 GiB on native Windows both readers still work, and by the route
+that section already describes: `readblob()` shares `xxd`'s 32-bit limit
+there — and answers an out-of-range read with an empty Blob *and* success,
+which a scan would read as "nothing here" — so PowerShell writes the block
+to a temp file and the bytes come out of that. The comparison and the
+search are then the fast ones; the read in front of them is what dominates.
+
 A comparison becomes two reads and a `memcmp`. A search has more to do —
 Vim has no "find these bytes in a Blob" — so it walks every occurrence of
 **one** byte of the pattern and checks the rest by hand, in the plugin's
