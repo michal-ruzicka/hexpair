@@ -1293,14 +1293,20 @@ was designed and built in Stage 2 - see "What Stage 2 decided".
   the new mtime, so the fallback path does not go on complaining.
 - Finding, comparing and marking all rest on **one file read helper**,
   `s:FileHex(file, off, len)` — a byte range of any file as one flat run
-  of lowercase hex. What it strips from xxd's output is the line breaks,
-  and it does that as **two passes over one character each** (`\n`, then
-  `\r` for a Windows xxd) rather than one over a negated collection:
-  measured on the 2 MB of hex a 1 MiB block comes to, 16 ms against
-  51 ms, and a scan of a large file is thousands of those. A 64 MiB
-  `:HexPairDiffNext` went 11.4 s → 5.4 s on that change alone; what is
-  left is `system()` and xxd themselves (4.2 s of the 5.4 s), which is
-  the floor for as long as reading a range of a file means running xxd.
+  of lowercase hex. What it strips from xxd's output is the line breaks
+  (`s:Flatten()`, shared with `s:HexFromFile()`), and it does that as
+  **two passes over one character each** (`\n`, then `\r` for a Windows
+  xxd) rather than one over a negated collection: measured on the 2 MB of
+  hex a 1 MiB block comes to, 16 ms against 51 ms, and a scan of a large
+  file is thousands of those. A 64 MiB `:HexPairDiffNext` went 11.4 s →
+  5.4 s on that change alone; what is left is `system()` and xxd
+  themselves (4.2 s of the 5.4 s), which is the floor for as long as
+  reading a range of a file means running xxd. Both readers ask for
+  **`-c 256`**, xxd's own ceiling for `-c` and so the widest line it will
+  portably give: `-p` wraps at 30 bytes by default, and every break is
+  one more character for the strip to remove (8 MiB block: 76 ms → 43 ms;
+  `-c 0`, no wrapping at all, would make it 3 ms and is too new to
+  assume).
   Two ways of looking at such a run:
   - `HexPairPagedFindInHex()` — where a pattern matches, **on a byte
     boundary**: an index into hex is a nibble and half of them are the
@@ -1321,7 +1327,27 @@ was designed and built in Stage 2 - see "What Stage 2 decided".
     shorter one ends (that is how a longer file compares).
   Blocks overlap by the pattern's length less one byte, so a match across
   a seam is whole in one of them; the diff needs no overlap, since a
-  difference is one byte wide.
+  difference is one byte wide. The forward scan therefore steps on by the
+  block *less* that overlap, so it takes the longer of the block and the
+  pattern: a block no longer than the pattern would step by nothing and
+  read the same bytes for ever.
+- **`g:hexpair_scan_block` is a cost knob, not a correctness one**, and
+  the trade it makes runs out early — do not "tune" it upward on
+  intuition. A block is one `xxd` process and is then held as hex: some
+  **8 bytes of Vim per byte of block** for a search, **16** for a
+  comparison (a block of each file at once). Measured on a 256 MiB file
+  scanned end to end — 1 MiB 10.3 s/19 MB, 4 MiB 8.4/44, **8 MiB
+  8.4/77** (the default), 16 MiB 8.1/142, 64 MiB 7.9/536, 128 MiB
+  8.2/1036. A process costs ~8 ms to start, so 1 → 8 MiB is where that
+  cost goes; past it nothing is left to buy, because what a scan spends
+  is xxd converting (~64 MB/s) and Vim reading, stripping and matching
+  two characters per byte of file, none of which cares how the file is
+  cut up. The 1 MiB / 1 GiB limits are cost boundaries (below: process
+  startup dominates; above: a comparison wants ~16 GiB), *unlike*
+  `s:pagesizemax`, which is where correctness ends. Read once per scan
+  into a local — it is a plain global that can change between two presses
+  of the same key, and re-reading it mid-scan would move a seam under the
+  loop walking them.
 - `HexPairPagedCountDifferences(mine, theirs)` — how many bytes of a page
   differ and where the first one is. **Never walk two runs of hex**: a
   block that matches is one string comparison, and only a block that
@@ -1343,8 +1369,9 @@ was designed and built in Stage 2 - see "What Stage 2 decided".
   line break arrives as two. Cached against `b:changedtick`, because the
   hex view's half is a whole-page scan and the key gets pressed repeatedly.
 - `s:Progress()` / `HexPairPagedProgressText()` — a file-wide scan reads a
-  megabyte at a time and can run for minutes, which is indistinguishable
-  from a hang, so from 16 MB up it says how far it has got. **The redraw
+  block at a time (`g:hexpair_scan_block`, see below) and can run for
+  minutes, which is indistinguishable from a hang, so from 16 MB up it
+  says how far it has got. **The redraw
   goes after the echo and must not be `redraw!`**: a forcing redraw
   repaints from scratch, and what it paints does not include a message a
   running function echoed, so `echo` + `redraw!` wrote the line and wiped

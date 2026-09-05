@@ -4953,7 +4953,7 @@ check "refreshing the other windows leaves this one current" "[1, 1, 2, 5]" \
     "$(cat "$WORK/twin.out")"
 
 # --- What a scan says while it runs ---------------------------------------
-# A scan of a big file reads it a megabyte at a time and can take minutes,
+# A scan of a big file reads it a block at a time and can take minutes,
 # which is indistinguishable from a hang, so it says where it has got to.
 # The message is the part that can be wrong in a way anyone would notice,
 # so it is a pure function and is checked as one.
