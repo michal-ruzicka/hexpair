@@ -859,13 +859,12 @@ g:hexpair_scan_block    How much of the FILE a file-wide scan reads at a
                         that decides what a scan costs in memory, and it
                         costs the same for a 1 MiB file and a 1 TiB one.
 
-                        Each block is one `xxd` process, and is then held
-                        as hex - about eight bytes of Vim per byte of
-                        block for a search, sixteen for a comparison,
-                        which holds a block of each file at once.  So a
-                        bigger block spends memory to start fewer
-                        processes, and the trade runs out early.
-                        Measured on a 256 MiB file scanned end to end:
+                        For a SEARCH each block is one `xxd` process and
+                        is then held as hex, about eight bytes of Vim per
+                        byte of block, so a bigger block spends memory to
+                        start fewer processes - and that trade runs out
+                        early.  Measured on a 256 MiB file scanned end to
+                        end:
 >
                             1 MiB   10.3 s    19 MB
                             4 MiB    8.4 s    44 MB
@@ -883,11 +882,21 @@ g:hexpair_scan_block    How much of the FILE a file-wide scan reads at a
                         none of that cares how the file is cut up.  The
                         larger values are legal, not recommended.
 
+                        A COMPARISON is a different matter on a Vim with
+                        patch 9.0.0795 and +num64: there the blocks are
+                        read with |readblob()| and compared as raw bytes,
+                        so a block costs one byte of Vim per byte of
+                        block on each side and no process at all.  That
+                        reader is some forty times faster than the hex
+                        one and is used whenever it is available; where it
+                        is not, a comparison holds hex on both sides and
+                        the eight-bytes-per-byte figure applies twice.
+
                         The limits are cost boundaries, not correctness
                         ones - unlike |g:hexpair_page_size|'s cap.  Below
                         1 MiB a scan spends its time starting processes;
-                        above 1 GiB a comparison would want some 16 GiB
-                        of Vim.
+                        above 1 GiB a comparison on the hex reader would
+                        want some 16 GiB of Vim.
 
                         It is read at the start of each scan, not when
                         the view is opened, so changing it takes effect

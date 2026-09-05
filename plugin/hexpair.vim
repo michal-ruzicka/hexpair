@@ -347,6 +347,20 @@ endfunction
 " THIS function rather than restating the patch number keeps the answer and
 " the gate from ever disagreeing.
 function! HexPairPagedSpliceSupported() abort
+  return HexPairPagedBlobRangeSupported()
+endfunction
+
+" The same requirement under the name of the OTHER thing it makes
+" possible, which is reading a byte range of a file without running xxd.
+" One predicate because it is literally one patch; two names because a
+" caller should say which of the two it is about - a scan is not a splice
+" and a message about one would be nonsense in the other.
+"
+" What it buys a scan is not a detail: xxd converts at some 64 MB/s and
+" the answer has to come back through a pipe and have its line breaks
+" taken out, where readblob() is a read. Measured over an 8 MiB block,
+" 209 ms against 3 ms.
+function! HexPairPagedBlobRangeSupported() abort
   return has('patch-9.0.0795') && has('num64')
 endfunction
 
@@ -2705,6 +2719,30 @@ function! s:FileHex(file, off, len) abort
     " be caught here and re-thrown either (E608 refuses an exception with
     " a 'Vim' prefix); the answer is not to catch what is not ours.
     return ''
+  endtry
+endfunction
+
+" The same range as raw bytes, for the readers that never need to see it
+" spelled: a scan compares and searches, and hex was only ever the form
+" xxd could hand a range over in.
+"
+" A read past the end of the file is an empty Blob rather than an error,
+" which is the same answer s:FileHex() gives and the same one the callers
+" already handle. A file that went away throws E484/E485 from readblob()
+" itself; caught here for the same reason the hex reader catches its own
+" failure - a scan reads many blocks and one that cannot be read is an
+" empty one, not the end of the world. Vim's own errors carry the command
+" that raised them ("Vim(let):E484: ..."), which is what keeps CTRL-C
+" ("Vim:Interrupt", no command) out of this catch: swallowing THAT is how
+" a scan of a large file became uninterruptible once already.
+function! s:FileBlob(file, off, len) abort
+  if a:len <= 0
+    return 0z
+  endif
+  try
+    return readblob(a:file, a:off, a:len)
+  catch /^Vim(\a\+):E48[45]:/
+    return 0z
   endtry
 endfunction
 
@@ -5953,6 +5991,113 @@ function! HexPairPagedLastDifference(a, b) abort
   return lo
 endfunction
 
+" The same four questions asked of raw bytes instead of hex, for the Vim
+" that can read a range without xxd (|HexPairPagedBlobRangeSupported()|).
+"
+" They are separate functions rather than one pair made to take both
+" forms, because the two forms answer in different units - a hex index is
+" a nibble and half of them are the wrong half, which is the mistake this
+" whole area exists to keep making impossible. These count BYTES, which is
+" what every caller wanted in the first place.
+"
+" Comparing two Blobs is one memcmp, where comparing two runs of hex is a
+" string compare over twice the data that had to be built first: measured
+" over an 8 MiB block, 3 ms against 209 ms of reading and 53 ms of
+" comparing.
+
+" The first byte at which two blocks differ, or -1. Halved, never walked,
+" for the same reason the hex version is.
+function! HexPairPagedBlobFirstDifference(a, b) abort
+  if a:a ==# a:b
+    return -1
+  endif
+  let short = len(a:a) < len(a:b) ? len(a:a) : len(a:b)
+  " One being a prefix of the other IS a difference, where the shorter
+  " one ends - that is how a longer file compares.
+  if short == 0 || a:a[0 : short - 1] ==# a:b[0 : short - 1]
+    return short
+  endif
+  " Invariant: the two agree over [0, lo) and differ somewhere in [lo, hi).
+  let [lo, hi] = [0, short]
+  while hi - lo > 1
+    let mid = (lo + hi) / 2
+    if a:a[lo : mid - 1] ==# a:b[lo : mid - 1]
+      let lo = mid
+    else
+      let hi = mid
+    endif
+  endwhile
+  return lo
+endfunction
+
+" And from the other end: the LAST byte at which they differ, or -1.
+function! HexPairPagedBlobLastDifference(a, b) abort
+  if a:a ==# a:b
+    return -1
+  endif
+  if len(a:a) != len(a:b)
+    return (len(a:a) > len(a:b) ? len(a:a) : len(a:b)) - 1
+  endif
+  " Invariant: they differ somewhere in [lo, hi) and agree over [hi, end).
+  let [lo, hi] = [0, len(a:a)]
+  while hi - lo > 1
+    let mid = (lo + hi) / 2
+    if a:a[mid :] ==# a:b[mid :]
+      let hi = mid
+    else
+      let lo = mid
+    endif
+  endwhile
+  return lo
+endfunction
+
+" The first byte at which they AGREE, or -1. Agreement is not a prefix
+" property and so cannot be halved: a chunk that is identical agrees at
+" its first byte and costs one comparison, and only a chunk that is not
+" gets walked - which is the same bargain the hex version strikes, with
+" the walk over bytes rather than over pairs of characters.
+function! HexPairPagedBlobFirstAgreement(mine, theirs) abort
+  let common = len(a:theirs) < len(a:mine) ? len(a:theirs) : len(a:mine)
+  let at = 0
+  while at < common
+    let span = s:cmpblock < common - at ? s:cmpblock : common - at
+    if a:mine[at : at + span - 1] ==# a:theirs[at : at + span - 1]
+      return at
+    endif
+    let i = 0
+    while i < span
+      if a:mine[at + i] == a:theirs[at + i]
+        return at + i
+      endif
+      let i += 1
+    endwhile
+    let at += span
+  endwhile
+  return -1
+endfunction
+
+" The same from the other end: the LAST byte at which they agree, or -1.
+function! HexPairPagedBlobLastAgreement(mine, theirs) abort
+  let common = len(a:theirs) < len(a:mine) ? len(a:theirs) : len(a:mine)
+  let at = common
+  while at > 0
+    let span = s:cmpblock < at ? s:cmpblock : at
+    let from = at - span
+    if a:mine[from : at - 1] ==# a:theirs[from : at - 1]
+      return at - 1
+    endif
+    let i = span - 1
+    while i >= 0
+      if a:mine[from + i] == a:theirs[from + i]
+        return from + i
+      endif
+      let i -= 1
+    endwhile
+    let at = from
+  endwhile
+  return -1
+endfunction
+
 " Bytes of the other file for the page in view, and what the page's own
 " bytes are held against.
 function! s:DiffHex() abort
@@ -6398,6 +6543,53 @@ function! HexPairPagedLastAgreement(mine, theirs) abort
   return -1
 endfunction
 
+" One block of each file, in whichever form this Vim compares fastest -
+" raw bytes where readblob() can take an offset, hex out of xxd where it
+" cannot. Every walker below reads its pair through here and then asks
+" the four questions through the dispatchers under it, so which form is
+" in play is decided ONCE and no walker has to know.
+function! s:CmpPair(other, off, len) abort
+  if HexPairPagedBlobRangeSupported()
+    return [s:FileBlob(b:hexpair_page_file, a:off, a:len),
+          \ s:FileBlob(a:other, a:off, a:len)]
+  endif
+  return [s:FileHex(b:hexpair_page_file, a:off, a:len),
+        \ s:FileHex(a:other, a:off, a:len)]
+endfunction
+
+" The four questions, each answered in BYTES whichever form the blocks
+" are in. The hex primitives count nibbles, so the halving lives here
+" rather than in every caller - which is where it used to live, and where
+" a -1 would have been divided into a 0.
+function! s:CmpFirstDifference(mine, theirs) abort
+  if HexPairPagedBlobRangeSupported()
+    return HexPairPagedBlobFirstDifference(a:mine, a:theirs)
+  endif
+  let at = HexPairPagedFirstDifference(a:mine, a:theirs)
+  return at < 0 ? -1 : at / 2
+endfunction
+
+function! s:CmpLastDifference(mine, theirs) abort
+  if HexPairPagedBlobRangeSupported()
+    return HexPairPagedBlobLastDifference(a:mine, a:theirs)
+  endif
+  let at = HexPairPagedLastDifference(a:mine, a:theirs)
+  return at < 0 ? -1 : at / 2
+endfunction
+
+" The agreements already count bytes in both forms, so these only choose.
+function! s:CmpFirstAgreement(mine, theirs) abort
+  return HexPairPagedBlobRangeSupported()
+        \ ? HexPairPagedBlobFirstAgreement(a:mine, a:theirs)
+        \ : HexPairPagedFirstAgreement(a:mine, a:theirs)
+endfunction
+
+function! s:CmpLastAgreement(mine, theirs) abort
+  return HexPairPagedBlobRangeSupported()
+        \ ? HexPairPagedBlobLastAgreement(a:mine, a:theirs)
+        \ : HexPairPagedLastAgreement(a:mine, a:theirs)
+endfunction
+
 " Where the change that covers a:from ends: the first byte at or after it
 " at which the two files agree. If they already agree at a:from - the
 " cursor is not in a change - that is a:from itself, and nothing is read
@@ -6408,12 +6600,11 @@ function! s:AgreementAfter(other, from, total) abort
   let off = a:from
   while off < a:total
     let len = block < a:total - off ? block : a:total - off
-    let mine   = s:FileHex(b:hexpair_page_file, off, len)
-    let theirs = s:FileHex(a:other, off, len)
+    let [mine, theirs] = s:CmpPair(a:other, off, len)
     if mine ==# theirs
       return off
     endif
-    let at = HexPairPagedFirstAgreement(mine, theirs)
+    let at = s:CmpFirstAgreement(mine, theirs)
     if at >= 0
       return off + at
     endif
@@ -6431,12 +6622,11 @@ function! s:AgreementBefore(other, before, total) abort
   while end > 0
     let len = block < end ? block : end
     let start = end - len
-    let mine   = s:FileHex(b:hexpair_page_file, start, len)
-    let theirs = s:FileHex(a:other, start, len)
+    let [mine, theirs] = s:CmpPair(a:other, start, len)
     if mine ==# theirs
       return end - 1
     endif
-    let at = HexPairPagedLastAgreement(mine, theirs)
+    let at = s:CmpLastAgreement(mine, theirs)
     if at >= 0
       return start + at
     endif
@@ -6453,11 +6643,10 @@ function! s:DifferenceAfter(other, from, total) abort
   while off < a:total
     call s:Progress('comparing', off, a:total)
     let len = block < a:total - off ? block : a:total - off
-    let idx = HexPairPagedFirstDifference(
-          \ s:FileHex(b:hexpair_page_file, off, len),
-          \ s:FileHex(a:other, off, len))
+    let [mine, theirs] = s:CmpPair(a:other, off, len)
+    let idx = s:CmpFirstDifference(mine, theirs)
     if idx >= 0
-      return off + idx / 2
+      return off + idx
     endif
     let off += len
   endwhile
@@ -6472,11 +6661,10 @@ function! s:DifferenceBefore(other, before, total) abort
     call s:Progress('comparing back', a:total - off, a:total)
     let len = block < off ? block : off
     let start = off - len
-    let idx = HexPairPagedLastDifference(
-          \ s:FileHex(b:hexpair_page_file, start, len),
-          \ s:FileHex(a:other, start, len))
+    let [mine, theirs] = s:CmpPair(a:other, start, len)
+    let idx = s:CmpLastDifference(mine, theirs)
     if idx >= 0
-      return start + idx / 2
+      return start + idx
     endif
     let off = start
   endwhile

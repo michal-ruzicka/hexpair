@@ -1422,10 +1422,19 @@ exist to avoid — they read only the page they show.
 `:HexPairDiffNext` — is the other thing that reads more than a page, and
 it reads the file in blocks of `g:hexpair_scan_block` (8 MiB by default,
 between 1 MiB and 1 GiB). That block is the whole of what a scan costs in
-memory, whatever the file's size: about eight bytes of Vim per byte of
-block for a search, sixteen for a comparison, which holds a block of each
-file at once. Each block is one `xxd` process, so a bigger one starts
-fewer of them — and that is all it buys, which runs out early. Scanning a
+memory, whatever the file's size.
+
+**A comparison** reads its blocks with `readblob()` and compares them as
+raw bytes wherever Vim can (9.0.0795 with `+num64`, the same patch the
+splice needs): one `memcmp` against a string comparison over twice the
+data that had to be built by a process first. Finding the next change in
+a 256 MiB pair takes **0.28 s** that way and **12.4 s** through `xxd` —
+and one byte of memory per byte of block on each side rather than eight.
+Older Vims keep the `xxd` reader and the same answers.
+
+**A search** still goes through `xxd`, at about eight bytes of Vim per
+byte of block. Each block is one process, so a bigger block starts fewer
+of them — and that is all it buys, which runs out early. Scanning a
 256 MiB file end to end:
 
 | Block | Time | Memory |
