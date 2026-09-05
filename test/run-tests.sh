@@ -4807,7 +4807,9 @@ if HexPairPagedBlobFindSupported()
   " pattern whose every byte is half the block gets.
   call add(out, hexpair#FindForward(0z41424344, 0zffff, 0z9999) . ' ' . hexpair#FindForward(0z41424344, 0z0000, 0z0000) . ' ' . hexpair#FindForward(repeat(0z4142, 2048), 0zffff, 0z4242))
 else
-  for i in range(4)
+  " Five, the same number the branch above adds, so the checks that read
+  " this file by line number keep their places on either Vim.
+  for i in range(5)
     call add(out, 'no blob reader here')
   endfor
 endif
