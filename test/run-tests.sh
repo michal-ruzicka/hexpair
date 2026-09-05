@@ -274,6 +274,15 @@ open(os.path.join(w, 'seam1.bin'), 'wb').write(bytes(_sm))
 _sm2 = bytearray(_sm)
 _sm2[1024 * 1024 + 5] ^= 0xff
 open(os.path.join(w, 'seam2.bin'), 'wb').write(bytes(_sm2))
+# A fixture in which every byte is one of two values, so that a pattern
+# made of those two is DENSE: the byte reader walks one byte value and
+# checks the rest by hand, which is only worth doing while that value is
+# rare, so on this fixture it declines and the block goes through xxd.
+# "42 42" occurs exactly once, at byte 2000 (1-based); the alternation
+# cannot produce it anywhere else.
+_dn = bytearray(b'\x41\x42' * 2048)
+_dn[2000] = 0x42
+open(os.path.join(w, 'dense.bin'), 'wb').write(bytes(_dn))
 # a fixture whose only occurrence of a pattern STRADDLES a page boundary:
 # with the 512-byte pages the suite uses, "64 20" sits at the last byte of
 # page 1 and the first of page 2
@@ -4770,6 +4779,81 @@ check "and the text view lands on the character it belongs to" \
 # Two bytes of a character replaced by two ASCII ones: the same two bytes.
 check "an edit is marked byte for byte, not character for character" \
     "[[2, 19, 2]]" "$(sed -n 8p "$WORK/tmb.out")"
+
+# --- The byte reader finds what the hex reader finds ------------------------
+# A search reads each block as raw bytes and walks it with a compiled
+# function where Vim can (autoload/hexpair.vim), and as hex through xxd
+# where it cannot. As with the comparison, which of the two is used must
+# not be visible in any answer - but here there is a third case as well:
+# the byte reader may DECLINE a block, because it walks every occurrence of
+# one byte of the pattern and that is only worth doing while the byte is
+# rare in the block. So all three have to land on the same byte.
+# No backslash continuations in the generated file: this suite runs Vim
+# without -N, so 'cpoptions' carries C by the time the plugin has put it
+# back the way it found it.
+cat > "$WORK/tbfind.vim" <<EOF
+source $PLUGIN
+let g:hexpair_page_size = 512
+let out = []
+call add(out, 'blob reader here: ' . HexPairPagedBlobFindSupported())
+if HexPairPagedBlobFindSupported()
+  call add(out, string(HexPairPagedFindByteFilter('deadbeef')))
+  call add(out, string(HexPairPagedFindByteFilter('de..be')))
+  call add(out, string(HexPairPagedFindByteFilter('d..f')))
+  " "BC" in "ABCD", then the last "BC" before byte 8 of "ABCDBCCD".
+  call add(out, hexpair#FindForward(0z41424344, 0zffff, 0z4243) . ' ' . hexpair#FindBackward(0z4142434442434344, 0zffff, 0z4243, 8) . ' ' . hexpair#FindForward(0z41424344, 0z0fff, 0z0243))
+  " -1 is "not in this block"; -2 is "not searched, use the other reader",
+  " which is what a pattern of nothing but wildcards gets, and what a
+  " pattern whose every byte is half the block gets.
+  call add(out, hexpair#FindForward(0z41424344, 0zffff, 0z9999) . ' ' . hexpair#FindForward(0z41424344, 0z0000, 0z0000) . ' ' . hexpair#FindForward(repeat(0z4142, 2048), 0zffff, 0z4242))
+else
+  for i in range(4)
+    call add(out, 'no blob reader here')
+  endfor
+endif
+HexPairOpen $WORK/dense.bin 1
+redir => m1
+silent HexPairFind 42 42
+redir END
+call add(out, matchstr(substitute(m1, "\\n", ' ', 'g'), 'hexpair: bytes[^ ]* .*'))
+HexPairOpen $WORK/find1.bin 1
+redir => m2
+silent HexPairFind de ?? be ef
+redir END
+call add(out, matchstr(substitute(m2, "\\n", ' ', 'g'), 'hexpair: bytes[^ ]* .*'))
+redir => m3
+silent HexPairFindPrev
+redir END
+call add(out, matchstr(substitute(m3, "\\n", ' ', 'g'), 'hexpair: bytes[^ ]* .*'))
+call writefile(out, '$WORK/tbfind.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tbfind.vim" < /dev/null
+# Not check_splice: this is the line that says WHICH reader the checks
+# below exercised, and it has to be readable either way.
+check "the suite says which search reader it is testing" \
+    "blob reader here: $HAS_SPLICE" "$(sed -n 1p "$WORK/tbfind.out")"
+check_splice "a pattern becomes a mask and a value" \
+    "[0zFFFFFFFF, 0zDEADBEEF]" "$(sed -n 2p "$WORK/tbfind.out")"
+check_splice "a wildcard byte constrains nothing" "[0zFF00FF, 0zDE00BE]" \
+    "$(sed -n 3p "$WORK/tbfind.out")"
+check_splice "and a wildcard NIBBLE constrains the other half" \
+    "[0zF00F, 0zD00F]" "$(sed -n 4p "$WORK/tbfind.out")"
+check_splice "the walk finds a match forwards, backwards and through a nibble" \
+    "1 4 1" "$(sed -n 5p "$WORK/tbfind.out")"
+check_splice "and says -1 for absent, -2 for what it will not walk" \
+    "-1 -2 -2" "$(sed -n 6p "$WORK/tbfind.out")"
+# Every byte of dense.bin is 41 or 42, so "42 42" is a pattern the byte
+# reader hands back and the hex reader answers - the same answer.
+check "a pattern too dense to walk is found by the other reader" \
+    "hexpair: bytes 42 42 at byte 2000 (0x7d0)" \
+    "$(sed -n 7p "$WORK/tbfind.out")"
+check "a nibble wildcard finds the same byte on either reader" \
+    "hexpair: bytes de ?? be ef at byte 301 (0x12d)" \
+    "$(sed -n 8p "$WORK/tbfind.out")"
+check "and so does the backward scan" \
+    "hexpair: bytes de ?? be ef at byte 4997 (0x1385) (wrapped)" \
+    "$(sed -n 9p "$WORK/tbfind.out")"
 
 # ===========================================================================
 # A scan crosses its own block seams

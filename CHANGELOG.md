@@ -46,6 +46,24 @@ and this project adheres to
   `:help :HexPairModifiedShow`.
 
 ### Changed
+- **Searching reads bytes, not hex — 4.5× faster.** `:HexPairFind` read each
+  block of the file as hex through `xxd` and matched it with a regexp. Where
+  Vim can read a byte range on its own (9.0.0795 with `+num64`) and has
+  `has('vim9script')`, it now walks the raw bytes instead: Vim has no "find
+  these bytes in a Blob", so it walks every occurrence of **one** byte of the
+  pattern and checks the rest by hand, in the plugin's one Vim9 `:def`
+  function (`autoload/hexpair.vim`) — a compiled loop, which is what makes it
+  worth doing at all. Searching a 256 MiB file end to end went from **9.1 s
+  to 2.0 s**, and the memory from 97 MB to 23 MB. Which byte gets walked is
+  chosen by sampling the block, because the walk costs a step per occurrence
+  of it: `00 00 00 00 01` in 64 MiB of zeros walks the `01` and takes
+  **0.30 s** where it used to take 13.2 s. When *every* byte of the pattern
+  is common in a block — `00 00` in that same file — the byte reader hands
+  that block back and it goes through `xxd`, so the bad case costs what it
+  always did. `?` nibble wildcards work on both readers, and a hexpair whose
+  `autoload/` was not copied, or a Vim without either feature, keeps the old
+  one: it is asked a question with a known answer before it is trusted with a
+  file.
 - **Comparing two files reads bytes, not hex — 45× faster.** `:HexPairDiff`
   and the jumps over it (`:HexPairDiffNext`, `:HexPairDiffPrev`) used to ask
   `xxd` for each block of each file and compare the two as text, which meant

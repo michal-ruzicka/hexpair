@@ -5390,7 +5390,11 @@ endfunction
 " where |/| and the eye can find them; everywhere else, the file is what
 " there is to search.
 
-let s:find = {'hex': '', 'bytes': 0, 'what': ''}
+" 'filter' is the pattern as two Blobs for the byte reader - see
+" autoload/hexpair.vim - and is empty on a Vim that has no such reader,
+" which is also what makes it the flag for which reader to use. No Blob
+" here: this is script level, and a Blob literal is Vim 8.1.0735.
+let s:find = {'hex': '', 'bytes': 0, 'what': '', 'filter': []}
 
 " A pattern is bytes, two hex digits each, and a '?' stands for any
 " nibble: "de ad be ef", "deadbeef" and "de ?? be ef" are all patterns,
@@ -5413,6 +5417,40 @@ function! HexPairPagedParseFindPattern(text) abort
   endif
   return {'hex': tolower(substitute(squashed, '?', '.', 'g')),
         \ 'bytes': strlen(squashed) / 2}
+endfunction
+
+" The same pattern as two Blobs, which is what the byte reader matches
+" with: byte k of the file matches when and(byte, mask[k]) == value[k].
+" A fully specified byte has mask 0xff, "d?" has 0xf0, "?d" has 0x0f and
+" "??" has 0x00 - so a wildcard costs the reader nothing to carry, and
+" the nibble-level ones survive, which they could not if a pattern were
+" a plain run of bytes.
+"
+" Takes the hex WITH ITS WILDCARDS ALREADY DOTS, as
+" HexPairPagedParseFindPattern() leaves them, so that the two forms of a
+" pattern are built from one string and cannot drift apart.
+function! HexPairPagedFindByteFilter(hex) abort
+  let mask = 0z
+  let value = 0z
+  let i = 0
+  while i < strlen(a:hex)
+    let hi = a:hex[i]
+    let lo = a:hex[i + 1]
+    let m = 0
+    let v = 0
+    if hi !=# '.'
+      let m += 0xf0
+      let v += str2nr(hi, 16) * 16
+    endif
+    if lo !=# '.'
+      let m += 0x0f
+      let v += str2nr(lo, 16)
+    endif
+    call add(mask, m)
+    call add(value, v)
+    let i += 2
+  endwhile
+  return [mask, value]
 endfunction
 
 " The bytes of a literal string, as hex - what |:HexPairFindText| searches
@@ -5460,13 +5498,45 @@ function! HexPairPagedFindInHex(hay, pat, from, forward) abort
   endwhile
 endfunction
 
+" A match inside ONE block, as a byte index into it, or -1.
+"
+" Two readers, and the fast one is allowed to decline. Searching raw
+" bytes means walking every occurrence of one byte of the pattern and
+" checking the rest by hand (autoload/hexpair.vim), which beats building
+" and matching hex for as long as that byte is rare in the block - and
+" when none of the pattern's bytes is rare there, "00" in a run of zeros
+" being the case that matters, hexpair#FindForward() answers -2 rather
+" than walking a million candidates, and the block goes through xxd
+" instead. So the choice is made per BLOCK, on that block's own bytes,
+" and not once for the file.
+"
+" a:limit is for the backward direction only: the match wanted is the
+" last one that STARTS before it, counted from the start of the block.
+function! s:FindInBlock(file, off, len, limit, forward) abort
+  if !empty(s:find.filter)
+    let blob = s:FileBlob(a:file, a:off, a:len)
+    let at = a:forward
+          \ ? hexpair#FindForward(blob, s:find.filter[0], s:find.filter[1])
+          \ : hexpair#FindBackward(blob, s:find.filter[0], s:find.filter[1],
+          \   a:limit)
+    if at != -2
+      return at
+    endif
+    " Declined: let the block's bytes go before the hex reader builds its
+    " own copy of them, which is twice their size again.
+    unlet blob
+  endif
+  let idx = HexPairPagedFindInHex(s:FileHex(a:file, a:off, a:len),
+        \ s:find.hex, a:forward ? 0 : a:limit * 2, a:forward)
+  return idx < 0 ? -1 : idx / 2
+endfunction
+
 " The file, a block at a time, for the next (or previous) match. Blocks
 " overlap by the pattern's length less one byte, so a match lying across
 " a seam is still whole in one of them.
 function! s:FindScan(from, forward) abort
   let file = b:hexpair_page_file
   let total = b:hexpair_page_total
-  let pat = s:find.hex
   let span = s:find.bytes - 1
   " The forward scan steps on by the block LESS the overlap, so a block
   " that is not longer than the pattern would step by nothing and read the
@@ -5482,9 +5552,9 @@ function! s:FindScan(from, forward) abort
     while off < total
       call s:Progress('searching', off, total)
       let len = block < total - off ? block : total - off
-      let idx = HexPairPagedFindInHex(s:FileHex(file, off, len), pat, 0, 1)
-      if idx >= 0
-        return off + idx / 2
+      let at = s:FindInBlock(file, off, len, 0, 1)
+      if at >= 0
+        return off + at
       endif
       if len < block
         return -1
@@ -5500,10 +5570,9 @@ function! s:FindScan(from, forward) abort
     let start = start < 0 ? 0 : start
     " Read past the block's end by the pattern's span, so a match that
     " starts inside it and reaches beyond is found whole.
-    let hex = s:FileHex(file, start, end - start + span)
-    let idx = HexPairPagedFindInHex(hex, pat, (end - start) * 2, 0)
-    if idx >= 0
-      return start + idx / 2
+    let at = s:FindInBlock(file, start, end - start + span, end - start, 0)
+    if at >= 0
+      return start + at
     endif
     let end = start
   endwhile
@@ -5708,10 +5777,59 @@ function! s:FindFrom(from, forward) abort
   echohl None
 endfunction
 
+" Whether a search can go through the byte reader: readblob() with an
+" offset AND the compiled :def that walks the block, which is a separate
+" file because :def only exists inside Vim9 script. Both are needed, and
+" the second one is the reason the first is worth having here: the walk
+" is a loop with a builtin call per candidate, the shape legacy script is
+" slowest at, and doing it in legacy buys some 20% where the compiled one
+" buys five times.
+"
+" Answered by ASKING IT, once per session, rather than by has() alone -
+" the same shape as s:HasOffsetOption() and for the same reason. A
+" hexpair whose autoload/ was not copied, or a Vim that will not load it,
+" has to end up on the hex reader rather than on E117 in the middle of a
+" search, and the only way to be sure is a call whose answer is known.
+"
+" Sourced by path rather than left to 'runtimepath', because the plugin
+" file is not always reached through one: the suite sources it directly,
+" and so does a vimrc that says `source .../plugin/hexpair.vim`. Vim
+" registers a Vim9 autoload script's exports under its own name either
+" way, so this only makes the reader available where it otherwise would
+" not be - a package install has already found it and reloads nothing.
+let s:blobfinder = expand('<sfile>:p:h:h') . '/autoload/hexpair.vim'
+
+" Global for the suite, which has to be able to ask this Vim whether the
+" fast reader is the one it just exercised - a check that passes because
+" the slow path answered the same is not the check it looks like.
+function! HexPairPagedBlobFindSupported() abort
+  if exists('s:blobfind')
+    return s:blobfind
+  endif
+  let s:blobfind = 0
+  if HexPairPagedBlobRangeSupported() && has('vim9script')
+    try
+      if !exists('*hexpair#FindForward') && filereadable(s:blobfinder)
+        execute 'source' fnameescape(s:blobfinder)
+      endif
+      " "BC" in "ABCD", anchored on a byte that is there once: a match at
+      " 1 says the file loaded, the walk ran and the offsets line up.
+      let s:blobfind = hexpair#FindForward(0z41424344, 0zffff, 0z4243) == 1
+    catch
+      let s:blobfind = 0
+    endtry
+  endif
+  return s:blobfind
+endfunction
+
 function! s:SetPattern(parsed, what) abort
   let s:find.hex = a:parsed.hex
   let s:find.bytes = a:parsed.bytes
   let s:find.what = a:what
+  " Built once per pattern rather than per block: a scan of a large file
+  " is thousands of blocks, and this is the same two Blobs every time.
+  let s:find.filter = HexPairPagedBlobFindSupported()
+        \ ? HexPairPagedFindByteFilter(a:parsed.hex) : []
   call s:ClearFindHighlight()
 endfunction
 
@@ -5722,6 +5840,7 @@ function! s:Find(text, clear) abort
   if a:clear
     let s:find.hex = ''
     let s:find.bytes = 0
+    let s:find.filter = []
     call s:ClearFindHighlight()
     echo 'hexpair: no pattern'
     return

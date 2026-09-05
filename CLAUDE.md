@@ -1331,6 +1331,50 @@ was designed and built in Stage 2 - see "What Stage 2 decided".
   block *less* that overlap, so it takes the longer of the block and the
   pattern: a block no longer than the pattern would step by nothing and
   read the same bytes for ever.
+- **A scan has TWO readers, and the answers may not differ.**
+  `HexPairPagedBlobRangeSupported()` (= patch 9.0.0795 + `+num64`, the
+  same requirement as the splice, under a second name because the reason
+  differs) decides whether a block is read with `readblob()` as raw bytes
+  or with `xxd -p` as hex. A comparison then costs a `memcmp` instead of
+  building and comparing twice the data: `:HexPairDiffNext` over a
+  256 MiB pair, **12.4 s → 0.28 s**, RSS 113 → 47 MB. The hex primitives
+  (`HexPairPagedFirstDifference()` and friends) stay exactly as they
+  were and the Blob ones sit beside them — NOT one pair taught both
+  forms, because the two answer in different units and merging them puts
+  the nibble trap back. `s:CmpPair()` picks the form once per block and
+  the four `s:Cmp*()` dispatchers normalise to BYTES.
+- **A search on the byte reader walks ONE byte of the pattern**, since
+  Vim has no multi-byte Blob search: `index()` finds a byte value, the
+  rest is checked by hand. That loop is a builtin call per candidate,
+  which legacy script is worst at, so it lives in
+  `autoload/hexpair.vim` - the plugin's ONLY Vim9 script file - as a
+  compiled `:def` (8 MiB block of random data: 45 ms compiled, 210 ms
+  legacy, 262 ms to read and match the same block as hex). Whole-file
+  search over 256 MiB, **9.1 s → 2.0 s**, RSS 97 → 23 MB.
+  - **Which byte it walks decides everything**, because the walk costs a
+    step per occurrence. `Anchor()` samples 1024 bytes of the block at an
+    ODD stride (binary files are full of powers of two; an even stride
+    would look at the same column of every record) and picks the pattern
+    byte that looks rarest. `00 00 00 00 01` over 64 MiB of zeros:
+    13.2 s through xxd, **0.30 s** walking the `01`, and 6.2 s *per 8 MiB
+    block* if it had walked the `00`.
+  - **The fast reader is allowed to decline**, per block, and returns
+    `-2` for "not searched": when even the best anchor is denser than
+    1 in 32 of the samples (the break-even against the hex reader), or
+    when no byte of the pattern is fully specified (`?` wildcards). The
+    caller then reads that block as hex, so the bad case costs what it
+    always did.
+  - A pattern reaches it as two Blobs, `mask` and `value`
+    (`HexPairPagedFindByteFilter()`), built from the SAME dotted hex the
+    regexp is built from so the two forms cannot drift: byte k matches
+    when `and(byte, mask[k]) == value[k]`, which is how a nibble
+    wildcard survives.
+  - `autoload/hexpair.vim` must never become load-bearing:
+    `HexPairPagedBlobFindSupported()` sources it BY PATH (relative to
+    `<sfile>`, so a plugin sourced from outside 'runtimepath' - which is
+    how the suite runs it - finds it too) and then asks it a question
+    whose answer is known. A missing or broken file means the hex
+    reader, not an E117 in the middle of a search.
 - **`g:hexpair_scan_block` is a cost knob, not a correctness one**, and
   the trade it makes runs out early — do not "tune" it upward on
   intuition. A block is one `xxd` process and is then held as hex: some

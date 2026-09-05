@@ -1424,18 +1424,37 @@ it reads the file in blocks of `g:hexpair_scan_block` (8 MiB by default,
 between 1 MiB and 1 GiB). That block is the whole of what a scan costs in
 memory, whatever the file's size.
 
-**A comparison** reads its blocks with `readblob()` and compares them as
-raw bytes wherever Vim can (9.0.0795 with `+num64`, the same patch the
-splice needs): one `memcmp` against a string comparison over twice the
-data that had to be built by a process first. Finding the next change in
-a 256 MiB pair takes **0.28 s** that way and **12.4 s** through `xxd` —
-and one byte of memory per byte of block on each side rather than eight.
-Older Vims keep the `xxd` reader and the same answers.
+Which is where **the two readers** come in. Where Vim can read a byte
+range without `xxd` — `readblob()` with an offset and a size, which is
+Vim 9.0.0795 with `+num64`, the same patch a splice needs — a scan works
+on the raw bytes; where it cannot, it reads each block as hex through
+`xxd` and matches text, which is what every scan used to do. **The
+answers are identical** — the test suite holds the two against each other
+and requires them to agree, and CI runs the whole suite against
+Vim 8.0.0000 too. Over a 256 MiB file:
 
-**A search** still goes through `xxd`, at about eight bytes of Vim per
-byte of block. Each block is one process, so a bigger block starts fewer
-of them — and that is all it buys, which runs out early. Scanning a
-256 MiB file end to end:
+| | byte reader | hex reader |
+|---|---|---|
+| `:HexPairDiffNext` to the next change | **0.28 s** | 12.4 s |
+| `:HexPairFind` over the whole file | **2.0 s** | 9.1 s |
+| memory | 23 MB | 97 MB |
+
+A comparison becomes two reads and a `memcmp`. A search has more to do —
+Vim has no "find these bytes in a Blob" — so it walks every occurrence of
+**one** byte of the pattern and checks the rest by hand, in the plugin's
+one Vim9 `:def` function (`autoload/hexpair.vim`), which is five times
+faster at that loop than legacy script. Which byte it walks is chosen by
+sampling the block, because the walk costs a step per occurrence: looking
+for `00 00 00 00 01` in 64 MiB of zeros walks the `01`, finishes in
+0.30 s, and would have taken 13.2 s through `xxd`. When *every* byte of
+the pattern is common in a block — `00 00` in that same file — the byte
+reader hands that block back and it goes through `xxd`, so the bad case
+costs what it always did and no more.
+
+The block size matters much less on the byte reader (1 MiB 2.28 s /
+16 MB, 8 MiB 2.06 s / 24 MB, 64 MiB 2.02 s / 81 MB) than on the hex one,
+where each block is a process and is held at about eight bytes of Vim per
+byte of block:
 
 | Block | Time | Memory |
 |---|---|---|
@@ -1447,11 +1466,11 @@ of them — and that is all it buys, which runs out early. Scanning a
 | 128 MiB | 8.2 s | 1036 MB |
 
 A process costs some 8 ms to start, so 1 MiB → 8 MiB is where nearly all
-of that goes away; past it there is nothing left to buy. What a scan
-actually spends is `xxd` turning bytes into hex (some 64 MB/s here) and
-Vim reading, stripping and matching two characters for every byte of the
-file, and none of that cares how the file is cut up. The larger values
-are legal, not recommended.
+of that goes away; past it there is nothing left to buy, because what
+that reader spends is `xxd` turning bytes into hex (some 64 MB/s here)
+and Vim reading, stripping and matching two characters for every byte of
+the file — none of which cares how the file is cut up. The larger values
+are legal, not recommended. The default serves both readers.
 
 ## Requirements
 

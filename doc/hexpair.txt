@@ -859,12 +859,24 @@ g:hexpair_scan_block    How much of the FILE a file-wide scan reads at a
                         that decides what a scan costs in memory, and it
                         costs the same for a 1 MiB file and a 1 TiB one.
 
-                        For a SEARCH each block is one `xxd` process and
-                        is then held as hex, about eight bytes of Vim per
-                        byte of block, so a bigger block spends memory to
-                        start fewer processes - and that trade runs out
-                        early.  Measured on a 256 MiB file scanned end to
-                        end:
+                        How much it matters depends on which reader is
+                        in play (|hexpair-scan-readers|).
+
+                        On the BYTE reader - a Vim with patch 9.0.0795
+                        and +num64 - a block is a |readblob()| and costs
+                        about one byte of Vim per byte of block, with no
+                        process at all, so the setting barely shows.
+                        Searching a 256 MiB file end to end:
+>
+                            1 MiB    2.28 s    16 MB
+                            8 MiB    2.06 s    24 MB
+                           64 MiB    2.02 s    81 MB
+<
+                        On the HEX reader each block is one `xxd` process
+                        and is then held as hex, about eight bytes of Vim
+                        per byte of block, so a bigger block spends
+                        memory to start fewer processes - and that trade
+                        runs out early.  The same scan:
 >
                             1 MiB   10.3 s    19 MB
                             4 MiB    8.4 s    44 MB
@@ -876,27 +888,58 @@ g:hexpair_scan_block    How much of the FILE a file-wide scan reads at a
                         A process costs some 8 ms to start, so going from
                         1 MiB to 8 MiB is where nearly all of that goes
                         away.  Past it there is nothing left to buy: what
-                        a scan spends is xxd turning bytes into hex (some
-                        64 MB/s) and Vim reading, stripping and matching
-                        two characters for every byte of the file, and
-                        none of that cares how the file is cut up.  The
-                        larger values are legal, not recommended.
-
-                        A COMPARISON is a different matter on a Vim with
-                        patch 9.0.0795 and +num64: there the blocks are
-                        read with |readblob()| and compared as raw bytes,
-                        so a block costs one byte of Vim per byte of
-                        block on each side and no process at all.  That
-                        reader is some forty times faster than the hex
-                        one and is used whenever it is available; where it
-                        is not, a comparison holds hex on both sides and
-                        the eight-bytes-per-byte figure applies twice.
+                        that reader spends is xxd turning bytes into hex
+                        (some 64 MB/s) and Vim reading, stripping and
+                        matching two characters for every byte of the
+                        file, and none of that cares how the file is cut
+                        up.  The larger values are legal, not
+                        recommended.
 
                         The limits are cost boundaries, not correctness
                         ones - unlike |g:hexpair_page_size|'s cap.  Below
-                        1 MiB a scan spends its time starting processes;
-                        above 1 GiB a comparison on the hex reader would
-                        want some 16 GiB of Vim.
+                        1 MiB a scan on the hex reader spends its time
+                        starting processes; above 1 GiB a comparison on
+                        it would want some 16 GiB of Vim.
+
+                                                    *hexpair-scan-readers*
+                        A file-wide scan reads its blocks in one of two
+                        ways, and which one is decided by what the Vim
+                        running it can do.  Nothing about the ANSWERS
+                        differs: the suite holds the two against each
+                        other and requires them to agree, and CI runs the
+                        whole of it against Vim 8.0.0000 as well.
+
+                        The BYTE reader needs |readblob()| with an offset
+                        and a size (patch 9.0.0795 with +num64 - the same
+                        patch |hexpair-paged| needs for a splice), and,
+                        for a search, has('vim9script') and the
+                        autoload/hexpair.vim that ships beside the
+                        plugin.  A comparison is then two reads and a
+                        byte-for-byte comparison, some forty times faster
+                        than the hex one; a search walks the block for
+                        one byte of the pattern and checks the rest by
+                        hand, some five times faster.
+
+                        A search on the byte reader picks WHICH byte of
+                        the pattern to walk by sampling the block, since
+                        the walk costs one step per occurrence of it: a
+                        pattern like "00 00 00 00 01" in a run of zeros
+                        is walked on its 01 and finishes at once, where
+                        walking its 00 would take longer than the hex
+                        reader (measured over 64 MiB of zeros: 13.2 s
+                        through xxd, 0.30 s this way).  When every byte
+                        of the pattern is common in the block - "00 00"
+                        in that same file - the byte reader hands that
+                        block back and it goes through xxd, so the bad
+                        case costs what it always did.
+
+                        The HEX reader is what everything used to do and
+                        what a Vim without those features still does:
+                        `xxd -p` over the block, the line breaks taken
+                        out, and a regexp over the result.  A hexpair
+                        whose autoload/ was not copied uses it too - the
+                        byte reader is asked a question with a known
+                        answer before it is trusted with a file.
 
                         It is read at the start of each scan, not when
                         the view is opened, so changing it takes effect

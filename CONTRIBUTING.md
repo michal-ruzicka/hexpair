@@ -23,6 +23,7 @@ reports and patches are welcome via the project's
 | `.github/` | GitHub Actions CI workflow (`workflows/build.yml`) |
 | `dist/` | Packaged release tarballs (gitignored) |
 | `plugin/hexpair.vim` | The whole plugin, one script scope — hex mode is always paged, and `plugin/hexpair_paged.vim` was folded back into this file. Its header carries `Version:` and `Date:` — the single source of truth parsed by the packaging scripts |
+| `autoload/hexpair.vim` | The one Vim9 script file: the compiled walk that searches a block of raw bytes for a byte pattern. Loaded on the first search, and only where `readblob()` takes an offset and `has('vim9script')`; a Vim without either — or a copy of hexpair without this file — falls back to reading the block as hex through `xxd`, which is what the rest of the plugin does anyway. Nothing here may become load-bearing: `plugin/hexpair.vim` has to keep working on Vim 8.0 with this file deleted |
 | `ftplugin/xxd.vim` | Dump-editing defaults for `filetype=xxd`, bundled with the plugin |
 | `doc/hexpair.txt` | Vim help documentation (`:help hexpair`) |
 | `demo/` | The animation at the top of `README.md` and what records it (see *The README demo*); not part of a release tarball |
