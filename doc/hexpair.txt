@@ -1128,10 +1128,23 @@ filetype plugins are enabled (|:filetype-plugin-on|; any modern vimrc or
     'formatoptions' ""   no automatic formatting
     'textwidth'     0    no automatic wrapping
     'autoindent'    off  no automatic indenting
+    'spell'         off  a dump is not prose
 
 Everything is reverted through |undo_ftplugin| when the hex view is
 toggled off (also for buffers whose original filetype was empty, where no
 |FileType| event fires and the plugin runs the undo itself).
+
+'spell' is the one of these that is not about editing, and it is here
+because a speller reads a dump as prose: "de ad be ef" is four misspelt
+words, and the ASCII column is worse, since whatever the bytes happen to
+spell gets underlined.  It is off in the DUMP alone - the windowed text
+view is not this filetype, so it spells exactly as the window always did,
+and a window that never had 'spell' on is never given it.
+
+It is also the one that is window-local rather than buffer-local, so the
+undo carries the value the window had rather than the `spell<` that would
+bring back the global one.  A buffer shown in two windows keeps the value
+the ftplugin saw, as every window-local option in an ftplugin does.
 
 To overrule the defaults (|ftplugin-overrule|): a personal
 ~/.vim/ftplugin/xxd.vim is sourced BEFORE the bundled file, so its

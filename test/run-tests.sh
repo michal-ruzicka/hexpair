@@ -502,6 +502,57 @@ check "ftplugin + paste active in the hex view"  "[10, 3, 1, 1]"   "$(sed -n 1p 
 check "ftplugin reverted in the text view"       "[8, 8, 0, 1, 0]" "$(sed -n 2p "$WORK/t5.out")"
 check "ftplugin re-applied back in the hex view" "[10, 1, 1]"      "$(sed -n 3p "$WORK/t5.out")"
 
+# --- Test 5b: 'spell' is off in the dump and untouched anywhere else -------
+# A speller reads a dump as prose: "de ad be ef" is four misspelt words and
+# the ASCII column is whatever the bytes happen to spell. So the hex view
+# turns it off - and ONLY the hex view. The windowed text view is not this
+# filetype, so it spells exactly as the window always did, and a window
+# that had it off never has it turned on.
+#
+# 'spell' is window-local, so the undo carries the value rather than a
+# `spell<` that would bring back the global one; both directions are walked
+# here because only that catches the difference.
+cat > "$WORK/t5b.vim" <<EOF
+let &runtimepath = '$ROOT,' . \$VIMRUNTIME
+filetype plugin on
+$(printf "$HEX")
+let out = []
+" A real file, because :HexPairUnhex below is the way back to a buffer
+" that was toggled - an unnamed one has nothing to go back to.
+edit $WORK/pos.bin
+setlocal spell
+call add(out, 'on: plain ' . &l:spell)
+HexPairToggle
+call add(out, 'on: hex ' . &l:spell . ' ft ' . &l:filetype)
+HexPairToggle
+call add(out, 'on: text ' . &l:spell . ' ft ' . &l:filetype)
+HexPairToggle
+call add(out, 'on: hex again ' . &l:spell)
+HexPairUnhex
+call add(out, 'on: after unhex ' . &l:spell)
+" And a window that had it off: nothing here may turn it on.
+setlocal nospell
+HexPairToggle
+call add(out, 'off: hex ' . &l:spell)
+HexPairToggle
+call add(out, 'off: text ' . &l:spell)
+call writefile(out, '$WORK/t5b.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/t5b.vim" < /dev/null
+check "'spell' is on before the dump is" "on: plain 1" "$(sed -n 1p "$WORK/t5b.out")"
+check "the hex view turns it off" "on: hex 0 ft xxd" "$(sed -n 2p "$WORK/t5b.out")"
+check "the windowed text view spells as the window always did" "on: text 1 ft " \
+    "$(sed -n 3p "$WORK/t5b.out")"
+check "and going back to the dump turns it off again" "on: hex again 0" \
+    "$(sed -n 4p "$WORK/t5b.out")"
+check "leaving hex mode altogether puts it back" "on: after unhex 1" \
+    "$(sed -n 5p "$WORK/t5b.out")"
+check "a window that had it off keeps it off in the dump" "off: hex 0" \
+    "$(sed -n 6p "$WORK/t5b.out")"
+check "and is not given it in the text view either" "off: text 0" \
+    "$(sed -n 7p "$WORK/t5b.out")"
+
 # --- Test 6: a user ftplugin with b:did_ftplugin suppresses the bundled one -
 mkdir -p "$WORK/user-rtp/ftplugin"
 cat > "$WORK/user-rtp/ftplugin/xxd.vim" <<'EOF'

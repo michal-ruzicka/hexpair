@@ -39,7 +39,24 @@ setlocal shiftwidth=3
 " exactly as typed.
 setlocal formatoptions= textwidth=0 noautoindent
 
+" No spell checking.  A dump is hex digits and an ASCII column, and a
+" speller reads runs of them as misspelt words: "de ad be ef" is four of
+" them, and the ASCII column is worse, since whatever the bytes happen to
+" spell gets underlined as prose.  None of it is text a dictionary has any
+" say about.
+"
+" Only here, and deliberately: the WINDOWED TEXT view is not this
+" filetype, so it goes on spelling exactly as the window always did.
+"
+" 'spell' is window-local, and a plain `spell<` in the undo would bring
+" back the GLOBAL value rather than the one this window had - so the undo
+" carries the value itself, which is why it is built before the option is
+" switched off.  (A buffer shown in two windows keeps the value the
+" ftplugin saw, as every window-local option in an ftplugin does.)
+
 " Revert everything when the filetype changes, e.g. when hexpair toggles
 " the hex view off.  Kept on one line: this file may be sourced with a
 " user 'cpoptions' that disables line continuations.
-let b:undo_ftplugin = 'setlocal tabstop< expandtab< shiftwidth< formatoptions< textwidth< autoindent<'
+let b:undo_ftplugin = 'setlocal tabstop< expandtab< shiftwidth< formatoptions< textwidth< autoindent< | setlocal ' . (&l:spell ? 'spell' : 'nospell')
+
+setlocal nospell

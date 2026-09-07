@@ -58,6 +58,15 @@ and this project adheres to
   would put on disk. See `:help :HexPairModifiedShow`.
 
 ### Changed
+- **`'spell'` is off in the dump.** A speller reads a hex dump as prose —
+  `de ad be ef` is four misspelt words, and the ASCII column is worse, since
+  whatever the bytes happen to spell gets underlined. The bundled
+  `ftplugin/xxd.vim` turns it off, which means the **dump alone**: the
+  windowed text view is not that filetype, so it spells exactly as the
+  window always did, and a window that never had `'spell'` on is never given
+  it. Since `'spell'` is window-local, the undo carries the value the window
+  had rather than the `spell<` that would bring back the global one.
+  Override it the documented way, in `~/.vim/after/ftplugin/xxd.vim`.
 - **The text view marks what you edited exactly.** `HexPairModified` and the
   jumps over it compared, in that view, in the view's *own spelling* — where
   a NUL and a line break are the same character, because Vim holds a NUL
