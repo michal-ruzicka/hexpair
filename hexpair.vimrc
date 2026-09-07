@@ -162,6 +162,12 @@ call s:Map('n', '<Leader>c', '<Plug>(HexPairFindClear)')
 " than to what another file has.
 call s:Map('n', '<Leader>e', '<Plug>(HexPairModifiedNext)')
 call s:Map('n', '<Leader>E', '<Plug>(HexPairModifiedPrev)')
+" Stop marking them, and start again. The marking is the one thing on a
+" hex page whose cost follows what you DID rather than what is on screen:
+" insert or delete a byte and every byte after it differs from what the
+" page was read as, so the whole rest of the page is marked and compared
+" again on every keystroke. This is the way out of that.
+call s:Map('n', '<Leader>M', '<Plug>(HexPairModified)')
 " What the file on disk has here - the byte under the cursor, or a whole
 " Visual selection - beside what the buffer now holds. The marking says
 " which bytes you changed; the byte it covers is the new one, and this is

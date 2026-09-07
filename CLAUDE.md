@@ -1346,6 +1346,17 @@ was designed and built in Stage 2 - see "What Stage 2 decided".
   `s:HexFromFile()` is for. The blind spot |hexpair-marking-views| used
   to describe was never a property of the buffer, only of that join, and
   the markings that had it are fixed too - see the two entries below.
+- **`:HexPairModified` is the way out of a marking that has become the
+  cost of the page.** It flips `g:hexpair_show_modified` rather than
+  holding a switch of its own, so a key and a setting cannot disagree;
+  the bang stops it the way `:HexPairFind!` and `:HexPairDiff!` stop
+  theirs. `s:ModifiedHighlight()` CLEARS when the option is off instead
+  of returning early - the marks are window-local, so every other window
+  showing the page has to lose them too, and that branch is what makes
+  the toggle reach them. The case it exists for is an insert or a delete:
+  every byte after it differs from what the page was read as, so the
+  whole rest of the page is one run, marked correctly and compared again
+  on every keystroke.
 - **One comparison drives the modified marking in BOTH views**:
   `s:ModifiedRuns()` = `HexPairPagedDifferingByteRuns(s:LiveHex(), hex)`,
   and `HexPairPagedMarkingPositions('modified', ...)` clips those runs

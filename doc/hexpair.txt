@@ -783,7 +783,9 @@ g:hexpair_show_modified Whether the bytes that differ from the ones on
                         as well, since that is a second comparison of the
                         same page.  Nothing is recomputed between edits,
                         so scrolling and moving the cursor are free.  Set
-                        this to 0 on a very large page if that shows.
+                        this to 0 on a very large page if that shows, or
+                        |:HexPairModified| (`<Leader>M`) to turn it off
+                        for as long as it is in the way.
 
                                                      *g:hexpair_bind_pages*
 g:hexpair_bind_pages    Whether a page turn in this window is passed on to
@@ -1569,6 +1571,36 @@ HexPairOpenFile({file} [, {page}])
                         |:HexPairFindNext| do the same; nothing has been
                         changed by the time either of them can be
                         interrupted, since both only read.
+
+                                                        *:HexPairModified*
+:HexPairModified        Stop marking the bytes you have edited, or start
+:HexPairModified!       again.  The bang stops it rather than toggling,
+                        the shape the bangs of |:HexPairFind| and
+                        |:HexPairDiff| already have; there is nothing to
+                        SET here, since
+                        your edits are your edits, so the bare command
+                        toggles instead.  `<Leader>M` in `hexpair.vimrc`.
+
+                        It flips |g:hexpair_show_modified|, the option
+                        that already means this, rather than being a
+                        second switch beside it - so a session and a
+                        vimrc cannot disagree about the same thing.
+
+                        Why it is worth a key: the marking is the one
+                        part of a hex page whose cost follows what you
+                        DID rather than what is on screen.  An overwrite
+                        marks the bytes you typed and costs nothing
+                        noticeable.  An INSERT or a DELETE moves every
+                        byte after it, so every one of them differs from
+                        what the page was read as - the whole rest of the
+                        page is marked, correctly, and compared again on
+                        every keystroke.  That is the moment the marking
+                        stops helping, and this is the way out of it
+                        without leaving the page.
+
+                        Switching it off clears the marks in every window
+                        showing the page, not only the one it was typed
+                        in.
 
                                  *:HexPairModifiedNext* *:HexPairModifiedPrev*
 :HexPairModifiedNext    Go to the next run of bytes edited and not yet

@@ -5654,6 +5654,63 @@ check_path "and both say which two bytes they are" \
     "hexpair: byte 3 (0x3): 00 here, 0a in $(sed -n 4p "$WORK/tdfnul.out")" \
     "$(sed -n 3p "$WORK/tdfnul.out")"
 
+# --- :HexPairModified turns the marking off and on --------------------------
+# The marking is the one thing on a hex page whose cost follows what was
+# DONE rather than what is on screen: an insert moves every byte after it,
+# so every one of them differs from what the page was read as and the whole
+# rest of the page is marked - correctly, and at the cost of comparing it
+# all again on each keystroke. This is the way out, and it flips the option
+# that already means this rather than keeping a second switch beside it.
+#
+# The drawing itself cannot be checked headlessly - a vim -es window has no
+# geometry, so line('w$') comes out above line('w0') - which is why this
+# checks the option, the message and that the computation behind the marks
+# is untouched, the same testable half the diff marking settles for.
+cat > "$WORK/tmodtog.vim" <<EOF
+$(printf "$HEX")
+let out = []
+HexPairOpen $WORK/short1.bin 1
+call setline(4, substitute(getline(4), '^\(00000020: \)\S\S', '\1ff', ''))
+let marks = string(HexPairPagedMarkingPositions('modified', 1, line('\$')))
+call add(out, g:hexpair_show_modified . ' ' . marks)
+redir => a
+HexPairModified
+redir END
+call add(out, g:hexpair_show_modified . ' ' . matchstr(substitute(a, "\\n", ' ', 'g'), 'hexpair:.*'))
+redir => b
+HexPairModified
+redir END
+call add(out, g:hexpair_show_modified . ' ' . matchstr(substitute(b, "\\n", ' ', 'g'), 'hexpair:.*'))
+" Back on, the marks are the ones it had: the switch is about drawing them,
+" not about what is compared.
+call add(out, (string(HexPairPagedMarkingPositions('modified', 1, line('\$'))) ==# marks) . ' same marks')
+HexPairModified!
+call add(out, g:hexpair_show_modified . ' after the bang')
+HexPairModified!
+call add(out, g:hexpair_show_modified . ' and the bang again')
+call add(out, exists(':HPModified') . ' short name')
+call writefile(out, '$WORK/tmodtog.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tmodtog.vim" < /dev/null
+check "the marking starts on, and marks the edited byte" "1 [[4, 11, 2], [4, 60, 1]]" \
+    "$(sed -n 1p "$WORK/tmodtog.out")"
+check "the toggle turns it off and says so" \
+    "0 hexpair: not marking edited bytes (g:hexpair_show_modified = 0)" \
+    "$(sed -n 2p "$WORK/tmodtog.out")"
+check "and on again" "1 hexpair: marking the bytes you have edited" \
+    "$(sed -n 3p "$WORK/tmodtog.out")"
+check "with the same bytes to mark as before" "1 same marks" \
+    "$(sed -n 4p "$WORK/tmodtog.out")"
+# The bang is the shape :HexPairFind! and :HexPairDiff! already have: off,
+# and off again is still off rather than back on.
+check "the bang turns it off rather than toggling" "0 after the bang" \
+    "$(sed -n 5p "$WORK/tmodtog.out")"
+check "and twice leaves it off" "0 and the bang again" \
+    "$(sed -n 6p "$WORK/tmodtog.out")"
+check "the short name is defined too" "2 short name" \
+    "$(sed -n 7p "$WORK/tmodtog.out")"
+
 # The Visual-mode form, through the <Plug> target a key would reach it by:
 # a run of bytes rather than one, and the selection put back afterwards.
 # ('compatible', which -u NONE starts in, puts '<' in 'cpoptions' and turns
@@ -5980,7 +6037,7 @@ check "and lists no key it does not" "" "$qs_extra"
 # A count, for the same reason the suite keeps one of its own: a block of
 # the list that stops being extracted at all would agree with an equally
 # empty other side.
-check "and there are as many of them as there are" "37" \
+check "and there are as many of them as there are" "38" \
     "$(wc -l < "$WORK/qs-mapped.txt" | tr -d ' ')"
 # The quick start types the SHORT command names, which is the point of
 # them - so those have to be commands, not a plausible abbreviation of

@@ -156,6 +156,9 @@ let mapleader = ','   " i.e. in Normal mode type `,h` to toggle hex <-> text
 " Your own unwritten edits
 <Leader>e   " go to the next run of bytes edited and not yet written
 <Leader>E   " ... the previous one
+<Leader>M   " stop marking them, and start again – after an insert or a
+            " delete every byte behind it is marked, which is correct and
+            " costs a comparison of the whole page on every keystroke
 <Leader>d   " what was here before you edited it (also in Visual)
 
 " Comparing with the file :HexPairDiff named
@@ -391,6 +394,7 @@ nmap <Leader>f <Plug>(HexPairFindNext)      " next match of the last pattern
 nmap <Leader>F <Plug>(HexPairFindPrev)      " previous match
 nmap <Leader>e <Plug>(HexPairModifiedNext)  " next run of bytes you edited
 nmap <Leader>E <Plug>(HexPairModifiedPrev)  " previous one
+nmap <Leader>M <Plug>(HexPairModified)      " stop marking them, or start again
 nmap <Leader>d <Plug>(HexPairModifiedShow)  " what was here before you edited it
 xmap <Leader>d <Plug>(HexPairModifiedShow)  " ... for a whole selection
 nmap <Leader>] <Plug>(HexPairDiffNext)      " next change against that file

@@ -1226,8 +1226,17 @@ function! HexPairPagedModifiedPositions(first, last) abort
 endfunction
 
 function! s:ModifiedHighlight() abort
-  if !g:hexpair_show_modified || !get(b:, 'hexpair_page_active', 0)
+  if !get(b:, 'hexpair_page_active', 0)
         \ || get(b:, 'hexpair_page_hex', '') ==# ''
+    return
+  endif
+  " Switched off, this CLEARS rather than returning: the marks belong to
+  " the window, and every other window showing this page has to lose them
+  " too. It costs nothing once they are gone - the id list is empty and
+  " the loop does not run - and it is what lets |:HexPairModified| take
+  " effect everywhere instead of only where it was typed.
+  if !g:hexpair_show_modified
+    call s:ClearModifiedHighlight()
     return
   endif
   " Nothing to recompute while the page, the window's view of it and the
@@ -7103,6 +7112,35 @@ function! s:ModifiedJump(forward) abort
         \ nth, len(runs), abs + 1, abs + 1)
 endfunction
 
+" Turn the marking of edited bytes off and on again, or off for good with
+" a:off.
+"
+" It flips g:hexpair_show_modified, which is the option that already means
+" this, rather than keeping a second switch beside it: a key and a setting
+" that disagree about the same thing is one thing too many to remember.
+"
+" It exists because the marking is the one part of a hex page whose cost
+" follows what you did rather than what is on screen. An overwrite marks
+" the bytes you typed; an INSERT or a DELETE moves every byte after it, so
+" every one of them differs from what the page was read as and the whole
+" rest of the page is marked - correctly, and at the cost of comparing it
+" all on every edit. That is the moment the marking stops helping and
+" starts being in the way, and it is the moment this is for.
+"
+" The bang mirrors |:HexPairFind!| and |:HexPairDiff!|, the other two ways
+" to stop a marking; there is nothing to set here, since your edits are
+" your edits, so the bare command toggles instead of setting.
+function! s:ModifiedMarking(off) abort
+  let g:hexpair_show_modified = a:off ? 0 : !g:hexpair_show_modified
+  " This window at once; the others when they next redraw, which is what
+  " the clearing branch of s:ModifiedHighlight() is for.
+  call s:ClearModifiedHighlight()
+  call s:ModifiedHighlight()
+  echo g:hexpair_show_modified
+        \ ? 'hexpair: marking the bytes you have edited'
+        \ : 'hexpair: not marking edited bytes (g:hexpair_show_modified = 0)'
+endfunction
+
 " What |:HexPairModifiedShow| says: the bytes at the cursor - or under a
 " Visual selection - as the buffer holds them NOW, beside what the page
 " held when it was read from disk. The other way round from
@@ -8564,6 +8602,7 @@ command! -bar -nargs=+ HexPairReplace call s:Replace(<q-args>)
 command! -bar -nargs=+ HexPairReplaceAllInPage call s:ReplaceAll(<q-args>)
 command! -bar HexPairDiffNext call s:DiffJump(1)
 command! -bar HexPairDiffPrev call s:DiffJump(0)
+command! -bar -bang HexPairModified call s:ModifiedMarking('<bang>' ==# '!')
 command! -bar HexPairModifiedNext call s:ModifiedJump(1)
 command! -bar HexPairModifiedPrev call s:ModifiedJump(0)
 command! -bar HexPairModifiedShow call s:ModifiedShow()
@@ -8608,6 +8647,7 @@ if g:hexpair_short_commands
         \ ['-bar', 'HPMarks', 'HexPairMarks'],
         \ ['-bar -bang -nargs=? -complete=file', 'HPDiff', 'HexPairDiff'],
         \ ['-bar', 'HPDiffShow', 'HexPairDiffShow'],
+        \ ['-bar -bang', 'HPModified', 'HexPairModified'],
         \ ['-bar', 'HPDiffNext', 'HexPairDiffNext'],
         \ ['-bar', 'HPDiffPrev', 'HexPairDiffPrev'],
         \ ['-bar', 'HPModifiedNext', 'HexPairModifiedNext'],
@@ -8675,6 +8715,7 @@ nnoremap <silent> <Plug>(HexPairDiffNext) :<C-U>HexPairDiffNext<CR>
 nnoremap <silent> <Plug>(HexPairDiffPrev) :<C-U>HexPairDiffPrev<CR>
 nnoremap <silent> <Plug>(HexPairModifiedNext) :<C-U>HexPairModifiedNext<CR>
 nnoremap <silent> <Plug>(HexPairModifiedPrev) :<C-U>HexPairModifiedPrev<CR>
+nnoremap <silent> <Plug>(HexPairModified) :<C-U>HexPairModified<CR>
 " Turning the markings off is what the bang on either command does, and
 " both are worth a key: they are how a page stops being covered in
 " matches once the thing has been found.

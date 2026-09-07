@@ -10,6 +10,18 @@ and this project adheres to
 ## [v2.4.0-devel] – 2026-09-02
 
 ### Added
+- **`:HexPairModified`, a key that turns the edit marking off.** The marking
+  of bytes you have changed and not yet written is the one part of a hex
+  page whose cost follows what you *did* rather than what is on screen: an
+  overwrite marks the bytes you typed, but an **insert or a delete moves
+  every byte after it**, so every one of them differs from what the page was
+  read as — the whole rest of the page is marked, correctly, and compared
+  again on every keystroke. `:HexPairModified` stops that and starts it
+  again, `:HexPairModified!` stops it the way `:HexPairFind!` and
+  `:HexPairDiff!` stop theirs, and `<Leader>M` in `hexpair.vimrc` is the
+  key. It flips `g:hexpair_show_modified` rather than being a second switch
+  beside it, and switching it off clears the marks in every window showing
+  the page. See `:help :HexPairModified`.
 - **`g:hexpair_scan_block`, how much of the file a scan reads at a time.**
   `:HexPairFind` and the comparison behind `:HexPairDiffNext` read the file
   in blocks, and the block was a fixed megabyte — which meant one `xxd`
