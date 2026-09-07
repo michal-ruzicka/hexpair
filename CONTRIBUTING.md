@@ -402,6 +402,66 @@ developer's machine.
 The CI workflow also produces the tarball as a downloadable Actions
 artifact, but that copy is unsigned and is intended for testing PRs only.
 
+## Publishing
+
+Where the plugin is listed, and what each place wants. None of it is
+metadata in the repository — there is no manifest a Vim plugin registry
+reads — so this section is the record of what has to be typed where.
+
+### vim.org
+
+The script registry at [vim.org/scripts](https://www.vim.org/scripts/) is
+still live and still browsed, and it is one of the sources
+[VimAwesome](https://vimawesome.com/) indexes. Registration is a web form
+under a vim.org account; there is nothing to add to the repository for it.
+
+The one-time fields, which should stay SHORT — everything that changes
+lives in the README and in `:help hexpair`, and a second full copy of
+either would drift:
+
+| Field | Value |
+|---|---|
+| Script name | `hexpair` (check it is free — the form refuses a duplicate) |
+| Script type | `utility` |
+| Summary | Hex viewing and editing with live hex↔ASCII pair highlighting; paged, so file size does not matter |
+| Description | Two or three paragraphs: what it does, that it is paged and therefore works on files that do not fit in memory, that it needs Vim 8.0 and `xxd`, and the GitHub URL for the rest |
+| Install details | The native-package steps from `README.md`'s *Installation* |
+
+Then one upload per release, which is the recurring part:
+
+| Field | Value |
+|---|---|
+| Package | `dist/hexpair.vX.Y.Z.tar` — the same tarball the release attaches |
+| Script version | `X.Y.Z`, matching `Version:` in `plugin/hexpair.vim` |
+| Vim version | `8.0` — the floor CI builds and tests against |
+| Release notes | The `CHANGELOG.md` entry for that version |
+
+### GitHub
+
+Discovery there is topics and the repository description, neither of which
+lives in a file. Set them once:
+
+```sh
+gh repo edit michal-ruzicka/hexpair \
+    --description "A Vim plugin for hex viewing and editing: live hex<->ASCII pair highlighting, paged for files of any size" \
+    --homepage "https://github.com/michal-ruzicka/hexpair#readme" \
+    --add-topic vim --add-topic vim-plugin --add-topic hex-editor \
+    --add-topic hexdump --add-topic xxd --add-topic binary-editor \
+    --add-topic vimscript --add-topic vim9script
+```
+
+`vim` and `vim-plugin` are the two that matter: they are what the plugin
+lists and the aggregators filter on.
+
+### Elsewhere
+
+- [awesome-vim](https://github.com/akrawchyk/awesome-vim) takes pull
+  requests, and is a list people actually read.
+- `r/vim` and the `vim_use` mailing list expect a release announcement to
+  say what the thing does before it says it is new.
+- VimAwesome needs nothing: it indexes vim.org, GitHub, and the plugin
+  managers' references in public dotfiles.
+
 ## License
 
 This project is distributed under the same terms as Vim itself (the

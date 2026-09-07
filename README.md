@@ -333,6 +333,24 @@ git clone https://github.com/michal-ruzicka/hexpair.git \
 vim -c 'helptags ALL' -c 'q'
 ```
 
+Or with a plugin manager — the repository *is* a plain Vim package, so
+every manager takes it as it comes and builds the help tags itself:
+
+```vim
+" vim-plug
+Plug 'michal-ruzicka/hexpair'
+```
+
+```vim
+" minpac
+call minpac#add('michal-ruzicka/hexpair')
+```
+
+Vim 8.0 or later, and `xxd` — which ships with Vim. Nothing else, and no
+Neovim: this is a Vim plugin, tested against Vim 8.0.0000, current Vim and
+Vim on Windows, and it uses `readblob()` and Vim9 script where they are
+there ([What it costs](#what-it-costs)).
+
 The plugin defines **no key mappings by default** — it provides commands
 and `<Plug>` targets, and which keys those go on is yours to decide.
 
