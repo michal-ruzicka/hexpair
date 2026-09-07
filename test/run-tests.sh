@@ -4062,6 +4062,65 @@ check_splice "and so does the last" "[-1, 0, 2, -1]" \
 check_splice "hex and Blob answer alike over bytes nobody chose" "the two agree" \
     "$(sed -n 5p "$WORK/tblobcmp.out")"
 
+# --- A bound view says so rather than showing another page ------------------
+# 'scrollbind' cannot follow a page turn, so hexpair moves every bound view
+# to the page holding the same byte. A view whose file does not reach that
+# far used to STAY where it was - and two windows then showed different
+# offsets side by side with nothing saying so, which in a diff is the
+# confusion the binding exists to prevent.
+#
+# It goes to that page now and says the page is not there: a banner, no
+# bytes, and a write refused. The last PARTIAL page is untouched - it is a
+# real page and is shown as one - so only a page wholly past the end is
+# affected.
+cat > "$WORK/tabsent.vim" <<EOF
+$(printf "$HEX")
+let out = []
+HexPairOpen $WORK/diffa.bin 1
+vsplit
+HexPairOpen $WORK/diffshort.bin 1
+setlocal scrollbind
+wincmd p
+setlocal scrollbind
+" diffa.bin is 5000 bytes (10 pages of 512), diffshort.bin its first 1000
+" (2 pages, the second partial). Page 2 exists in both; page 3 does not.
+HexPairPageNext
+wincmd p
+call add(out, 'page 2: ' . HexPairStatus() . ' | ' . (getline(1) =~# 'is not in' ? 'absent' : 'real'))
+wincmd p
+HexPairPageNext
+wincmd p
+call add(out, 'page 3: ' . HexPairStatus() . ' | ' . (getline(1) =~# 'is not in' ? 'absent' : 'real'))
+call add(out, 'lines ' . line('\$') . ', bytes ' . b:hexpair_page_len . ', base ' . b:hexpair_page_base)
+redir => a
+silent! w
+redir END
+call add(out, matchstr(substitute(a, "\\n", ' ', 'g'), 'hexpair:[^|]*'))
+call add(out, 'still ' . getfsize('$WORK/diffshort.bin') . ' bytes on disk')
+" And back to a real page, from the absent one.
+HexPairPageGoto 1
+call add(out, 'back: ' . HexPairStatus() . ' | ' . (getline(1) =~# 'is not in' ? 'absent' : 'real'))
+call writefile(out, '$WORK/tabsent.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tabsent.vim" < /dev/null
+check "the last partial page is a real page and stays one" \
+    "page 2: hex 2/2 @0x201 (513) | real" "$(sed -n 1p "$WORK/tabsent.out")"
+check "a page wholly past the end says it is not there" "page 3: hex 3/2 | absent" \
+    "$(sed -n 2p "$WORK/tabsent.out")"
+# Two banner lines and no bytes: the shape of an empty page, which every
+# byte-counting guard in the plugin already knows. The base is where the
+# page WOULD start, so the two views agree about which page they differ on.
+check "which is a banner and no bytes, based where the page would be" \
+    "lines 2, bytes 0, base 1024" "$(sed -n 3p "$WORK/tabsent.out")"
+check "and a write of it is refused, not quietly done" \
+    "hexpair: page 3 is not in this file - it is shown only to keep this view level with the one beside it; there is nothing here to write" \
+    "$(sed -n 4p "$WORK/tabsent.out")"
+check "with the file untouched" "still 1000 bytes on disk" \
+    "$(sed -n 5p "$WORK/tabsent.out")"
+check "and a real page is reachable again from it" "back: hex 1/2 @0x1 (1) | real" \
+    "$(sed -n 6p "$WORK/tabsent.out")"
+
 # --- A file that is longer differs from where it grows --------------------
 cat > "$WORK/tdf2.vim" <<EOF
 $(printf "$HEX")

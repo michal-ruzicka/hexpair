@@ -840,8 +840,28 @@ g:hexpair_bind_pages    Whether a page turn in this window is passed on to
                         the page turn.
                         A window is left where it is, with a message
                         saying so, when following would mean discarding
-                        unwritten changes, or when its own file does not
-                        reach that far.
+                        unwritten changes.
+
+                                                     *hexpair-absent-page*
+                        A window whose own file does not reach that far
+                        goes to the page anyway and says the page is not
+                        there: a banner naming it, where the file really
+                        ends and on which page, and no bytes at all.
+                        Staying put is what it used to do, and that is
+                        the one answer that cannot be right - two windows
+                        showing different offsets side by side, with
+                        nothing saying so, is exactly what binding them
+                        is for.
+
+                        The banner page has no bytes, so nothing marks,
+                        jumps to or inspects anything on it, and a |:w|
+                        of it is refused rather than quietly doing
+                        nothing.  |:HexPairPageGoto| and the rest lead
+                        back off it as from any other page.
+
+                        Only a page WHOLLY past the end is shown this
+                        way.  A last, partial page is a real page - the
+                        file does reach it - and is shown as one.
 
                         Set it to 0 to have 'scrollbind' mean scrolling
                         alone; each window then keeps its own page, as

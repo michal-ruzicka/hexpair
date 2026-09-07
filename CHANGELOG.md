@@ -58,6 +58,18 @@ and this project adheres to
   would put on disk. See `:help :HexPairModifiedShow`.
 
 ### Changed
+- **A bound view says a page is not there instead of showing another one.**
+  `'scrollbind'` cannot follow a page turn, so hexpair moves every bound
+  window to the page holding the same byte — and a window whose own file did
+  not reach that far **stayed where it was**. Two windows then showed
+  different offsets side by side with nothing saying so, which in
+  `vimhexdiff` is exactly the confusion binding them is meant to prevent.
+  Such a window now goes to the page and says the page is not there: a
+  banner naming it, where the file really ends and on which page, and no
+  bytes at all — so nothing marks, jumps to or inspects anything on it, and
+  a `:w` of it is refused rather than quietly doing nothing. Only a page
+  *wholly* past the end is shown that way; a last partial page is a real
+  page and is shown as one. See `:help hexpair-absent-page`.
 - **Leaving hex mode lands where you were, not where you started.**
   `:HexPairUnhex` re-opens the file as text and put the cursor back at the
   line and column hex mode was *entered* from. It goes to **the byte the hex

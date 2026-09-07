@@ -1487,10 +1487,21 @@ function! s:FollowPageTurn(offset) abort
     call s:Stayed('has unsaved changes')
     return 0
   endif
+  " A page this file does not reach. Staying put is what this used to do,
+  " and it is the one answer that cannot be right here: the two windows
+  " then show different offsets side by side with nothing saying so, which
+  " in a bound pair is exactly the confusion this function exists to
+  " prevent. So the view goes to that page and says it is not there.
   if page >= HexPairPagedTotalPages(b:hexpair_page_size,
         \ getfsize(b:hexpair_page_file))
-    call s:Stayed(printf('has no page %d', page + 1))
-    return 0
+    let bound = &l:scrollbind
+    setlocal noscrollbind
+    try
+      call s:LoadAbsent(page)
+    finally
+      let &l:scrollbind = bound
+    endtry
+    return 1
   endif
   let bound = &l:scrollbind
   setlocal noscrollbind
@@ -1826,6 +1837,7 @@ function! s:LoadPage(pageidx) abort
           \ a:pageidx + 1, b:hexpair_page_file, len(dump), expect)
   endif
 
+  let b:hexpair_page_absent     = 0
   let b:hexpair_page_index      = a:pageidx
   let b:hexpair_page_base       = base
   let b:hexpair_page_len        = len
@@ -3291,7 +3303,69 @@ endfunction
 " The file has no bytes left - a shrinking write emptied it - so there is
 " no page to show. Leave a lone banner saying so, rather than a dump of
 " bytes that are gone.
+" A page this file does not reach, shown because ANOTHER view is on it.
+"
+" Only ever reached through s:FollowPageTurn(), which is to say only in a
+" scroll-bound pair (|hexpair-vimhexdiff|): on its own, asking for a page
+" that is not there is an error and stays one. What it fixes is the pair,
+" where the window that could not follow used to stay on the page it had
+" - so the two showed different offsets, side by side, with nothing
+" saying so. A banner that says "not here" is the whole point; being on
+" no page at all is better than being on the wrong one quietly.
+"
+" It is s:LoadEmpty() with a different banner and a base, and that is
+" deliberate: a page with no bytes is a shape this plugin already has,
+" guarded in every place that counts bytes, so nothing new has to learn
+" about it. b:hexpair_page_len is 0 and b:hexpair_page_hex is empty, so
+" the markings, the jumps and the inspector all find nothing here, which
+" is the truth.
+"
+" The base is the one thing that is NOT zero: it is where this page would
+" begin, so the two views agree about which page they disagree about, and
+" a turn back to a real one is an ordinary turn from here.
+function! s:LoadAbsent(pageidx) abort
+  let total = s:FileSize(b:hexpair_page_file)
+  let totalpages = HexPairPagedTotalPages(b:hexpair_page_size, total)
+  let b:hexpair_page_absent     = 1
+  let b:hexpair_page_index      = a:pageidx
+  let b:hexpair_page_base       = a:pageidx * b:hexpair_page_size
+  let b:hexpair_page_len        = 0
+  let b:hexpair_page_total      = total
+  let b:hexpair_page_totalpages = totalpages
+  let b:hexpair_page_ftime      = getftime(b:hexpair_page_file)
+  let b:hexpair_page_digest     = ''
+  let b:hexpair_page_hex        = ''
+  let b:hexpair_n               = g:hexpair_bytes_per_line
+  let b:hexpair_page_hexstart   = s:HexStart(b:hexpair_page_base)
+  let b:hexpair_page_header     = 1
+  let b:hexpair_banner_top      = printf(
+        \ '" hexpair: page %d is not in %s - it ends at byte %d (0x%x), '
+        \ . 'on page %d of %d',
+        \ a:pageidx + 1, s:PageLabel(), total, total, totalpages, totalpages)
+  let b:hexpair_banner_bottom   =
+        \ '" hexpair: nothing here; this view is held level with the other one'
+
+  let save_ul = &l:undolevels
+  setlocal noreadonly modifiable
+  try
+    setlocal undolevels=-1
+    silent %delete _
+    call setline(1, [b:hexpair_banner_top, b:hexpair_banner_bottom])
+  finally
+    let &l:undolevels = save_ul
+  endtry
+  call cursor(1, 1)
+  let w:hexpair_own_view = 1
+  setlocal filetype=xxd
+  call s:ApplyBannerSyntax()
+  setlocal nomodified
+  let b:hexpair_page_active = 1
+  let b:hexpair_view = 'hex'
+  call s:PasteOn()
+endfunction
+
 function! s:LoadEmpty() abort
+  let b:hexpair_page_absent     = 0
   let b:hexpair_page_index      = 0
   let b:hexpair_page_base       = 0
   let b:hexpair_page_len        = 0
@@ -3464,6 +3538,15 @@ endfunction
 function! s:Write() abort
   if !get(b:, 'hexpair_page_active', 0)
     throw 'hexpair: not a paged hex buffer; nothing was written'
+  endif
+  " A page that is not in this file has no bytes to patch anything into.
+  " Nothing would be written even without this - the page is empty and so
+  " is what a write of it would move - but a command that silently does
+  " nothing is worse than one that says why.
+  if get(b:, 'hexpair_page_absent', 0)
+    throw printf('hexpair: page %d is not in this file - it is shown only '
+          \ . 'to keep this view level with the one beside it; there is '
+          \ . 'nothing here to write', b:hexpair_page_index + 1)
   endif
 
 

@@ -1399,6 +1399,20 @@ was designed and built in Stage 2 - see "What Stage 2 decided".
   bytes the other run does not reach as differences of their own.
   `s:TextComparePositions()`, `s:BytesAsText()` and
   `HexPairPagedTextRuns()` were the spelling comparison and are deleted.
+- **A bound view that cannot follow a page turn shows an ABSENT PAGE**
+  (`s:LoadAbsent()`), not the page it had. Staying put is what
+  `s:FollowPageTurn()` used to do and it is the one wrong answer: two
+  windows showing different offsets side by side with nothing saying so
+  is what binding them prevents. It is deliberately `s:LoadEmpty()` with
+  a banner and a base - `b:hexpair_page_len` 0 and `b:hexpair_page_hex`
+  empty is a shape every byte-counting guard in the plugin already knows,
+  so **nothing new had to learn about it**; `b:hexpair_page_absent` marks
+  it for the one thing that must refuse, the write. Reached ONLY through
+  the bind: on its own, a page that is not there stays an error. A last
+  PARTIAL page is a real page and is untouched - the simpler design the
+  maintainer asked for after the first sketch, which would have taught
+  99 uses of `b:hexpair_page_base` / `_len` about pages with no file
+  behind them, write path included.
 - **A scan has TWO readers, and the answers may not differ.**
   `HexPairPagedBlobRangeSupported()` (= patch 9.0.0795 + `+num64`, the
   same requirement as the splice, under a second name because the reason
