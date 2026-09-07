@@ -163,8 +163,28 @@ Toggle hex mode with the mapping (|hexpair-mappings|) or the command:
                         the ordinary, unpaged, non-binary view it was before
                         - the bytes from the file, the 'binary',
                         'fileencoding', 'fileformat' and the other options
-                        it had then, the cursor where it was.  The buffer is
-                        re-read, not converted: a page is not the file.
+                        it had then.  The buffer is re-read, not converted:
+                        a page is not the file.
+
+                        The CURSOR goes to the byte the hex view was on,
+                        not to the position hex mode was entered from.
+                        Hex mode is where a file gets written, by this
+                        plugin or by anything else while it was open, so a
+                        line and column taken before all that can point
+                        anywhere - and where you are when you leave is
+                        where you were looking.
+
+                        Where the file's bytes are not the buffer's, the
+                        entry position is used after all: a 'fileencoding'
+                        that transcodes, a stripped BOM or folded CRLFs
+                        all move the count, and no byte offset carries
+                        across.  That is settled by measuring the re-read
+                        buffer against the file rather than by reading
+                        'fileencoding', so it holds for whatever else a
+                        Vim does on the way in.  A page whose dump no
+                        longer reads as one has no byte to give either,
+                        and the bang above is exactly the way out of
+                        that page, so it falls back rather than failing.
                         ! discards unwritten edits to the page; without !
                         the command refuses, because a plain |:edit| would
                         otherwise lose them without a word.

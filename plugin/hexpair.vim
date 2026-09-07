@@ -7999,6 +7999,44 @@ function! s:Unhex(force) abort
   endtry
 endfunction
 
+" Put the cursor on a:byte of the re-opened file, or where the plain view
+" was left if that byte cannot be pointed at.
+"
+" Whether it can is ASKED OF THE BUFFER rather than guessed from
+" 'fileencoding': a transcode, a stripped BOM and a folded CRLF all move
+" the count between the file's bytes and the buffer's, and comparing the
+" re-read buffer's length against the file's size catches every one of
+" them at once - and catches them for whatever else a future Vim decides
+" to do on the way in. Only when the two agree is a file offset a buffer
+" offset, and only then is :goto the right instrument.
+"
+" The BOM is the one difference worth correcting rather than refusing:
+" Vim keeps it out of the buffer, so the buffer is exactly that much
+" shorter and every offset is shifted by exactly that much.
+"
+" The fallback is the plain view's own coordinates, clamped: they were
+" taken while it was on screen (s:ToHex), so they name a real line and
+" column of it, but the file may have grown or shrunk since.
+function! s:UnhexCursor(byte, p) abort
+  if a:byte >= 0
+    let bom = s:BomLen()
+    let bytes = line2byte(line('$') + 1) - 1
+    if bytes >= 0 && bytes + bom == getfsize(expand('%:p'))
+      let want = a:byte - bom
+      if want >= 0 && want < bytes
+        call s:Debug('unhex: byte %d of the file is byte %d of the buffer',
+              \ a:byte, want)
+        execute 'goto' want + 1
+        return
+      endif
+    endif
+    call s:Debug('unhex: byte %d cannot be pointed at (buffer %d + BOM %d '
+          \ . 'against file %d); using the remembered position',
+          \ a:byte, bytes, bom, getfsize(expand('%:p')))
+  endif
+  call cursor(a:p.lnum > line('$') ? line('$') : a:p.lnum, a:p.col)
+endfunction
+
 function! s:UnhexPlain(force) abort
   if !exists('b:hexpair_plain')
     " No snapshot means one of two quite different things, and a single
@@ -8053,14 +8091,39 @@ function! s:UnhexPlain(force) abort
     throw 'hexpair: ' . name . ' cannot be read; the hex view is kept'
   endif
 
-  " The cursor goes back to where it was in the plain view, and the
-  " snapshot already holds that: p.lnum / p.col. It is not computed back
-  " from the byte the cursor is on now, for two reasons. Mapping a hex-view
-  " byte into plain-view coordinates is lossy exactly where 'fileencoding'
-  " or 'fileformat' convert (the same caveat s:PreReloadPos() documents),
-  " and on a modified page s:PagedByteOffset() runs s:PagedScan() to
-  " recount the bytes - a whole-page validation this does not need, since
-  " the page's content is about to be thrown away for the file.
+  " WHERE the cursor lands afterwards is decided here, while there is
+  " still a view to ask. The byte it is on NOW is the answer wanted, and
+  " the snapshot's p.lnum / p.col - where the plain view was left when hex
+  " mode was entered - is the fallback.
+  "
+  " That way round because the remembered position describes a file that
+  " may no longer exist: hex mode is where the file gets WRITTEN, by this
+  " plugin or by anything else while it was open, and a line and column
+  " taken before all that can point anywhere. Where the cursor is when it
+  " leaves is also, simply, where the user was looking.
+  "
+  " Asking costs a page scan on a modified page (s:PagedByteOffset()
+  " recounts the bytes), which is nothing beside the whole-file re-read
+  " below. It is guarded twice, and both guards have a case behind them.
+  "
+  " A buffer with NO PAGE has no byte to be on: s:AbandonSetup() leaves
+  " one holding the snapshot and no page state at all, and that buffer -
+  " re-read ++bin and never paged - is exactly the one this has to be
+  " able to rescue.
+  "
+  " And a page whose dump no longer READS as one cannot say which byte
+  " the cursor is over, since counting them means parsing them: a line of
+  " prose appended to a dump gets E716 out of s:PagedLineBase. That page
+  " is precisely what :HexPairUnhex! is for, so this is the last place
+  " that may fail on it.
+  let byte = -1
+  if get(b:, 'hexpair_page_active', 0)
+    try
+      let byte = s:Here()
+    catch
+      let byte = -1
+    endtry
+  endif
 
   " 'paste' is GLOBAL, and it is switched on while the cursor is in a hex
   " buffer (s:PasteOn()) - so it has to come off here, because the BufLeave
@@ -8167,11 +8230,7 @@ function! s:UnhexPlain(force) abort
     setlocal readonly
   endif
 
-  " The plain view's own coordinates, into the re-opened whole file. They
-  " were taken while the plain view was on screen (s:ToHex), so they name a
-  " real line and column of it; clamp the line to the file in case it has
-  " grown or shrunk since, and the column is left to cursor() to clamp.
-  call cursor(p.lnum > line('$') ? line('$') : p.lnum, p.col)
+  call s:UnhexCursor(byte, p)
   redraw!
   echomsg 'hexpair: ' . name . ' re-opened as text'
 endfunction

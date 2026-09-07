@@ -1331,6 +1331,20 @@ was designed and built in Stage 2 - see "What Stage 2 decided".
   block *less* that overlap, so it takes the longer of the block and the
   pattern: a block no longer than the pattern would step by nothing and
   read the same bytes for ever.
+- **`:HexPairUnhex` lands on the byte the hex view was on**, not on the
+  `b:hexpair_plain` position hex mode was entered at - that snapshot is
+  now the FALLBACK. `s:UnhexCursor()` decides which by measuring the
+  re-read buffer (`line2byte(line('$') + 1) - 1`) plus `s:BomLen()`
+  against `getfsize()`: only where the file's bytes ARE the buffer's is a
+  file offset a buffer offset and `:goto` the right instrument. **Do not
+  replace that with a test of `'fileencoding'`** - a transcode, a
+  stripped BOM and folded CRLFs all move the count, and measuring catches
+  every one of them plus whatever a future Vim adds. Asking for the byte
+  is guarded twice and both guards have a case: a buffer with no page
+  (`s:AbandonSetup()`'s rescue) has none to give, and a page whose dump no
+  longer reads as one raises **E716 in `s:PagedLineBase`** - which is the
+  page `:HexPairUnhex!` exists for, so it must not fail there. That try
+  was removed once as dead and the suite caught it.
 - **The text view's live bytes come from `writefile(lines, f, "b")`, not
   from joining the lines.** Vim holds a NUL inside a line and `getline()`
   hands it back as a line break; `writefile(..., "b")` is the exact

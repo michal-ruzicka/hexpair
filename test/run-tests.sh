@@ -289,6 +289,12 @@ open(os.path.join(w, 'seam2.bin'), 'wb').write(bytes(_sm2))
 # (which Vim hands back from getline() as a line break) and a real 0a
 # (which IS a line break). "AB<NUL>CD<NL>EF".
 open(os.path.join(w, 'nul.bin'), 'wb').write(b'AB\x00CD\x0aEF')
+# text fixtures for where the cursor lands on the way out of hex mode:
+# five short lines, so byte 30 is the start of the fourth
+open(os.path.join(w, 'unpos.txt'), 'wb').write(b'line one\nline two\nline three\nline four\nline five\n')
+# and the same idea in latin1, where three bytes above 0x7f make the utf-8
+# buffer longer than the file and no byte offset carries across
+open(os.path.join(w, 'unpos-latin1.txt'), 'wb').write(b'prvni radek\ndruhy \xe1\xe9\xed radek\ntreti radek\n')
 # and the same eight bytes with the NUL swapped for a real 0a, so the two
 # differ in exactly the byte the text view used to spell the same way
 open(os.path.join(w, 'nul2.bin'), 'wb').write(b'AB\x0aCD\x0aEF')
@@ -552,6 +558,65 @@ check "a window that had it off keeps it off in the dump" "off: hex 0" \
     "$(sed -n 6p "$WORK/t5b.out")"
 check "and is not given it in the text view either" "off: text 0" \
     "$(sed -n 7p "$WORK/t5b.out")"
+
+# --- Test 5c: leaving hex mode lands on the byte you were looking at -------
+# :HexPairUnhex re-opens the file as text, and the cursor goes to the BYTE
+# the hex view was on rather than to the line and column hex mode was
+# entered from. The remembered position is still there and is still the
+# fallback, but it describes a file that may no longer exist: hex mode is
+# where the file gets written, and a position taken before all that can
+# point anywhere.
+#
+# Whether the byte can be pointed at is asked of the buffer - the re-read
+# buffer's length against the file's size - because a transcode, a
+# stripped BOM and a folded CRLF all move the count between the two. The
+# latin1 fixture below is the case where they differ: three bytes above
+# 0x7f become two characters each in a utf-8 buffer, so the file is 40
+# bytes and the buffer 43, and the remembered position is used instead.
+cat > "$WORK/tunpos.vim" <<EOF
+$(printf "$HEX")
+let out = []
+edit $WORK/unpos.txt
+call cursor(1, 1)
+HexPairToggle
+HexPairGoOffset 30
+call add(out, 'hex ' . matchstr(HexPairStatus(), '(\\zs\\d\\+'))
+HexPairUnhex
+call add(out, 'text line ' . line('.') . ' col ' . col('.') . ' ' . string(getline('.')))
+call add(out, 'byte there ' . (line2byte(line('.')) + col('.') - 1))
+" A page whose dump no longer reads as one cannot say which byte the
+" cursor is over, and :HexPairUnhex! is the way out of exactly that page -
+" so it falls back rather than failing. Entered from line 2 this time.
+call cursor(2, 1)
+HexPairToggle
+HexPairGoOffset 30
+call append(line('.'), 'this is not a dump line')
+silent! HexPairUnhex!
+call add(out, 'after a broken dump: line ' . line('.'))
+" And the encoding that moves the count.
+set fileencodings=utf-8,latin1
+edit $WORK/unpos-latin1.txt
+call cursor(1, 1)
+call add(out, 'latin1 file ' . getfsize('$WORK/unpos-latin1.txt') . ' buffer ' . (line2byte(line('\$') + 1) - 1))
+HexPairToggle
+HexPairGoOffset 30
+HexPairUnhex
+call add(out, 'converted: line ' . line('.') . ' col ' . col('.'))
+call writefile(out, '$WORK/tunpos.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tunpos.vim" < /dev/null
+check "the hex view is on byte 30" "hex 30" "$(sed -n 1p "$WORK/tunpos.out")"
+check "and leaving lands on the line that byte is in" \
+    "text line 4 col 1 'line four'" "$(sed -n 2p "$WORK/tunpos.out")"
+check "which is that byte, not the one hex mode was entered at" "byte there 30" \
+    "$(sed -n 3p "$WORK/tunpos.out")"
+check "a dump that cannot be read falls back to where it was entered" \
+    "after a broken dump: line 2" "$(sed -n 4p "$WORK/tunpos.out")"
+check "a transcoded file's bytes are not the buffer's" \
+    "latin1 file 40 buffer 43" "$(sed -n 5p "$WORK/tunpos.out")"
+check "so that one falls back too" "converted: line 1 col 1" \
+    "$(sed -n 6p "$WORK/tunpos.out")"
 
 # --- Test 6: a user ftplugin with b:did_ftplugin suppresses the bundled one -
 mkdir -p "$WORK/user-rtp/ftplugin"

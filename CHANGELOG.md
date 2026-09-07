@@ -58,6 +58,19 @@ and this project adheres to
   would put on disk. See `:help :HexPairModifiedShow`.
 
 ### Changed
+- **Leaving hex mode lands where you were, not where you started.**
+  `:HexPairUnhex` re-opens the file as text and put the cursor back at the
+  line and column hex mode was *entered* from. It goes to **the byte the hex
+  view was on** now. Hex mode is where a file gets written — by this plugin
+  or by anything else while it was open — so a position taken before all
+  that can point anywhere, and where you are when you leave is where you
+  were looking. The entry position is still the fallback, for the two cases
+  where a byte offset cannot carry across: a page whose dump no longer reads
+  as one (which `:HexPairUnhex!` is exactly the way out of), and a file
+  whose bytes are not the buffer's — a transcoding `'fileencoding'`, a
+  stripped BOM, folded CRLFs. Which of those it is gets settled by measuring
+  the re-read buffer against the file, not by reading `'fileencoding'`, so
+  it holds for whatever else a Vim does on the way in.
 - **`'spell'` is off in the dump.** A speller reads a hex dump as prose —
   `de ad be ef` is four misspelt words, and the ASCII column is worse, since
   whatever the bytes happen to spell gets underlined. The bundled
