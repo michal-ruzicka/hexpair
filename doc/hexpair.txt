@@ -986,6 +986,26 @@ g:hexpair_scan_block    How much of the FILE a file-wide scan reads at a
                         reported there too, by the command that tried to
                         use it.
 
+                                                     *g:hexpair_verify_writes*
+g:hexpair_verify_writes Whether a write made through PowerShell reads back
+                        what it wrote before reporting success.  Default:
+                        1.  Set to 0 to skip the check: >
+
+    let g:hexpair_verify_writes = 0
+<
+                        It applies to one path only, and to the one that
+                        cannot be exercised where this plugin is
+                        developed: writing past 2 GiB on native Windows
+                        (|hexpair-windows-2gib|), where every step that
+                        moves bytes is PowerShell's.  Everywhere else the
+                        writer is xxd and nothing here reads anything
+                        back.  The cost is one extra read of what was just
+                        written, which is why turning it off is offered at
+                        all; the reason it defaults to on is that a silent
+                        short write on that path would be a corrupted
+                        file, and the platform is not the one CI proves
+                        the rest of the writer on.
+
                                                              *g:hexpair_debug*
 g:hexpair_debug         Trace every mapping between a cursor position and
                         a byte offset to |:messages|, for diagnosing a

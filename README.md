@@ -939,6 +939,11 @@ values shown are the defaults, so uncomment a line only to change one.
 " views; :HexPairSplit does the same explicitly whatever this says.
 " let g:hexpair_split_views = 0
 
+" Whether a write made through PowerShell reads back what it wrote before
+" reporting success. Past 2 GiB on native Windows only - everywhere else
+" the writer is xxd and nothing reads anything back.
+" let g:hexpair_verify_writes = 1
+
 " Position-mapping trace for diagnosing a cursor that landed on the wrong
 " byte. Set it to 1 and read the trace with :messages.
 " let g:hexpair_debug = 0

@@ -1343,9 +1343,9 @@ was designed and built in Stage 2 - see "What Stage 2 decided".
   super-linear in Vim script - a 128 KiB page took 3.9 s and a 512 KiB
   one 54 s, against 9 ms and 28 ms now. **Do not spell a page a byte at a
   time**; hand it to xxd through a temp file, which is what
-  `s:HexFromFile()` is for. The blind spot in |hexpair-marking-views| is
-  real but belongs to the MARKINGS, which compare in the text spelling on
-  both sides - it was never a property of the buffer.
+  `s:HexFromFile()` is for. The blind spot |hexpair-marking-views| used
+  to describe was never a property of the buffer, only of that join, and
+  the markings that had it are fixed too - see the two entries below.
 - **One comparison drives the modified marking in BOTH views**:
   `s:ModifiedRuns()` = `HexPairPagedDifferingByteRuns(s:LiveHex(), hex)`,
   and `HexPairPagedMarkingPositions('modified', ...)` clips those runs

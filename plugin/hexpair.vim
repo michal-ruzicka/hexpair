@@ -67,6 +67,9 @@
 "   g:hexpair_bind_pages       set to 0 to stop a page turn from taking
 "                              the scroll-bound windows with it
 "                              (default 1, take them)
+"   g:hexpair_verify_writes    set to 0 to stop a PowerShell write from
+"                              reading back what it wrote (past 2 GiB on
+"                              Windows only; default 1)
 "   g:hexpair_debug            set to 1 to echo position-mapping traces
 "                              (inspect with :messages)
 "   HexPairActive, HexPairMirror, HexPairPageBanner, HexPairModified,
@@ -2668,8 +2671,17 @@ endfunction
 " The limit is a property of the platform's data model, not of the build:
 " Windows is LLP64, so a long stays 32 bits in a 64-bit Vim too, which is
 " why "am I on Windows" is the whole question.
+" Pure, and a function of an explicit boolean rather than of has('win32'),
+" for exactly the reason HexPairPagedGateMessage() is one: the branch that
+" matters is the branch this cannot be developed or tested on, so the only
+" way to check it anywhere is to pass it. Asked of the END of a range by
+" every caller, never the start - see HexPairPagedRangeIsXxdsForTest().
+function! HexPairPagedSeekableOffset(off, win32) abort
+  return !a:win32 || a:off <= s:xxdseekmax
+endfunction
+
 function! s:XxdCanSeek(off) abort
-  return a:off <= s:xxdseekmax || !has('win32')
+  return HexPairPagedSeekableOffset(a:off, has('win32'))
 endfunction
 
 " The rule every caller applies, exposed so the suite can pin it: a range is

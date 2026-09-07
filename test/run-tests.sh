@@ -258,16 +258,27 @@ _fd[700:705] = b'hello'
 open(os.path.join(w, 'find1.bin'), 'wb').write(bytes(_fd))
 open(os.path.join(w, 'rep1.bin'), 'wb').write(bytes(_fd))
 open(os.path.join(w, 'rep2.bin'), 'wb').write(bytes(_fd))
-# fixtures whose only occurrence of a pattern STRADDLES a SCAN BLOCK
-# boundary, which is a different seam from a page's: a scan reads the file
-# in blocks of g:hexpair_scan_block and the smallest one allowed is 1 MiB,
-# so this is the smallest file that has such a seam in it. The needle sits
-# across it (bytes 1048575-1048578, 1-based), and there is one more early
-# on so a backward scan has somewhere to go; the ramp filler cannot contain
-# the needle, since consecutive bytes of it always rise by one.
+# fixtures whose second occurrence of a pattern STRADDLES a SCAN BLOCK
+# boundary, which is a different seam from a page's.
+#
+# WHERE that seam falls is the whole subtlety, and getting it wrong made
+# this fixture prove nothing for a while: a scan starts at the byte after
+# the cursor, not at the start of the file, so the seam is at
+# `from + block` and MOVES with wherever the search began. Putting the
+# needle a megabyte in left it comfortably inside the first block of the
+# search that was meant to straddle it, and the test passed with the
+# overlap taken out.
+#
+# So the offsets here are computed from the search that meets them. The
+# early needle is at offset 1000; a search from just past it starts at
+# offset 1001, and with the smallest block the setting allows (1 MiB) its
+# first seam is therefore at offset 1001 + 1048576 = 1049577. The second
+# needle straddles exactly that. The ramp filler cannot contain the
+# needle, since consecutive bytes of it always rise by one.
+_seam = 1001 + 1024 * 1024
 _sm = bytearray(bytes(i % 256 for i in range(1024 * 1024 + 2048)))
 _sm[1000:1004] = b'\xde\xad\xbe\xef'
-_sm[1024 * 1024 - 2:1024 * 1024 + 2] = b'\xde\xad\xbe\xef'
+_sm[_seam - 2:_seam + 2] = b'\xde\xad\xbe\xef'
 open(os.path.join(w, 'seam1.bin'), 'wb').write(bytes(_sm))
 # and the same file with ONE byte changed just past the seam, so a
 # comparison has to cross it to find the change
@@ -4263,6 +4274,14 @@ call add(out, HexPairPagedRangeIsXxdsForTest(lim - 1024, 512) . '')
 " starts below, ends above: the straddle
 call add(out, HexPairPagedRangeIsXxdsForTest(lim - 100, 4096) . '')
 call add(out, HexPairPagedRangeIsXxdsForTest(lim + 1, 4096) . '')
+" The same four ranges, asked of the rule directly with the platform
+" passed in, so both columns are asserted on whichever platform runs this.
+let ends = [1024, lim - 512, lim, lim + 1, lim + 3996, lim + 4097]
+let cols = []
+for w in [0, 1]
+  call add(cols, (w ? 'windows: ' : 'not windows: ') . join(map(copy(ends), 'HexPairPagedSeekableOffset(v:val, ' . w . ') ? 1 : 0'), ' '))
+endfor
+call add(out, join(cols, ' | '))
 call writefile(out, '$WORK/tbound.out')
 qa!
 EOF
@@ -4280,6 +4299,15 @@ check "a range that STRADDLES the limit is not, on Windows" "$want_straddle" \
     "$(sed -n 3p "$WORK/tbound.out")"
 check "and one wholly past it never is" "$want_high" \
     "$(sed -n 4p "$WORK/tbound.out")"
+# The four above can only assert what THIS platform does, and on anything
+# but Windows that is "everything is xxd's" - which would still be true if
+# the limit had been deleted. The decision itself takes the platform as an
+# argument for that reason, so both of its branches are checked wherever
+# the suite runs: the Windows column below is the one no Linux or macOS CI
+# can otherwise reach, and it is where the 2 GiB rule actually lives.
+check "the seek rule, asked of both platforms at once" \
+    "not windows: 1 1 1 1 1 1 | windows: 1 1 1 0 0 0" \
+    "$(sed -n 5p "$WORK/tbound.out")"
 
 # getfsize() has two answers that are not sizes: -1 when it cannot see the
 # file, and -2 when the size does not fit in a Number - which on a Vim
@@ -4916,6 +4944,11 @@ redir => m1
 silent HexPairFind de ad be ef
 redir END
 call add(out, Msg(m1))
+" Said rather than inherited: the block a scan reads first begins at the
+" byte AFTER the cursor, so where the seam falls is decided here. The
+" fixture's second needle straddles offset 1001 + 1024 * 1024, which is
+" this search's first seam at the smallest block.
+HexPairGoOffset 1001
 redir => m2
 silent HexPairFindNext
 redir END
@@ -4930,12 +4963,27 @@ redir => m4
 silent HexPairFindPrev
 redir END
 call add(out, Msg(m4))
+" Back to the start, so the comparison's first block begins at the file's
+" own beginning and the change six bytes past the megabyte mark is in its
+" SECOND block - the searches above have left the cursor past it.
+HexPairGoOffset 1
 HexPairDiff $WORK/seam2.bin
 redir => m5
 silent HexPairDiffNext
 redir END
 call add(out, Msg(m5))
 call add(out, fnamemodify('$WORK/seam2.bin', ':~:.'))
+" The backward scan's own overlap, which is a different line of code from
+" the forward one: it reads PAST the end of its block by the pattern's
+" span, so a match that starts inside the block and reaches beyond it is
+" whole in the read. The cursor goes one byte into the early needle, so
+" that needle starts before where the scan begins - which is what makes it
+" the answer - and ends after it.
+HexPairGoOffset 1002
+redir => m6
+silent HexPairFindPrev
+redir END
+call add(out, Msg(m6))
 call writefile(out, '$WORK/tseam.out')
 qa!
 EOF
@@ -4943,19 +4991,24 @@ EOF
     check "a match early in the file is found (block $scanblock)" \
         "hexpair: bytes de ad be ef at byte 1001 (0x3e9)" \
         "$(sed -n 1p "$WORK/tseam.out")"
-    # 1048575 is the last byte of the first megabyte: two of the needle's
-    # four bytes are in the first block and two are in the second.
+    # Two of the needle's four bytes are in the first block the search
+    # reads and two are in the next, so only the overlap between them can
+    # find it whole. Take that overlap out and this is the check that
+    # fails - which is how it was found not to be, once.
     check "and one lying across a block seam is found whole (block $scanblock)" \
-        "hexpair: bytes de ad be ef at byte 1048575 (0xfffff)" \
+        "hexpair: bytes de ad be ef at byte 1049576 (0x1003e8)" \
         "$(sed -n 2p "$WORK/tseam.out")"
     check "the backward scan crosses the seam too (block $scanblock)" \
         "hexpair: bytes de ad be ef at byte 1001 (0x3e9)" \
         "$(sed -n 3p "$WORK/tseam.out")"
     check "and wraps to the straddling one (block $scanblock)" \
-        "hexpair: bytes de ad be ef at byte 1048575 (0xfffff) (wrapped)" \
+        "hexpair: bytes de ad be ef at byte 1049576 (0x1003e8) (wrapped)" \
         "$(sed -n 4p "$WORK/tseam.out")"
     # The change is six bytes past the seam, so the comparison has to read
     # a second block to reach it - the shape a whole-file diff has.
+    check "a match reaching past where the backward scan begins is found (block $scanblock)" \
+        "hexpair: bytes de ad be ef at byte 1001 (0x3e9)" \
+        "$(sed -n 7p "$WORK/tseam.out")"
     check_path "a comparison reaches a change past the first block (block $scanblock)" \
         "hexpair: next change at byte 1048582 (0x100006) against $(sed -n 6p "$WORK/tseam.out")" \
         "$(sed -n 5p "$WORK/tseam.out")"
@@ -5659,6 +5712,118 @@ packed=$(sed -n '/^FILES/,/^]/p' "$ROOT/pack-release.py" \
     | tr '\n' ' ')
 check "the packaging list is what the repository gives a user" \
     "$shipped" "$packed"
+
+# --- Every reader of a byte RANGE asks whether it may seek there ------------
+# The 2 GiB rule cannot be exercised off Windows, so what can be checked
+# everywhere is that each reader still ASKS. Taking the question out of one
+# of them passes every other check in this suite on Linux and macOS, and
+# breaks a large file on Windows silently - readblob() answers an
+# out-of-range read with an empty Blob AND success, and xxd's strtol()
+# saturates rather than failing, so neither reports anything. That is not a
+# hypothetical: this suite went green with the guard removed from
+# s:FileBlob() while it was being written.
+#
+# Mechanical and about the source text, like the packaging list: every
+# function that takes (file, off, len) and reads the file at that offset
+# has to consult s:XxdCanSeek() on the END of the range.
+"$PY" - "$ROOT" > "$WORK/tguard.out" <<'GUARD'
+import re, sys, os
+plug = open(os.path.join(sys.argv[1], 'plugin/hexpair.vim'), encoding='utf-8').read()
+bodies = dict(re.findall(r'^function!? ([A-Za-z0-9_:#]+)\([^)]*\) abort\n(.*?)^endfunction$',
+                         plug, re.M | re.S))
+want = ['s:FileHex', 's:FileBlob', 's:CopyRange']
+bad = []
+for name in want:
+    if name not in bodies:
+        bad.append('%s is gone' % name); continue
+    if 's:XxdCanSeek(a:off + a:len)' not in bodies[name]:
+        bad.append('%s does not ask s:XxdCanSeek(a:off + a:len)' % name)
+# and the readers must not call readblob() with an offset without asking
+for name, body in bodies.items():
+    if re.search(r'readblob\([^)]*,[^)]*,', body) and name not in want:
+        bad.append('%s reads a blob range without the guard' % name)
+print('; '.join(bad) if bad else '%d range readers, all guarded' % len(want))
+GUARD
+check "every reader of a byte range asks whether it may seek there" \
+    "3 range readers, all guarded" "$(cat "$WORK/tguard.out")"
+
+# --- Every option is listed everywhere an option is listed ------------------
+# Three places promise to be complete and are kept by hand: the option list
+# in plugin/hexpair.vim's own header, the tagged entries in doc/hexpair.txt,
+# and the block in README.md that says "Every option, with its default".
+# g:hexpair_verify_writes was in none of the three - it is read with
+# get(g:, ...) rather than given a default, so it slipped past the eye that
+# checks the others - while being described in prose in all of them. The
+# rule is mechanical: an option the PLUGIN reads is an option a user can
+# set, however it is read.
+"$PY" - "$ROOT" > "$WORK/topts.out" <<'OPTS'
+import re, sys, os
+root = sys.argv[1]
+read = lambda p: open(os.path.join(root, p), encoding='utf-8').read()
+plug, doc, rdme = read('plugin/hexpair.vim'), read('doc/hexpair.txt'), read('README.md')
+# What the plugin actually reads, both ways it reads one.
+opts = set(re.findall(r"if !exists\('(g:hexpair_[a-z_]+)'\)", plug))
+opts |= {'g:' + o for o in re.findall(r"get\(g:, '(hexpair_[a-z_]+)'", plug)}
+places = {
+    'the plugin header': set(re.findall(r'^"   (g:hexpair_[a-z_]+)', plug, re.M)),
+    'doc/hexpair.txt': set(re.findall(r'\*(g:hexpair_[a-z_]+)\*', doc)),
+    'the README block': set(re.findall(r'^" let (g:hexpair_[a-z_]+)', rdme, re.M)),
+}
+bad = []
+for where, listed in sorted(places.items()):
+    for missing in sorted(opts - listed):
+        bad.append('%s missing from %s' % (missing, where))
+    for extra in sorted(listed - opts):
+        bad.append('%s listed in %s but the plugin never reads it' % (extra, where))
+print('%d options; %s' % (len(opts), '; '.join(bad) if bad else 'all listed in all three'))
+OPTS
+check "every option the plugin reads is listed in all three places" \
+    "15 options; all listed in all three" "$(cat "$WORK/topts.out")"
+
+# --- The diff runs are dropped when what they compare against moves ---------
+# In the text view s:DiffRuns() caches its answer against b:changedtick,
+# which reports an EDIT and nothing else. Two things change what is being
+# compared without touching the buffer - turning a page, and pointing
+# :HexPairDiff at another file - and both go through s:LoadDiffHex(), which
+# is where the cache is dropped. Without that the marking goes on painting
+# the previous page's differences, or the previous file's.
+cat > "$WORK/tdfcache.vim" <<EOF
+$(printf "$HEX")
+let out = []
+HexPairOpen $WORK/diffa.bin 1
+HexPairDiff $WORK/diffb.bin
+HexPairToggle
+" diffb.bin differs at bytes 101, 1501 and 5000; with 512-byte pages that
+" is one on page 1, none on page 2 and one on page 3.
+call add(out, 'page 1 ' . string(HexPairPagedMarkingPositions('diff', 1, line('\$'))))
+HexPairPageNext
+call add(out, 'page 2 ' . string(HexPairPagedMarkingPositions('diff', 1, line('\$'))))
+HexPairPageNext
+call add(out, 'page 3 ' . string(HexPairPagedMarkingPositions('diff', 1, line('\$'))))
+" And the same page against a file that does not differ on it: the answer
+" has to change with nothing in the buffer changing. diffc.bin is diffa.bin
+" with four bytes appended, so page 1 is identical.
+HexPairPageGoto 1
+" Asked here on purpose: it fills the cache at this tick, so the answer
+" below can only be right if pointing the comparison elsewhere dropped it.
+" A page turn bumps b:changedtick by itself and would have hidden that.
+call add(out, 'page 1 again ' . string(HexPairPagedMarkingPositions('diff', 1, line('\$'))))
+HexPairDiff $WORK/diffc.bin
+call add(out, 'page 1 vs diffc ' . string(HexPairPagedMarkingPositions('diff', 1, line('\$'))))
+call writefile(out, '$WORK/tdfcache.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tdfcache.vim" < /dev/null
+check "the first page marks its own difference" "page 1 [[3, 90, 1]]" \
+    "$(sed -n 1p "$WORK/tdfcache.out")"
+check "a page with none marks none, not the page before's" "page 2 []" \
+    "$(sed -n 2p "$WORK/tdfcache.out")"
+check "and the next page marks its own" "page 3 [[4, 210, 1]]" \
+    "$(sed -n 3p "$WORK/tdfcache.out")"
+check "coming back to it marks it again" "page 1 again [[3, 90, 1]]" \
+    "$(sed -n 4p "$WORK/tdfcache.out")"
+check "and pointing the comparison elsewhere changes the answer" \
+    "page 1 vs diffc []" "$(sed -n 5p "$WORK/tdfcache.out")"
 
 # --- The generated .reg says what it is supposed to say ---------------------
 # vimhex-contex-entry.add.reg carries its paths as REG_EXPAND_SZ, written as
