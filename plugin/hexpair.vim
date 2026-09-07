@@ -1560,7 +1560,8 @@ function! HexPairPagedMarkingPositions(layer, first, last) abort
           \                             s:ModifiedRuns())
   elseif a:layer ==# 'diff'
     return hex ? s:DiffPositions(a:first, a:last)
-          \ : s:TextComparePositions(a:first, a:last, 'diff', s:DiffHex())
+          \ : HexPairPagedTextPositions(s:TextSpans(a:first, a:last),
+          \                             s:DiffRuns())
   elseif a:layer ==# 'find'
     return hex ? HexPairPagedFindPositions(a:first, a:last)
           \ : s:TextFindPositions(a:first, a:last)
@@ -6302,12 +6303,44 @@ function! HexPairPagedDiffActive() abort
 endfunction
 
 function! s:LoadDiffHex() abort
+  " The runs held against it are stale the moment it moves, and no tick
+  " says so: a page turn and a second :HexPairDiff both change what is
+  " being compared without touching the buffer. This is the one place
+  " that sets it, so it is the one place that has to say so.
+  let b:hexpair_diffruns_tick = -1
   if get(b:, 'hexpair_diff_file', '') ==# ''
     let b:hexpair_diff_hex = ''
     return
   endif
   let b:hexpair_diff_hex = s:FileHex(b:hexpair_diff_file,
         \ b:hexpair_page_base, b:hexpair_page_len)
+endfunction
+
+" The bytes of this page that differ from the file being compared with,
+" as page-relative runs - the diff layer's half of what s:ModifiedRuns()
+" is for the edited one, and cached the same way, because the marking
+" asks for it again on every scroll.
+"
+" Real bytes on both sides, so the text view is exact here too: it used
+" to compare in its own spelling, where a NUL and a line break are one
+" character, and a NUL on one side against a line break on the other was
+" therefore not a difference at all.
+"
+" A page the other file does not reach needs no special case here, unlike
+" the comparison this replaces: HexPairPagedDifferingByteRuns() already
+" counts bytes the other run does not reach as differences of their own,
+" which is exactly what "every byte of this page differs because there is
+" nothing over there" means.
+function! s:DiffRuns() abort
+  if get(b:, 'hexpair_diffruns_tick', -1) == b:changedtick
+    return b:hexpair_diffruns
+  endif
+  let live = s:LiveHex()
+  let b:hexpair_diffruns_tick = b:changedtick
+  let b:hexpair_diffruns = live ==# '' ? []
+        \ : HexPairPagedJoinRuns(
+        \     HexPairPagedDifferingByteRuns(live, s:DiffHex()))
+  return b:hexpair_diffruns
 endfunction
 
 function! s:DiffPositions(first, last) abort
@@ -8249,104 +8282,6 @@ function! HexPairPagedTextPositions(spans, runs) abort
   return out
 endfunction
 
-" Where two strings of the same bytes part company, as [offset, length]
-" runs counted from a:base. Chunked, so an unedited line costs one
-" comparison per kilobyte rather than one per byte - a page with no 0x0a
-" in it is a single line as long as the page.
-function! HexPairPagedTextRuns(mine, theirs, base) abort
-  let out = []
-  if a:mine ==# a:theirs
-    return out
-  endif
-  let len = strlen(a:mine)
-  let at = 0
-  let from = -1
-  while at < len
-    let span = s:cmpblock < len - at ? s:cmpblock : len - at
-    if strpart(a:mine, at, span) ==# strpart(a:theirs, at, span)
-      if from >= 0
-        call add(out, [a:base + from, at - from])
-        let from = -1
-      endif
-      let at += span
-      continue
-    endif
-    let i = at
-    while i < at + span
-      if strpart(a:mine, i, 1) !=# strpart(a:theirs, i, 1)
-        if from < 0
-          let from = i
-        endif
-      elseif from >= 0
-        call add(out, [a:base + from, i - from])
-        let from = -1
-      endif
-      let i += 1
-    endwhile
-    let at += span
-  endwhile
-  if from >= 0
-    call add(out, [a:base + from, len - from])
-  endif
-  return out
-endfunction
-
-" A run of hex as the text view would hold it, with the line breaks back
-" in, so a piece of it can be taken by byte offset and compared against
-" what a line of the buffer holds. One xxd for it, kept against the hex it
-" was made from: the page as it was read and the file being compared with
-" are each converted once per page, not once per redraw.
-function! s:BytesAsText(label, hex) abort
-  let cache = get(b:, 'hexpair_text_bytes', {})
-  let hit = get(cache, a:label, ['', ''])
-  if hit[0] ==# a:hex
-    return hit[1]
-  endif
-  let text = ''
-  if a:hex !=# ''
-    let hexfile = tempname()
-    let raw = tempname()
-    try
-      call writefile([a:hex], hexfile)
-      call s:Run(printf('%s -r -p %s %s', s:Xxd(),
-            \ shellescape(hexfile), shellescape(raw)))
-      let text = join(readfile(raw, 'b'), "\n")
-    catch
-      let text = ''
-    finally
-      call delete(hexfile)
-      call delete(raw)
-    endtry
-  endif
-  let cache[a:label] = [a:hex, text]
-  let b:hexpair_text_bytes = cache
-  return text
-endfunction
-
-" What the buffer holds against a:hex, over the visible lines only.
-function! s:TextComparePositions(first, last, label, hex) abort
-  " An empty a:hex means "no bytes over there", which for the 'diff' layer
-  " is a real answer - past the end of the other file every byte differs -
-  " and NOT a reason to mark nothing; see HexPairPagedDiffActive(). Only
-  " the 'page' layer, which holds unwritten edits against the page as it
-  " was read, can take it as nothing to compare, and with a non-empty page
-  " it does not arise there either: both sides are then empty and the run
-  " builders return nothing of their own accord.
-  if a:label ==# 'page' && a:hex ==# ''
-    return []
-  endif
-  let theirs = s:BytesAsText(a:label, a:hex)
-  let spans = s:TextSpans(a:first, a:last)
-  let runs = []
-  for span in spans
-    if span[2] <= 0
-      continue
-    endif
-    call extend(runs, HexPairPagedTextRuns(getline(span[0]),
-          \ strpart(theirs, span[1], span[2]), span[1]))
-  endfor
-  return HexPairPagedTextPositions(spans, runs)
-endfunction
 
 " The matches of the current pattern, and the marks, over the visible
 " lines. Both are about the FILE - the page as it was read - so neither

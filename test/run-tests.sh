@@ -278,6 +278,9 @@ open(os.path.join(w, 'seam2.bin'), 'wb').write(bytes(_sm2))
 # (which Vim hands back from getline() as a line break) and a real 0a
 # (which IS a line break). "AB<NUL>CD<NL>EF".
 open(os.path.join(w, 'nul.bin'), 'wb').write(b'AB\x00CD\x0aEF')
+# and the same eight bytes with the NUL swapped for a real 0a, so the two
+# differ in exactly the byte the text view used to spell the same way
+open(os.path.join(w, 'nul2.bin'), 'wb').write(b'AB\x0aCD\x0aEF')
 # A fixture in which every byte is one of two values, so that a pattern
 # made of those two is DENSE: the byte reader walks one byte value and
 # checks the rest by hand, which is only worth doing while that value is
@@ -4706,7 +4709,6 @@ check "and a replacement cannot have wildcards in it" \
 cat > "$WORK/ttmark.vim" <<EOF
 $(printf "$HEX")
 let out = []
-call add(out, string([HexPairPagedTextRuns('abcdef', 'abXdef', 100), HexPairPagedTextRuns('abcdef', 'abcdef', 0), HexPairPagedTextRuns('abcdef', 'abc', 0), HexPairPagedTextRuns('abc', 'abcdef', 0)]))
 call add(out, string(HexPairPagedTextPositions([[2, 0, 10], [3, 11, 10]], [[5, 3]])))
 call add(out, string(HexPairPagedTextPositions([[2, 0, 10], [3, 11, 10]], [[8, 6]])))
 HexPairOpen $WORK/tmark1.bin 1
@@ -4727,27 +4729,25 @@ EOF
 "$HEXPAIR_VIM" -es -u NONE -S "$WORK/ttmark.vim" < /dev/null
 # The two pure halves first: where two strings of bytes part company, and
 # where a run of bytes lands on the lines that hold it.
-check "runs are where two lines of bytes differ" \
-    "[[[102, 1]], [], [[3, 3]], []]" "$(sed -n 1p "$WORK/ttmark.out")"
 check "a run inside one line is one position" "[[2, 6, 3]]" \
-    "$(sed -n 2p "$WORK/ttmark.out")"
+    "$(sed -n 1p "$WORK/ttmark.out")"
 # Bytes 8-13 with a line break at 10: two pieces, and the break itself is
 # not marked because it has no column.
 check "and one across a line break is two" "[[2, 9, 2], [3, 1, 3]]" \
-    "$(sed -n 3p "$WORK/ttmark.out")"
+    "$(sed -n 2p "$WORK/ttmark.out")"
 check "the text view holds the bytes between the breaks" \
-    "['ABCDEFGHIJ', 'KLMNOPQRST', 'UVWXYZ0123']" "$(sed -n 4p "$WORK/ttmark.out")"
+    "['ABCDEFGHIJ', 'KLMNOPQRST', 'UVWXYZ0123']" "$(sed -n 3p "$WORK/ttmark.out")"
 check "what differs from the other file is marked where it is" \
-    "[[2, 3, 2], [4, 4, 1]]" "$(sed -n 5p "$WORK/ttmark.out")"
+    "[[2, 3, 2], [4, 4, 1]]" "$(sed -n 4p "$WORK/ttmark.out")"
 check "so is the byte a mark stands on" "[[2, 6, 1]]" \
-    "$(sed -n 6p "$WORK/ttmark.out")"
+    "$(sed -n 5p "$WORK/ttmark.out")"
 check "and the bytes a search found" "[[3, 1, 2]]" \
-    "$(sed -n 7p "$WORK/ttmark.out")"
+    "$(sed -n 6p "$WORK/ttmark.out")"
 # The edited bytes are the one layer that is about the BUFFER, and in this
 # view that means comparing what the lines hold against the page as it was
 # read - string against string, in the text view's own spelling.
 check "and the bytes edited and not yet written" "[1, [[4, 7, 4]]]" \
-    "$(sed -n 8p "$WORK/ttmark.out")"
+    "$(sed -n 7p "$WORK/ttmark.out")"
 
 # --- The same, on the bytes a real file is made of -------------------------
 # CRLF line endings and multi-byte characters are where a byte offset and
@@ -5562,6 +5562,44 @@ check "a line break turned into a NUL is one too, and is painted" \
 check "and an ordinary edit marks the byte it always did" \
     "hexpair: edit 1 of 1 on this page, at byte 2 (0x2) | [[2, 2, 1]]" \
     "$(sed -n 3p "$WORK/tmodmark.out")"
+
+# The comparison against ANOTHER FILE is exact in the text view too.
+#
+# Same fault as the marking above and the same fix: it compared in the
+# text view's own spelling, where a NUL and a line break are one
+# character, so two files differing in exactly that byte looked identical
+# there while the hex view marked them. Both views now hold real bytes
+# against real bytes.
+#
+# The page-past-the-end case that this must not break has its own block
+# (see "a page past the other file's end differs in every byte"), and it
+# needs no special case here: HexPairPagedDifferingByteRuns() counts bytes
+# the other run does not reach as differences of their own.
+cat > "$WORK/tdfnul.vim" <<EOF
+$(printf "$HEX")
+let out = []
+HexPairOpen $WORK/nul.bin 1
+HexPairDiff $WORK/nul2.bin
+call add(out, 'hex ' . string(HexPairPagedMarkingPositions('diff', 2, 2)))
+HexPairToggle
+call add(out, 'text ' . string(HexPairPagedMarkingPositions('diff', 2, 2)))
+HexPairGoOffset 3
+redir => a
+silent! HexPairDiffShow
+redir END
+call add(out, matchstr(substitute(a, "\\n", ' ', 'g'), 'hexpair:[^|]*'))
+call add(out, fnamemodify('$WORK/nul2.bin', ':~:.'))
+call writefile(out, '$WORK/tdfnul.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tdfnul.vim" < /dev/null
+check "the hex view marks a NUL against a line break" "hex [[2, 17, 2], [2, 62, 1]]" \
+    "$(sed -n 1p "$WORK/tdfnul.out")"
+check "and so does the text view now" "text [[2, 3, 1]]" \
+    "$(sed -n 2p "$WORK/tdfnul.out")"
+check_path "and both say which two bytes they are" \
+    "hexpair: byte 3 (0x3): 00 here, 0a in $(sed -n 4p "$WORK/tdfnul.out")" \
+    "$(sed -n 3p "$WORK/tdfnul.out")"
 
 # The Visual-mode form, through the <Plug> target a key would reach it by:
 # a run of bytes rather than one, and the selection put back afterwards.

@@ -61,9 +61,14 @@ and this project adheres to
   is that the text view compares the whole page per edit, as the hex view
   always has: about 30 ms at the default page size, where it used to compare
   only the lines on screen. Nothing is recomputed between edits.
-  `:HexPairDiff`'s marking still compares in the text spelling and keeps
-  that one blind spot; a changed byte that *is* a line break can be jumped
-  to but never painted, since a line break has no column. See
+  `:HexPairDiff`'s marking took the same wrong turn and is fixed the same
+  way, so two files differing in exactly that byte are no longer identical
+  in the text view — that one is nearly free, since both layers share the
+  page's bytes. With a comparison running as well the pair costs about
+  50 ms an edit at the default page size. What is left is the view's own
+  and not the comparison's: a changed byte that *is* a line break can be
+  jumped to but never painted, since a line break has no column. The three
+  functions that did the spelling comparison are gone with it. See
   `:help hexpair-marking-views`.
 - **Searching reads bytes, not hex — 4.5× faster.** `:HexPairFind` read each
   block of the file as hex through `xxd` and matched it with a regexp. Where
