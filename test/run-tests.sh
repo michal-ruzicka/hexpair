@@ -299,6 +299,11 @@ open(os.path.join(w, 'unpos-latin1.txt'), 'wb').write(b'prvni radek\ndruhy \xe1\
 open(os.path.join(w, 'unpos-noeol.txt'), 'wb').write(b'line one\nline two\nline three\nline four\nline five')
 # and an actual binary, which a plain :edit reads as latin1
 open(os.path.join(w, 'unpos.dat'), 'wb').write(bytes((i * 7) % 256 for i in range(200)))
+# and one no byte count describes at all: utf-16 with a BOM, where a
+# character is two file bytes and one or two buffer bytes, so neither the
+# byte walk nor the character walk adds up and the fallback is the answer
+open(os.path.join(w, 'unpos-utf16.txt'), 'wb').write(
+    '\ufeffprvni radek\ndruhy radek\ntreti radek\n'.encode('utf-16-le'))
 # and the same eight bytes with the NUL swapped for a real 0a, so the two
 # differ in exactly the byte the text view used to spell the same way
 open(os.path.join(w, 'nul2.bin'), 'wb').write(b'AB\x0aCD\x0aEF')
@@ -634,6 +639,17 @@ HexPairToggle
 HexPairGoOffset 33
 HexPairUnhex
 call add(out, 'binary: line ' . line('.') . ' col ' . col('.') . ' fenc ' . &l:fileencoding)
+" And one the model does not describe: the walk totals the file as it
+" goes, and where that total is not the size on disk the remembered
+" position is used rather than a place worked out from a wrong sum.
+" ucs-bom back in front, which the latin1 case above took out.
+set fileencodings=ucs-bom,utf-8,latin1
+edit $WORK/unpos-utf16.txt
+call cursor(2, 1)
+HexPairToggle
+HexPairGoOffset 30
+HexPairUnhex
+call add(out, 'utf16: line ' . line('.') . ' fenc ' . &l:fileencoding . ' (entered from 2)')
 call writefile(out, '$WORK/tunpos.out')
 qa!
 EOF
@@ -658,6 +674,10 @@ check "and lands where the byte is all the same" "noeol: line 4 col 4" \
 # the character the cursor was on.
 check "a binary opened as text lands on its byte too" \
     "binary: line 1 col 46 fenc latin1" "$(sed -n 9p "$WORK/tunpos.out")"
+# The self-check: two file bytes a character and one or two buffer bytes,
+# so neither walk adds up and the entry position is used after all.
+check "a file the model does not describe falls back" \
+    "utf16: line 2 fenc utf-16le (entered from 2)" "$(sed -n 10p "$WORK/tunpos.out")"
 
 # --- Test 6: a user ftplugin with b:did_ftplugin suppresses the bundled one -
 mkdir -p "$WORK/user-rtp/ftplugin"
@@ -2136,6 +2156,13 @@ check "helptags found the plugin's tags" "1" \
 # Resolved against the tags of the Vim under test, so this says what that
 # Vim would actually do, and skipped where those tags are not built (a
 # runtime installed without them).
+#
+# Which means the answer DEPENDS ON THE VIM, and the one that matters is
+# the floor: |readblob()| resolves on a modern Vim and is a dead end on
+# 8.0, where that function does not exist. Four of them went in and only
+# the vim80 CI job saw it. A tag Vim gained after 8.0 is not a tag this
+# help may point at - name it in plain text, the way the paged section
+# already names readblob() when it says which patch added it.
 cat > "$WORK/trt.vim" <<EOF
 call writefile([\$VIMRUNTIME], '$WORK/trt.out')
 qa!
@@ -4100,6 +4127,14 @@ call add(out, 'still ' . getfsize('$WORK/diffshort.bin') . ' bytes on disk')
 " And back to a real page, from the absent one.
 HexPairPageGoto 1
 call add(out, 'back: ' . HexPairStatus() . ' | ' . (getline(1) =~# 'is not in' ? 'absent' : 'real'))
+" And the refusal goes with the page: a real page is writable again. The
+" flag that marks an absent one is cleared by loading a real one, and
+" nothing else says so - without that, coming back leaves a view that
+" cannot be written and gives the absent page's reason for it.
+redir => b
+silent! w
+redir END
+call add(out, 'write back on page 1: ' . (b =~# 'is not in this file' ? 'STILL REFUSED' : 'allowed'))
 call writefile(out, '$WORK/tabsent.out')
 qa!
 EOF
@@ -4120,6 +4155,8 @@ check "with the file untouched" "still 1000 bytes on disk" \
     "$(sed -n 5p "$WORK/tabsent.out")"
 check "and a real page is reachable again from it" "back: hex 1/2 @0x1 (1) | real" \
     "$(sed -n 6p "$WORK/tabsent.out")"
+check "which is writable again, the refusal having gone with the page" \
+    "write back on page 1: allowed" "$(sed -n 7p "$WORK/tabsent.out")"
 
 # --- A file that is longer differs from where it grows --------------------
 cat > "$WORK/tdf2.vim" <<EOF
@@ -5905,6 +5942,19 @@ call add(out, g:hexpair_show_modified . ' after the bang')
 HexPairModified!
 call add(out, g:hexpair_show_modified . ' and the bang again')
 call add(out, exists(':HPModified') . ' short name')
+" Switching it off has to reach the marks in EVERY window showing the
+" page, not only the one the command was typed in - so s:ModifiedHighlight()
+" clears when the option is off instead of returning early, and every other
+" window loses them on its next redraw. That branch is testable headlessly
+" even though the drawing is not: stand in for the marks such a window
+" would have, then let a redraw run with the marking off.
+HexPairModified
+let w:hexpair_mod_ids = [matchaddpos('HexPairModified', [[4, 11, 2]])]
+let w:hexpair_mod_state = [b:changedtick, 1, line('\$'), 1]
+call add(out, len(filter(getmatches(), 'v:val.group ==# "HexPairModified"')) . ' seeded')
+HexPairModified!
+doautocmd TextChanged
+call add(out, len(filter(getmatches(), 'v:val.group ==# "HexPairModified"')) . ' after a redraw with it off')
 call writefile(out, '$WORK/tmodtog.out')
 qa!
 EOF
@@ -5926,6 +5976,10 @@ check "and twice leaves it off" "0 and the bang again" \
     "$(sed -n 6p "$WORK/tmodtog.out")"
 check "the short name is defined too" "2 short name" \
     "$(sed -n 7p "$WORK/tmodtog.out")"
+check "a window's marks stand where they were drawn" "1 seeded" \
+    "$(sed -n 8p "$WORK/tmodtog.out")"
+check "and a redraw with the marking off takes them away" \
+    "0 after a redraw with it off" "$(sed -n 9p "$WORK/tmodtog.out")"
 
 # The Visual-mode form, through the <Plug> target a key would reach it by:
 # a run of bytes rather than one, and the selection put back afterwards.
@@ -6019,6 +6073,38 @@ print('; '.join(bad) if bad else '%d range readers, all guarded' % len(want))
 GUARD
 check "every reader of a byte range asks whether it may seek there" \
     "3 range readers, all guarded" "$(cat "$WORK/tguard.out")"
+
+# --- Every command is in the README's command table -------------------------
+# The table promises to be the command reference and is kept by hand, so it
+# drifts silently: the whole :HexPairModified* family was missing from it -
+# three commands, one of them added a release earlier - while being
+# described in prose two screens above. The rule is the packaging list's:
+# a command the plugin DEFINES is a command a user gets.
+"$PY" - "$ROOT" > "$WORK/tcmds.out" <<'CMDS'
+import re, sys, os
+root = sys.argv[1]
+plug = open(os.path.join(root, 'plugin/hexpair.vim'), encoding='utf-8').read()
+# Fold Vim's line continuations first: two of these commands carry their
+# name on the continuation line, the argument list having filled the first.
+plug = re.sub(r'\n\s*\\', ' ', plug)
+rdme = open(os.path.join(root, 'README.md'), encoding='utf-8').read()
+# The command's NAME is the last HexPair... on its :command line - the
+# ones before it belong to -complete=custom, and the name may end the
+# line as well as be followed by the call.
+defined = set(re.findall(r'^command!.*\s(HexPair\w+)(?= |$)', plug, re.M))
+# The table rows: `:HexPairFoo`, `:HexPairFoo[!]`, `:HexPairFoo {arg}` ...
+listed = set(re.findall(r'`:(HexPair\w+)', rdme))
+missing = sorted(defined - listed)
+unknown = sorted(l for l in listed - defined if l != 'HexPair')
+out = []
+if missing:
+    out.append('not in README.md: ' + ' '.join(missing))
+if unknown:
+    out.append('in README.md but not a command: ' + ' '.join(unknown))
+print('; '.join(out) if out else '%d commands, all in the README' % len(defined))
+CMDS
+check "every command the plugin defines is named in the README" \
+    "36 commands, all in the README" "$(cat "$WORK/tcmds.out")"
 
 # --- Every option is listed everywhere an option is listed ------------------
 # Three places promise to be complete and are kept by hand: the option list

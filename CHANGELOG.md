@@ -121,48 +121,37 @@ and this project adheres to
   jumped to but never painted, since a line break has no column. The three
   functions that did the spelling comparison are gone with it. See
   `:help hexpair-marking-views`.
-- **Searching reads bytes, not hex — 4.5× faster.** `:HexPairFind` read each
-  block of the file as hex through `xxd` and matched it with a regexp. Where
-  Vim can read a byte range on its own (9.0.0795 with `+num64`) and has
-  `has('vim9script')`, it now walks the raw bytes instead: Vim has no "find
-  these bytes in a Blob", so it walks every occurrence of **one** byte of the
+- **Searching and comparing a large file are 5.8× and 65× faster.** Both
+  read the file a block at a time, and both used to read every block as hex
+  through `xxd` and work on the text. Where Vim can read a byte range on its
+  own — `readblob()` with an offset and a size, which is 9.0.0795 with
+  `+num64`, the same patch a splice needs — they work on the raw bytes
+  instead. Over a 256 MiB file, `:HexPairFind` end to end went from **11.6 s
+  to 2.0 s** and `:HexPairDiffNext` from **16.2 s to 0.25 s**, with a
+  search's memory down from 97 MB to 23 MB. A comparison becomes two reads
+  and a `memcmp`; a search has more to do, since Vim has no "find these
+  bytes in a Blob", so it walks every occurrence of **one** byte of the
   pattern and checks the rest by hand, in the plugin's one Vim9 `:def`
-  function (`autoload/hexpair.vim`) — a compiled loop, which is what makes it
-  worth doing at all. Searching a 256 MiB file end to end went from **9.1 s
-  to 2.0 s**, and the memory from 97 MB to 23 MB. Which byte gets walked is
-  chosen by sampling the block, because the walk costs a step per occurrence
-  of it: `00 00 00 00 01` in 64 MiB of zeros walks the `01` and takes
-  **0.30 s** where it used to take 13.2 s. When *every* byte of the pattern
-  is common in a block — `00 00` in that same file — the byte reader hands
-  that block back and it goes through `xxd`, so the bad case costs what it
-  always did. `?` nibble wildcards work on both readers, and a hexpair whose
-  `autoload/` was not copied, or a Vim without either feature, keeps the old
-  one: it is asked a question with a known answer before it is trusted with a
-  file.
-- **Comparing two files reads bytes, not hex — 45× faster.** `:HexPairDiff`
-  and the jumps over it (`:HexPairDiffNext`, `:HexPairDiffPrev`) used to ask
-  `xxd` for each block of each file and compare the two as text, which meant
-  a process, a pipe and twice the data on both sides. Where `readblob()`
-  takes an offset and a size — Vim 9.0.0795 with `+num64`, the same patch
-  the splice already needs — the blocks are read as raw bytes and compared
-  as raw bytes: one `memcmp` instead of a string comparison over twice the
-  data that had to be built first. Finding the next change in a 256 MiB pair
-  went from **12.4 s to 0.28 s**, and the memory from 113 MB to 47 MB.
-  Nothing about the answers changes, and a Vim without that patch keeps the
-  `xxd` reader — the suite holds the two against each other and requires
-  them to agree. Past 2 GiB on native Windows `readblob()` shares `xxd`'s
-  32-bit limit, and answers an out-of-range read with an empty Blob *and*
-  success, so there the bytes come out of the temp file PowerShell already
-  writes for that case — the fast comparison still applies, only the read in
-  front of it is the slow one.
-- **A file-wide scan asks `xxd` for wider lines.** `:HexPairFind` and
-  `:HexPairDiffNext` read the file as flat hex, which means taking the line
-  breaks back out of what `xxd -p` printed — and `-p` wraps at 30 bytes, so
-  a megabyte of file arrived as some 35 000 of them. It is asked for `-c
-  256` now, xxd's own ceiling and therefore the fewest breaks that can be
-  asked for portably: a ninth as many, and about 8% off the wall time of a
-  whole-file scan. Nothing about the result changes — the breaks were being
-  removed either way.
+  function (`autoload/hexpair.vim`) — five times faster at that loop than
+  legacy script. Which byte it walks is chosen by sampling the block,
+  because the walk costs a step per occurrence: `00 00 00 00 01` in 64 MiB
+  of zeros walks the `01` and takes 0.30 s where it took 13.2 s, and when
+  *every* byte of the pattern is common in a block that block goes through
+  `xxd` instead, so the bad case costs what it always did. `?` nibble
+  wildcards work either way.
+- **The `xxd` reader is still there, and is faster too.** A Vim without that
+  patch, or a hexpair whose `autoload/` was not copied, reads blocks as hex
+  as before — and **the answers are identical**: the test suite holds the
+  two readers against each other and requires them to agree, and CI runs the
+  whole suite against Vim 8.0.0000 built from source. That reader now asks
+  `xxd` for `-c 256`, the widest line it will portably give, which is a
+  ninth as many line breaks to strip and some 8% off a whole-file scan. Past
+  2 GiB on native Windows it is the only reader either way for a different
+  reason: `readblob()` shares `xxd`'s 32-bit limit there, and answers an
+  out-of-range read with an empty Blob *and* success, so past that mark the
+  bytes come out of the temp file PowerShell already writes — the fast
+  comparison and search still apply, only the read in front of them is the
+  slow one.
 - **`gvimhex` and `gvimhexdiff` are documented.** `hexpair.bashrc` has
   defined them all along — `vimhex` and `vimhexdiff` with `VIMHEX_VIM`
   defaulting to `gvim` — and said so only in its own comments: neither the

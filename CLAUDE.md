@@ -1399,6 +1399,13 @@ was designed and built in Stage 2 - see "What Stage 2 decided".
   bytes the other run does not reach as differences of their own.
   `s:TextComparePositions()`, `s:BytesAsText()` and
   `HexPairPagedTextRuns()` were the spelling comparison and are deleted.
+- **A |reference| in the help must resolve on VIM 8.0**, not on the Vim
+  you are running. The suite resolves them against the tags of the Vim
+  under test, so a tag Vim gained later - `readblob()`, added in 8.2.2343
+  - passes locally and fails the vim80 CI job, which is the only place
+  the floor is actually tested. Name such a function in plain text; the
+  paged section already does when it says which patch added it. Four of
+  these went in during v2.4.0 and CI was what found them.
 - **A bound view that cannot follow a page turn shows an ABSENT PAGE**
   (`s:LoadAbsent()`), not the page it had. Staying put is what
   `s:FollowPageTurn()` used to do and it is the one wrong answer: two
@@ -1539,9 +1546,11 @@ was designed and built in Stage 2 - see "What Stage 2 decided".
   way), cursor included. `s:binding` stops a followed turn from being
   passed back; the followed window's own `'scrollbind'` comes off while
   its page loads, since filling a window scrolls it and that scroll would
-  drag the window the turn came from. A window with unwritten changes, or
-  whose file does not reach that far, is left where it is **and says so** —
-  a bound window quietly showing something else is the bug being fixed.
+  drag the window the turn came from. A window with unwritten changes is
+  left where it is **and says so**; one whose own file does not reach
+  that far goes to the page and shows an ABSENT PAGE (see above) — a
+  bound window quietly showing something else is the bug being fixed,
+  and a message that scrolls away does not fix it.
   `g:hexpair_bind_pages` turns the whole thing off. It ends with
   `:syncbind`: 'scrollbind' syncs RELATIVE movement from wherever each
   window was when it was bound, and a page load moves a window without

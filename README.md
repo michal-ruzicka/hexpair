@@ -31,10 +31,10 @@ on Linux, macOS and the BSDs, on native Windows (where `xxd.exe` is found
 inside the Vim installation even when it is not on `PATH`) and inside WSL —
 with one platform note about files over 2 GiB on native Windows, below.
 
-And it is **good enough for real work on real, even _very_ big, files:** 
-because it shows one page at a time and writes one page at a time, a file that 
-does not fit in memory — a disk image, a core dump, a database — is no different 
-from a small one. Editing an 8 TiB file costs the same ~20 MiB of memory as 
+And it is **good enough for real work on real, even _very_ big, files:**
+because it shows one page at a time and writes one page at a time, a file that
+does not fit in memory — a disk image, a core dump, a database — is no different
+from a small one. Editing an 8 TiB file costs the same ~20 MiB of memory as
 editing an 8 KiB one.
 
 > **A note about `xxd` on native Windows.** `xxd` keeps its seek offset in a
@@ -546,6 +546,9 @@ page.
 | `:HexPairFindNext` / `:HexPairFindPrev` | Repeat the search either way (obeys `'wrapscan'`) |
 | `:HexPairReplace {bytes}` | Put those bytes over the match under the cursor |
 | `:HexPairReplaceAllInPage {pattern} / {bytes}` | ... over every match on the page in view |
+| `:HexPairModifiedNext` / `:HexPairModifiedPrev` | Walk the runs of bytes edited and not yet written, on this page |
+| `:HexPairModifiedShow` | What was here before you edited it, at the cursor or over a Visual selection |
+| `:HexPairModified[!]` | Stop marking edited bytes, or start again; `!` stops rather than toggling |
 | `:HexPairDiff[!] [file]` | Compare with `{file}`, marking the bytes that differ; `!` stops |
 | `:HexPairDiffNext` / `:HexPairDiffPrev` | Walk to the next/previous byte where the two files differ |
 | `:HexPairDiffShow` | What the compared file holds at the cursor, or over a Visual selection — including that it has nothing there |
@@ -832,8 +835,12 @@ on: turning the page in either window (or landing on another page with
 `:HexPairDiffNext`, `:HexPairFind`, a mark) takes every scroll-bound
 window with it, to the page holding the same **byte**, cursor included.
 A window with unwritten changes is left where it is and says so, rather
-than having them discarded on its behalf. `g:hexpair_bind_pages = 0`
-turns this off and lets `'scrollbind'` mean scrolling alone.
+than having them discarded on its behalf. A window whose own file does
+not reach that far goes to the page anyway and says the page is not
+there — a banner, no bytes, and a `:w` refused — because two windows
+showing different offsets side by side, with nothing saying so, is what
+binding them is meant to prevent. `g:hexpair_bind_pages = 0` turns this
+off and lets `'scrollbind'` mean scrolling alone.
 
 ### Marks
 

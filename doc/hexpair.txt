@@ -449,10 +449,11 @@ last byte, and on a short last line on its last existing byte.
                         right one stayed at the top of page 1.
 
                         Only bound views follow, and only those showing a
-                        page.  One that has unwritten changes, or whose
-                        file does not reach that far, stays where it is
-                        and says so - as for a page turn
-                        (|g:hexpair_bind_pages|).
+                        page.  One that has unwritten changes stays where
+                        it is and says so; one whose own file does not
+                        reach that far goes to the page and says the page
+                        is not there (|hexpair-absent-page|) - as for a
+                        page turn (|g:hexpair_bind_pages|).
 
                                                           *:HexPairSelection*
 :HexPairSelection       Say how many bytes the |Visual| selection covers,
@@ -935,7 +936,7 @@ g:hexpair_scan_block    How much of the FILE a file-wide scan reads at a
                         in play (|hexpair-scan-readers|).
 
                         On the BYTE reader - a Vim with patch 9.0.0795
-                        and +num64 - a block is a |readblob()| and costs
+                        and +num64 - a block is a readblob() and costs
                         about one byte of Vim per byte of block, with no
                         process at all, so the setting barely shows.
                         Searching a 256 MiB file end to end:
@@ -981,7 +982,7 @@ g:hexpair_scan_block    How much of the FILE a file-wide scan reads at a
                         other and requires them to agree, and CI runs the
                         whole of it against Vim 8.0.0000 as well.
 
-                        The BYTE reader needs |readblob()| with an offset
+                        The BYTE reader needs readblob() with an offset
                         and a size (patch 9.0.0795 with +num64 - the same
                         patch |hexpair-paged| needs for a splice), and,
                         for a search, has('vim9script') and the
@@ -1014,7 +1015,7 @@ g:hexpair_scan_block    How much of the FILE a file-wide scan reads at a
                         answer before it is trusted with a file.
 
                         Past 2 GiB on native Windows the byte reader
-                        still applies, but it cannot use |readblob()|
+                        still applies, but it cannot use readblob()
                         with an offset to get there: that shares xxd's
                         32-bit limit and, worse, ANSWERS an out-of-range
                         read with an empty Blob and success
@@ -1298,7 +1299,7 @@ PowerShell does ONLY the seek: it writes the page's raw bytes to a temp
 file, and what needs them reads that, where there is no seeking to do.
 xxd's limit was never its formatting.  The page's dump and its flat hex
 come out of it through xxd; a file-wide SCAN reads it straight in with
-|readblob()| instead, since a temp file holding one block starts at 0 and
+readblob() instead, since a temp file holding one block starts at 0 and
 is nowhere near any limit - so the byte readers of
 |hexpair-scan-readers| work here too, and only the read in front of them
 is the slow one.  What is left is one process start a page, a few hundred
