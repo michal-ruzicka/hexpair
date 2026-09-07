@@ -46,6 +46,25 @@ and this project adheres to
   would put on disk. See `:help :HexPairModifiedShow`.
 
 ### Changed
+- **The text view marks what you edited exactly.** `HexPairModified` and the
+  jumps over it compared, in that view, in the view's *own spelling* — where
+  a NUL and a line break are the same character, because Vim holds a NUL
+  inside a line and hands it back as a line break. So swapping one for the
+  other was **not an edit at all**: the page said "nothing edited" while
+  `:w` would have written a different byte. Both views now derive their runs
+  from one comparison of real bytes, the one the hex view always used, so
+  the marking, the jumps and `:HexPairModifiedShow` can no longer disagree
+  with each other or with the write. Two more things fell out of it: an edit
+  that changes the page's length now reports the byte it really starts at
+  (it used to name the one after), and an insert is one edit rather than one
+  per line it happens to touch — the hex view's answer all along. The cost
+  is that the text view compares the whole page per edit, as the hex view
+  always has: about 30 ms at the default page size, where it used to compare
+  only the lines on screen. Nothing is recomputed between edits.
+  `:HexPairDiff`'s marking still compares in the text spelling and keeps
+  that one blind spot; a changed byte that *is* a line break can be jumped
+  to but never painted, since a line break has no column. See
+  `:help hexpair-marking-views`.
 - **Searching reads bytes, not hex — 4.5× faster.** `:HexPairFind` read each
   block of the file as hex through `xxd` and matched it with a regexp. Where
   Vim can read a byte range on its own (9.0.0795 with `+num64`) and has

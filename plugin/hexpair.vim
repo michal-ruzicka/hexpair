@@ -1548,9 +1548,16 @@ endfunction
 function! HexPairPagedMarkingPositions(layer, first, last) abort
   let hex = s:IsHexView()
   if a:layer ==# 'modified'
+    " Both views mark the runs s:ModifiedRuns() found, so the marking and
+    " the jumps over it (|:HexPairModifiedNext|) can never disagree about
+    " what was edited - the text view used to compare a second time, in
+    " its own spelling, and could paint nothing where the jump found an
+    " edit. What the text view still cannot show is a changed byte that
+    " IS a line break, because a line break has no column of its own; that
+    " is the view, not the comparison.
     return hex ? HexPairPagedModifiedPositions(a:first, a:last)
-          \ : s:TextComparePositions(a:first, a:last, 'page',
-          \                          get(b:, 'hexpair_page_hex', ''))
+          \ : HexPairPagedTextPositions(s:TextSpans(a:first, a:last),
+          \                             s:ModifiedRuns())
   elseif a:layer ==# 'diff'
     return hex ? s:DiffPositions(a:first, a:last)
           \ : s:TextComparePositions(a:first, a:last, 'diff', s:DiffHex())
@@ -6967,27 +6974,26 @@ function! s:ModifiedRuns() abort
   if get(b:, 'hexpair_modruns_tick', -1) == b:changedtick
     return b:hexpair_modruns
   endif
-  let runs = []
-  if s:IsHexView()
-    let live = s:LiveHex()
-    if live !=# ''
-      let runs = HexPairPagedDifferingByteRuns(live, hex)
-    endif
-  else
-    " The text view compares in its own spelling, line by line, the way
-    " its markings do (|hexpair-marking-views|); an edit that spans a line
-    " break therefore arrives as two runs, and adjacent ones are put back
-    " together below.
-    let theirs = s:BytesAsText('page', hex)
-    if theirs !=# ''
-      for span in s:TextSpans(1, line('$'))
-        if span[2] > 0
-          call extend(runs, HexPairPagedTextRuns(getline(span[0]),
-                \ strpart(theirs, span[1], span[2]), span[1]))
-        endif
-      endfor
-    endif
-  endif
+  " ONE comparison for both views: the page's bytes as the buffer holds
+  " them now, against the page's bytes as they were read. Both sides are
+  " the real bytes - s:LiveHex() takes the text view's the way a write
+  " takes them - so the runs are exact in either view.
+  "
+  " The text view used to compare in its own SPELLING instead, line by
+  " line, and that was a trade made when the exact answer cost 3.9 s a
+  " page (see s:LiveHex()). It cost accuracy in two ways. A NUL and a
+  " line break read alike in that spelling, so replacing one with the
+  " other was not an edit at all - the page came back "nothing edited"
+  " while :w would have written a different byte. And a length-changing
+  " edit put the first differing byte one place late, because a line's
+  " span moved with the edit while the bytes it was held against did not.
+  "
+  " It also broke one edit into one run per line, since the line break
+  " between two of them is a byte no run covers. The hex view has always
+  " answered with the single run that an insert really makes, and now the
+  " two views agree.
+  let live = s:LiveHex()
+  let runs = live ==# '' ? [] : HexPairPagedDifferingByteRuns(live, hex)
   let b:hexpair_modruns_tick = b:changedtick
   let b:hexpair_modruns = HexPairPagedJoinRuns(runs)
   return b:hexpair_modruns

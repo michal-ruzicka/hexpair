@@ -5519,6 +5519,50 @@ check "which the hex view reaches and the text view does not" \
     "hex | hexpair: byte 6 (0x6): 0a here and on disk" \
     "$(sed -n 5p "$WORK/tmodnul.out")"
 
+# A NUL swapped for a line break IS an edit, and is marked as one.
+#
+# The text view used to compare in its own spelling, where a NUL and a
+# line break are the same character, so this edit was no edit at all: the
+# page came back "nothing edited" while :w would have written a different
+# byte. Both views now derive their runs from the same comparison of real
+# bytes, so the marking and the jumps cannot disagree.
+#
+# The two directions are not symmetrical, and that asymmetry is the view's
+# rather than the comparison's: a NUL has a column of its own (^@) and can
+# be painted, a line break has none and can only be jumped to.
+#
+# No backslash continuations in the generated file - this suite runs Vim
+# without -N, where 'cpoptions' carries C.
+cat > "$WORK/tmodmark.vim" <<EOF
+$(printf "$HEX")
+let out = []
+function! Case(edit) abort
+  silent! bwipeout!
+  HexPairOpen $WORK/nul.bin
+  HexPairToggle
+  execute a:edit
+  redir => a
+  silent! HexPairModifiedNext
+  redir END
+  return matchstr(substitute(a, "\\n", ' ', 'g'), 'hexpair:[^|]*') . ' | ' . string(HexPairPagedMarkingPositions('modified', 1, line('\$')))
+endfunction
+call add(out, Case("call setline(2, 'AB') | call append(2, 'CD')"))
+call add(out, Case("call setline(2, 'AB' . nr2char(10) . 'CD' . nr2char(10) . 'EF') | 3delete _"))
+call add(out, Case("call setline(2, 'AZ' . nr2char(10) . 'CD')"))
+call writefile(out, '$WORK/tmodmark.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tmodmark.vim" < /dev/null
+check "a NUL turned into a line break is an edit" \
+    "hexpair: edit 1 of 1 on this page, at byte 3 (0x3) | []" \
+    "$(sed -n 1p "$WORK/tmodmark.out")"
+check "a line break turned into a NUL is one too, and is painted" \
+    "hexpair: edit 1 of 1 on this page, at byte 6 (0x6) | [[2, 6, 1]]" \
+    "$(sed -n 2p "$WORK/tmodmark.out")"
+check "and an ordinary edit marks the byte it always did" \
+    "hexpair: edit 1 of 1 on this page, at byte 2 (0x2) | [[2, 2, 1]]" \
+    "$(sed -n 3p "$WORK/tmodmark.out")"
+
 # The Visual-mode form, through the <Plug> target a key would reach it by:
 # a run of bytes rather than one, and the selection put back afterwards.
 # ('compatible', which -u NONE starts in, puts '<' in 'cpoptions' and turns

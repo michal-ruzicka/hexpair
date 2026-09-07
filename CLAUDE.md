@@ -1346,6 +1346,20 @@ was designed and built in Stage 2 - see "What Stage 2 decided".
   `s:HexFromFile()` is for. The blind spot in |hexpair-marking-views| is
   real but belongs to the MARKINGS, which compare in the text spelling on
   both sides - it was never a property of the buffer.
+- **One comparison drives the modified marking in BOTH views**:
+  `s:ModifiedRuns()` = `HexPairPagedDifferingByteRuns(s:LiveHex(), hex)`,
+  and `HexPairPagedMarkingPositions('modified', ...)` clips those runs
+  onto text lines with `HexPairPagedTextPositions(s:TextSpans(...), ...)`.
+  The text view used to compare in its own SPELLING line by line, which
+  was cheaper and wrong three ways: a NUL swapped for a line break was no
+  edit at all (they are one character in that spelling), a
+  length-changing edit named the byte after the first differing one, and
+  one edit came back as one run per line. **Do not put the per-line
+  comparison back to save time** - it costs 30 ms a page against 4 ms,
+  and 4 ms of a wrong answer is not a saving. `s:TextComparePositions()`
+  survives for the `'diff'` layer alone, which still has the NUL blind
+  spot and its own empty-`hex` case (past the end of a shorter file every
+  byte differs) - fixing that one needs care, not a copy of this.
 - **A scan has TWO readers, and the answers may not differ.**
   `HexPairPagedBlobRangeSupported()` (= patch 9.0.0795 + `+num64`, the
   same requirement as the splice, under a second name because the reason

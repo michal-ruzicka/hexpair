@@ -473,14 +473,25 @@ page of text has one column per byte, and the line break that ends a line
 is a byte of the page with no column of its own, so it is the one byte
 that is never marked.
 
-In the text view the comparing markings work on the bytes as that view
-spells them, which has exactly one consequence worth knowing: Vim cannot
-hold a NUL in a string and writes one as a line break, so a NUL replaced
-by a line break at the same offset (or the other way round) is not marked
-as changed.  Every other edit is, including one that changes the length.
-This is about the MARKINGS alone: |:HexPairModifiedShow| and the write
-both read the buffer's lines the way Vim loaded them, where a NUL and a
-line break are still two different things, so neither is blind to it.
+|HexPairModified| - what you have edited and not yet written - is exact
+in both views: both take the page as the buffer holds it now against the
+page as it was read, in real bytes, so the marking and the jumps over it
+(|:HexPairModifiedNext|) always agree, and so does |:HexPairModifiedShow|
+and the write.  A NUL and a line break are two different bytes to all of
+them, which they had better be: Vim holds a NUL inside a line and hands
+it back as a line break, and writing the lines back out turns it into a
+NUL again, so nothing is lost between reading the buffer and writing it.
+
+|HexPairDiff| - what differs from the file |:HexPairDiff| named - still
+compares in the text view's own spelling there, and has exactly one
+consequence worth knowing: a NUL on one side and a line break on the
+other at the same offset are not marked as differing.  Every other
+difference is.  The hex view is exact for this one too.
+
+In the text view one byte can be found and never painted, whichever
+marking found it: a line break has no column of its own, so a change TO
+one can be jumped to and reported but not highlighted.  That is the view
+and not the comparison - a dump has a column per byte and marks them all.
 
 Everything here is measured in BYTES, so a file of UTF-8 text or one with
 CRLF line endings marks exactly the bytes that are meant: a CR is a byte
@@ -758,12 +769,18 @@ g:hexpair_show_modified Whether the bytes that differ from the ones on
                         history: after an insertion every byte behind it
                         is marked, because those offsets really do hold
                         something else now.  Only the lines on screen are
-                        compared, and only when the page changes or
+                        painted, and only when the page changes or
                         scrolls.
 
                         It costs one copy of the page's bytes as hex -
                         256 KB for the default 128 KiB page - which is the
-                        same read the freshness check already needed.
+                        same read the freshness check already needed - and
+                        one comparison of the whole page per edit, which
+                        is where the two views cost the same: about 30 ms
+                        at the default page size and 130 ms at 512 KiB.
+                        Nothing is recomputed between edits, so scrolling
+                        and moving the cursor are free.  Set this to 0 on
+                        a very large page if that shows.
 
                                                      *g:hexpair_bind_pages*
 g:hexpair_bind_pages    Whether a page turn in this window is passed on to
