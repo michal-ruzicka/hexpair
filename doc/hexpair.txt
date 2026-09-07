@@ -174,17 +174,24 @@ Toggle hex mode with the mapping (|hexpair-mappings|) or the command:
                         anywhere - and where you are when you leave is
                         where you were looking.
 
-                        Where the file's bytes are not the buffer's, the
-                        entry position is used after all: a 'fileencoding'
-                        that transcodes, a stripped BOM or folded CRLFs
-                        all move the count, and no byte offset carries
-                        across.  That is settled by measuring the re-read
-                        buffer against the file rather than by reading
-                        'fileencoding', so it holds for whatever else a
-                        Vim does on the way in.  A page whose dump no
-                        longer reads as one has no byte to give either,
-                        and the bang above is exactly the way out of
-                        that page, so it falls back rather than failing.
+                        A plain view is not always the file byte for
+                        byte, and the landing accounts for that the same
+                        way the way IN does: a line costs the file its
+                        characters where 'fileencoding' is single-byte -
+                        which is how Vim reads a binary opened with a
+                        plain |:edit|, one file byte becoming one
+                        character and often two buffer bytes - and its
+                        bytes otherwise, plus the ending 'fileformat'
+                        gives it, and NO ending on the last line when the
+                        file has none.  A BOM is counted too.
+
+                        Where that does not add up to the size on disk,
+                        nothing about this file is being described
+                        correctly, and the position hex mode was entered
+                        at is used instead.  A page whose dump no longer
+                        reads as one has no byte to give either, and the
+                        bang above is exactly the way out of that page,
+                        so it falls back rather than failing.
                         ! discards unwritten edits to the page; without !
                         the command refuses, because a plain |:edit| would
                         otherwise lose them without a word.

@@ -1334,12 +1334,20 @@ was designed and built in Stage 2 - see "What Stage 2 decided".
 - **`:HexPairUnhex` lands on the byte the hex view was on**, not on the
   `b:hexpair_plain` position hex mode was entered at - that snapshot is
   now the FALLBACK. `s:UnhexCursor()` decides which by measuring the
-  re-read buffer (`line2byte(line('$') + 1) - 1`) plus `s:BomLen()`
-  against `getfsize()`: only where the file's bytes ARE the buffer's is a
-  file offset a buffer offset and `:goto` the right instrument. **Do not
-  replace that with a test of `'fileencoding'`** - a transcode, a
-  stripped BOM and folded CRLFs all move the count, and measuring catches
-  every one of them plus whatever a future Vim adds. Asking for the byte
+  `s:PlainPosForByte()`, which is the exact INVERSE of
+  `s:PreReloadPos()` / `s:PostReloadOffset()` and has to stay that way: a
+  line costs the file its **characters** where `'fileencoding'` is
+  single-byte (the same `singlebyte` test) and its bytes otherwise, plus
+  the ending `'fileformat'` gives it, and **no ending on the last line
+  when `'endofline'` is off**. Both of those clauses are the plugin's own
+  files: a binary opened with a plain `:edit` is read as latin1, so 200
+  file bytes are 293 buffer bytes and only a character offset carries
+  across; and most binaries do not end in 0x0a. A first version compared
+  `line2byte(line('$') + 1) - 1` against `getfsize()` and therefore did
+  nothing for either - it fell back on every binary, which is what the
+  plugin is FOR, and the tests missed it because every fixture ended in a
+  newline. The walk totals the file as it goes and that total is the
+  check. Asking for the byte
   is guarded twice and both guards have a case: a buffer with no page
   (`s:AbandonSetup()`'s rescue) has none to give, and a page whose dump no
   longer reads as one raises **E716 in `s:PagedLineBase`** - which is the

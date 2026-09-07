@@ -295,6 +295,10 @@ open(os.path.join(w, 'unpos.txt'), 'wb').write(b'line one\nline two\nline three\
 # and the same idea in latin1, where three bytes above 0x7f make the utf-8
 # buffer longer than the file and no byte offset carries across
 open(os.path.join(w, 'unpos-latin1.txt'), 'wb').write(b'prvni radek\ndruhy \xe1\xe9\xed radek\ntreti radek\n')
+# the same five lines with no trailing newline, which is most binaries
+open(os.path.join(w, 'unpos-noeol.txt'), 'wb').write(b'line one\nline two\nline three\nline four\nline five')
+# and an actual binary, which a plain :edit reads as latin1
+open(os.path.join(w, 'unpos.dat'), 'wb').write(bytes((i * 7) % 256 for i in range(200)))
 # and the same eight bytes with the NUL swapped for a real 0a, so the two
 # differ in exactly the byte the text view used to spell the same way
 open(os.path.join(w, 'nul2.bin'), 'wb').write(b'AB\x0aCD\x0aEF')
@@ -567,12 +571,23 @@ check "and is not given it in the text view either" "off: text 0" \
 # where the file gets written, and a position taken before all that can
 # point anywhere.
 #
-# Whether the byte can be pointed at is asked of the buffer - the re-read
-# buffer's length against the file's size - because a transcode, a
-# stripped BOM and a folded CRLF all move the count between the two. The
-# latin1 fixture below is the case where they differ: three bytes above
-# 0x7f become two characters each in a utf-8 buffer, so the file is 40
-# bytes and the buffer 43, and the remembered position is used instead.
+# Which position that is has to be worked out the way s:PreReloadPos()
+# works out the other direction: a line costs the FILE its characters
+# where 'fileencoding' is single-byte and its bytes otherwise, plus the
+# ending 'fileformat' gives it - and NO ending on the last line when the
+# file has none. The fixtures below are the three that a first attempt at
+# this got wrong, and each of them is what hexpair is for:
+#
+#  - a file with no trailing newline, which is most binaries, where Vim
+#    counts a final line ending the file does not have;
+#  - a binary opened with a plain :edit, which Vim reads as latin1 and
+#    transcodes, so 200 bytes of file are 293 bytes of buffer and no BYTE
+#    offset carries across though every CHARACTER one does;
+#  - a latin1 text file, the same thing in miniature.
+#
+# The walk totals the file as it goes and that total is the check: where
+# it does not match the size on disk, the model does not describe this
+# file and the remembered position is used instead.
 cat > "$WORK/tunpos.vim" <<EOF
 $(printf "$HEX")
 let out = []
@@ -593,7 +608,8 @@ HexPairGoOffset 30
 call append(line('.'), 'this is not a dump line')
 silent! HexPairUnhex!
 call add(out, 'after a broken dump: line ' . line('.'))
-" And the encoding that moves the count.
+" A transcoded file: the buffer is longer than the file, so no byte
+" offset carries across - but every character one does.
 set fileencodings=utf-8,latin1
 edit $WORK/unpos-latin1.txt
 call cursor(1, 1)
@@ -602,6 +618,22 @@ HexPairToggle
 HexPairGoOffset 30
 HexPairUnhex
 call add(out, 'converted: line ' . line('.') . ' col ' . col('.'))
+" No trailing newline, which is most binaries: Vim counts a final line
+" ending that the file has not got.
+edit $WORK/unpos-noeol.txt
+call cursor(1, 1)
+call add(out, 'noeol eol=' . &l:endofline . ' file ' . getfsize('$WORK/unpos-noeol.txt') . ' buffer ' . (line2byte(line('\$') + 1) - 1))
+HexPairToggle
+HexPairGoOffset 33
+HexPairUnhex
+call add(out, 'noeol: line ' . line('.') . ' col ' . col('.'))
+" And the case that started this: a binary opened with a plain :edit.
+edit $WORK/unpos.dat
+call cursor(1, 1)
+HexPairToggle
+HexPairGoOffset 33
+HexPairUnhex
+call add(out, 'binary: line ' . line('.') . ' col ' . col('.') . ' fenc ' . &l:fileencoding)
 call writefile(out, '$WORK/tunpos.out')
 qa!
 EOF
@@ -615,8 +647,17 @@ check "a dump that cannot be read falls back to where it was entered" \
     "after a broken dump: line 2" "$(sed -n 4p "$WORK/tunpos.out")"
 check "a transcoded file's bytes are not the buffer's" \
     "latin1 file 40 buffer 43" "$(sed -n 5p "$WORK/tunpos.out")"
-check "so that one falls back too" "converted: line 1 col 1" \
-    "$(sed -n 6p "$WORK/tunpos.out")"
+check "and a transcoded file lands by characters, not bytes" \
+    "converted: line 3 col 2" "$(sed -n 6p "$WORK/tunpos.out")"
+check "a file with no final newline is measured without one" \
+    "noeol eol=0 file 48 buffer 49" "$(sed -n 7p "$WORK/tunpos.out")"
+check "and lands where the byte is all the same" "noeol: line 4 col 4" \
+    "$(sed -n 8p "$WORK/tunpos.out")"
+# The one that started this: a binary read as latin1 by a plain :edit, so
+# the buffer is half again as long as the file and the byte column is not
+# the character the cursor was on.
+check "a binary opened as text lands on its byte too" \
+    "binary: line 1 col 46 fenc latin1" "$(sed -n 9p "$WORK/tunpos.out")"
 
 # --- Test 6: a user ftplugin with b:did_ftplugin suppresses the bundled one -
 mkdir -p "$WORK/user-rtp/ftplugin"

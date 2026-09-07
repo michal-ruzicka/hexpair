@@ -7999,40 +7999,74 @@ function! s:Unhex(force) abort
   endtry
 endfunction
 
+" Where byte a:byte of the FILE sits in the plain buffer just re-read, as
+" [lnum, col], or [] when this file's bytes and this buffer's are not the
+" same bytes at all.
+"
+" The exact inverse of s:PreReloadPos() / s:PostReloadOffset(), which map
+" a plain-view position INTO a file offset for the ++bin reload, and it
+" has to agree with them: a line costs the file its characters where
+" 'fileencoding' is single-byte (one file byte each, transcoded to more
+" than one in the buffer) and its bytes otherwise, plus whatever line
+" ending 'fileformat' gives it - and the last line costs no ending at all
+" when the file has none ('noeol').
+"
+" That last clause is the whole reason a first attempt at this did
+" nothing for anybody: a binary being hex-edited usually does not end in
+" 0x0a, Vim counts a final line ending anyway, and a plain comparison of
+" line2byte() against the file's size therefore never matched. The other
+" half was the transcode - Vim reads a binary as latin1, so a 200-byte
+" file is a 293-byte buffer and no BYTE offset carries across, though
+" every CHARACTER one does.
+"
+" The walk totals the file as it goes, and the total is the check: if it
+" is not the size on disk then this model does not describe this file -
+" a multi-byte 'fileencoding' that is not the internal one, say - and
+" the caller falls back rather than landing somewhere invented.
+function! s:PlainPosForByte(byte) abort
+  let fenc = &l:fileencoding !=# '' ? &l:fileencoding : &encoding
+  let singlebyte = fenc =~? '^\%(latin\|iso-8859\|cp[0-9]\|koi8\|8bit\)'
+  let eol = &l:fileformat ==# 'dos' ? 2 : 1
+  let last = line('$')
+  let want = a:byte - s:BomLen()
+  let at = []
+  let total = s:BomLen()
+  let lnum = 1
+  while lnum <= last
+    let line = getline(lnum)
+    let n = singlebyte ? strchars(line) : strlen(line)
+    let ending = (lnum < last || &l:endofline) ? eol : 0
+    if empty(at) && want >= 0 && want < n + ending
+      " Inside the line ending is still that line, at its end: those
+      " bytes have no column of their own, the same way the dump's do
+      " not (|hexpair-marking-views|).
+      let col = want >= n ? n : want
+      let at = [lnum, singlebyte ? byteidx(line, col) + 1 : col + 1]
+    endif
+    let want -= n + ending
+    let total += n + ending
+    let lnum += 1
+  endwhile
+  if total != getfsize(expand('%:p'))
+    call s:Debug('unhex: this buffer is %d file bytes, the file is %d - '
+          \ . 'no offset carries across', total, getfsize(expand('%:p')))
+    return []
+  endif
+  " Past the end - the file shrank while hex mode had it - is its last byte.
+  return !empty(at) ? at : [last, col([last, '$'])]
+endfunction
+
 " Put the cursor on a:byte of the re-opened file, or where the plain view
 " was left if that byte cannot be pointed at.
-"
-" Whether it can is ASKED OF THE BUFFER rather than guessed from
-" 'fileencoding': a transcode, a stripped BOM and a folded CRLF all move
-" the count between the file's bytes and the buffer's, and comparing the
-" re-read buffer's length against the file's size catches every one of
-" them at once - and catches them for whatever else a future Vim decides
-" to do on the way in. Only when the two agree is a file offset a buffer
-" offset, and only then is :goto the right instrument.
-"
-" The BOM is the one difference worth correcting rather than refusing:
-" Vim keeps it out of the buffer, so the buffer is exactly that much
-" shorter and every offset is shifted by exactly that much.
-"
-" The fallback is the plain view's own coordinates, clamped: they were
-" taken while it was on screen (s:ToHex), so they name a real line and
-" column of it, but the file may have grown or shrunk since.
 function! s:UnhexCursor(byte, p) abort
   if a:byte >= 0
-    let bom = s:BomLen()
-    let bytes = line2byte(line('$') + 1) - 1
-    if bytes >= 0 && bytes + bom == getfsize(expand('%:p'))
-      let want = a:byte - bom
-      if want >= 0 && want < bytes
-        call s:Debug('unhex: byte %d of the file is byte %d of the buffer',
-              \ a:byte, want)
-        execute 'goto' want + 1
-        return
-      endif
+    let at = s:PlainPosForByte(a:byte)
+    if !empty(at)
+      call s:Debug('unhex: byte %d of the file is line %d, column %d',
+            \ a:byte, at[0], at[1])
+      call cursor(at[0], at[1])
+      return
     endif
-    call s:Debug('unhex: byte %d cannot be pointed at (buffer %d + BOM %d '
-          \ . 'against file %d); using the remembered position',
-          \ a:byte, bytes, bom, getfsize(expand('%:p')))
   endif
   call cursor(a:p.lnum > line('$') ? line('$') : a:p.lnum, a:p.col)
 endfunction
