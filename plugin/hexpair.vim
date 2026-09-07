@@ -6909,10 +6909,39 @@ function! s:LiveHex() abort
       let err = 'hexpair: ' . scan.err.msg
     endif
   else
+    " The text view's bytes, got the way s:PageBytes() gets them for a
+    " WRITE: writefile() in binary mode is the exact inverse of how Vim
+    " loaded the buffer, so a NUL - which getline() hands back as a line
+    " break - goes back to being a NUL. Then xxd spells the file, which
+    " is what it is for.
+    "
+    " This used to be HexPairPagedTextToHex(join(s:TextViewLines(), NL)),
+    " and that was wrong twice over.
+    "
+    " WRONG, because join() with a NL makes a NUL INSIDE a line and the
+    " break BETWEEN two lines into the same character, and the speller
+    " then spelled both 0a. The buffer had not lost the difference - only
+    " the join had - and since the WRITER has always used writefile(),
+    " the report disagreed with what :w would put on disk. On an
+    " untouched page holding a NUL, |:HexPairModifiedShow| said "0a here,
+    " 00 on disk" about a byte nobody had touched.
+    "
+    " AND SLOW, because it spelled the page a byte at a time in Vim
+    " script, which does not scale: 3.9 s for a 128 KiB page and 54 s for
+    " a 512 KiB one, against 21 ms for this. Four times the page was
+    " fourteen times the wait.
+    "
+    " The temp file is one page, written at offset 0 and read with no
+    " seeking, so nothing here meets the 2 GiB limit that decides how the
+    " FILE is read (|hexpair-windows-2gib|) - this is about the buffer.
+    let raw = tempname()
     try
-      let hex = HexPairPagedTextToHex(join(s:TextViewLines(), "\n"))
+      call writefile(s:TextViewLines(), raw, 'b')
+      let hex = s:HexFromFile(raw)
     catch /^hexpair:/
       let err = v:exception
+    finally
+      call delete(raw)
     endtry
   endif
   let b:hexpair_livehex_tick = b:changedtick

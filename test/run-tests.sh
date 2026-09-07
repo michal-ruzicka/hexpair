@@ -274,6 +274,10 @@ open(os.path.join(w, 'seam1.bin'), 'wb').write(bytes(_sm))
 _sm2 = bytearray(_sm)
 _sm2[1024 * 1024 + 5] ^= 0xff
 open(os.path.join(w, 'seam2.bin'), 'wb').write(bytes(_sm2))
+# A fixture holding both bytes the text view spells the same way: a NUL
+# (which Vim hands back from getline() as a line break) and a real 0a
+# (which IS a line break). "AB<NUL>CD<NL>EF".
+open(os.path.join(w, 'nul.bin'), 'wb').write(b'AB\x00CD\x0aEF')
 # A fixture in which every byte is one of two values, so that a pattern
 # made of those two is DENSE: the byte reader walks one byte value and
 # checks the rest by hand, which is only worth doing while that value is
@@ -5450,6 +5454,70 @@ EOF
 check "the text view answers about its own column" \
     "text | hexpair: byte 3 (0x3): 78 here, 43 on disk" \
     "$(sed -n 1p "$WORK/tmodshow3.out")"
+
+# A NUL is not a line break, however alike the text view spells them.
+#
+# Vim stores a NUL in a line and getline() returns it as a line break, so
+# the two are the same CHARACTER once a page is joined into one string -
+# which is how the live side of this question used to be spelled, and it
+# reported a phantom edit: "0a here, 00 on disk" on a page nobody had
+# touched. The buffer had not lost the difference, only that join had, and
+# the WRITER never made it - s:PageBytes() has always used
+# writefile(..., 'b'), which is the exact inverse of how Vim loaded the
+# buffer. So the report used to disagree with what :w would put on disk.
+#
+# Both views are asked, because they must agree with each other and with
+# the file, and the buffer is left untouched so that "here" and "on disk"
+# have to come out the same.
+cat > "$WORK/tmodnul.vim" <<EOF
+$(printf "$HEX")
+let out = []
+HexPairOpen $WORK/nul.bin 1
+HexPairGoOffset 3
+redir => a
+silent HexPairModifiedShow
+redir END
+call add(out, b:hexpair_view . ' | ' . substitute(a, '^[\\r\\n]*', '', ''))
+HexPairToggle
+HexPairGoOffset 3
+redir => b
+silent HexPairModifiedShow
+redir END
+call add(out, b:hexpair_view . ' | ' . substitute(b, '^[\\r\\n]*', '', ''))
+call add(out, 'modified ' . &modified)
+" And the byte that really IS a line break. Asked in the hex view, which
+" is the one that reaches every byte: the text view can only put the
+" cursor on a character, so byte 6 there lands on the 44 in front of it
+" (|hexpair-marking-views|) - which is checked too, because it is the
+" behaviour that makes the hex view the right place to ask.
+HexPairGoOffset 6
+redir => c
+silent HexPairModifiedShow
+redir END
+call add(out, b:hexpair_view . ' | ' . substitute(c, '^[\\r\\n]*', '', ''))
+HexPairToggle
+HexPairGoOffset 6
+redir => d
+silent HexPairModifiedShow
+redir END
+call add(out, b:hexpair_view . ' | ' . substitute(d, '^[\\r\\n]*', '', ''))
+call writefile(out, '$WORK/tmodnul.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tmodnul.vim" < /dev/null
+check "the hex view says what the NUL is" \
+    "hex | hexpair: byte 3 (0x3): 00 here and on disk" \
+    "$(sed -n 1p "$WORK/tmodnul.out")"
+check "and the text view says the same, not 0a" \
+    "text | hexpair: byte 3 (0x3): 00 here and on disk" \
+    "$(sed -n 2p "$WORK/tmodnul.out")"
+check "on a page nobody edited" "modified 0" "$(sed -n 3p "$WORK/tmodnul.out")"
+check "and a real line break is still a line break" \
+    "text | hexpair: byte 5 (0x5): 44 here and on disk" \
+    "$(sed -n 4p "$WORK/tmodnul.out")"
+check "which the hex view reaches and the text view does not" \
+    "hex | hexpair: byte 6 (0x6): 0a here and on disk" \
+    "$(sed -n 5p "$WORK/tmodnul.out")"
 
 # The Visual-mode form, through the <Plug> target a key would reach it by:
 # a run of bytes rather than one, and the selection put back afterwards.

@@ -41,9 +41,9 @@ and this project adheres to
   asked of this view's own file instead of another one, so it is
   `<Leader>d` in `hexpair.vimrc` — the lowercase of that one's
   `<Leader>D` — with a Normal-mode and a Visual-mode form. Both views
-  answer it; the text view inherits its one blind spot, that a Vim string
-  holds no NUL and so spells one as a line break. See
-  `:help :HexPairModifiedShow`.
+  answer it, and both are exact: the live bytes are taken the way a write
+  takes them, so a NUL stays a NUL and the answer agrees with what `:w`
+  would put on disk. See `:help :HexPairModifiedShow`.
 
 ### Changed
 - **Searching reads bytes, not hex — 4.5× faster.** `:HexPairFind` read each

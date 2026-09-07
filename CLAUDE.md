@@ -1331,6 +1331,21 @@ was designed and built in Stage 2 - see "What Stage 2 decided".
   block *less* that overlap, so it takes the longer of the block and the
   pattern: a block no longer than the pattern would step by nothing and
   read the same bytes for ever.
+- **The text view's live bytes come from `writefile(lines, f, "b")`, not
+  from joining the lines.** Vim holds a NUL inside a line and `getline()`
+  hands it back as a line break; `writefile(..., "b")` is the exact
+  inverse and turns it back into a NUL. `s:PageBytes()` has always used
+  that for the WRITE, so it is the only spelling an answer may disagree
+  with. `s:LiveHex()` used to join the lines with a NL and spell the
+  result byte by byte, which (a) made a NUL inside a line and the break
+  between two lines the same character, so `:HexPairModifiedShow` said
+  "0a here, 00 on disk" about a byte nobody had touched, and (b) was
+  super-linear in Vim script - a 128 KiB page took 3.9 s and a 512 KiB
+  one 54 s, against 9 ms and 28 ms now. **Do not spell a page a byte at a
+  time**; hand it to xxd through a temp file, which is what
+  `s:HexFromFile()` is for. The blind spot in |hexpair-marking-views| is
+  real but belongs to the MARKINGS, which compare in the text spelling on
+  both sides - it was never a property of the buffer.
 - **A scan has TWO readers, and the answers may not differ.**
   `HexPairPagedBlobRangeSupported()` (= patch 9.0.0795 + `+num64`, the
   same requirement as the splice, under a second name because the reason

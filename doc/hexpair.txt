@@ -478,6 +478,9 @@ spells them, which has exactly one consequence worth knowing: Vim cannot
 hold a NUL in a string and writes one as a line break, so a NUL replaced
 by a line break at the same offset (or the other way round) is not marked
 as changed.  Every other edit is, including one that changes the length.
+This is about the MARKINGS alone: |:HexPairModifiedShow| and the write
+both read the buffer's lines the way Vim loaded them, where a NUL and a
+line break are still two different things, so neither is blind to it.
 
 Everything here is measured in BYTES, so a file of UTF-8 text or one with
 CRLF line endings marks exactly the bytes that are meant: a CR is a byte
@@ -1568,11 +1571,15 @@ HexPairOpenFile({file} [, {page}])
                         - the lowercase of the `<Leader>D` that asks the
                         same question of another file.
 
-                        Both views answer it.  In the windowed text view it
-                        inherits that view's one blind spot: a Vim string
-                        holds no NUL, so a NUL and a line break read alike
-                        there (|hexpair-marking-views|).  The hex view is
-                        exact.
+                        Both views answer it, and both are exact - the
+                        text view included, which the MARKINGS are not
+                        (|hexpair-marking-views|).  The difference is
+                        where the live bytes come from: this takes them
+                        the way a write takes them, and a write is what
+                        the answer has to agree with.  Vim holds a NUL in
+                        a line and hands it back as a line break, and
+                        writing the lines back out turns it into a NUL
+                        again, so the round trip loses nothing.
 
                         *:HexPairMark* *:HexPairGoMark* *:HexPairMarks*
                                                      *:HexPairMarkDelete*
