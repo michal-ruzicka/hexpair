@@ -76,10 +76,10 @@ FILES = [
 # refused anyway, this is the ladder, all bzip2 -9 and measured on
 # v2.4.0-devel:
 #
-#     nothing omitted                     223 707
-#     CLAUDE.md                           185 692
-#     + CONTRIBUTING.md                   177 265
-#     + CHANGELOG.md                      164 027   <- what this list does
+#     nothing omitted                     223 373
+#     CLAUDE.md                           185 421
+#     + CONTRIBUTING.md                   174 949
+#     + CHANGELOG.md                      161 339   <- what this list does
 #
 # Adding a name here is the whole change; the suite holds the list to
 # being a subset of FILES, so a typo cannot silently omit nothing.
@@ -138,10 +138,10 @@ def main():
     # bzip2, and measured rather than assumed. On this content, which is
     # one very large and very repetitive text file plus some smaller ones:
     #
-    #     bzip2 -9                 185 692     <- this
-    #     xz -9e                   189 112     (= 7-Zip's "ultra", LZMA2)
-    #     gzip -9                  249 401
-    #     7-Zip PPMd, order 32     160 325
+    #     bzip2 -9                 185 421     <- this
+    #     xz -9e                   188 816     (= 7-Zip's "ultra", LZMA2)
+    #     gzip -9                  246 475
+    #     7-Zip PPMd, order 32     160 048
     #
     # PPMd wins by 14%, and is not used. A .7z needs 7-Zip or p7zip to
     # open - not on a stock Linux, not on macOS, not on Windows before 11

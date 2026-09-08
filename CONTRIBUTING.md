@@ -448,6 +448,64 @@ developer's machine.
 The CI workflow also produces the tarball as a downloadable Actions
 artifact, but that copy is unsigned and is intended for testing PRs only.
 
+## The Explorer Context Menu
+
+`vimhex-contex-entry.add.reg` and its `remove` counterpart are **generated**
+by `make-context-entry-reg.py` and carry a "do not edit by hand" banner.
+`README.md` says how to use them; this is why they look the way they do.
+
+**Why generated rather than written.** The `Icon` and `command` values are
+`REG_EXPAND_SZ`, the one registry string type whose `%USERPROFILE%` the
+shell expands when it reads the value — a plain `REG_SZ` would send Explorer
+looking for a folder literally named `%USERPROFILE%`. The `.reg` text format
+can only write that type as `hex(2):` followed by the string's UTF-16LE
+bytes, which no one is going to edit correctly by hand. What the first entry
+decodes to:
+
+```
+[HKEY_CURRENT_USER\Software\Classes\*\shell\vimhex]
+"MUIVerb"="vimhex"
+"Icon"    = %USERPROFILE%\...\hexpair\icons\hexpair-open.ico
+"ExtendedSubCommandsKey"="hexpair.ContextMenu"
+
+[HKEY_CURRENT_USER\Software\Classes\hexpair.ContextMenu\shell\10-open]
+"MUIVerb"="gvimhex this"
+"Icon"    = %USERPROFILE%\...\hexpair\icons\hexpair-open.ico
+(command) = cmd.exe /c ""%USERPROFILE%\...\hexpair\gvimhex.cmd" "%1""
+```
+
+**The expansion order is what makes it safe.** The shell expands the
+environment variables when it reads the value, and only then substitutes
+`%1`. Once every `%VAR%` has been consumed as a pair, the single remaining
+`%` is the one in `%1`, so it cannot be mis-paired into a bogus variable
+name. The suite decodes the file and checks exactly that: every value
+round-trips to the intended string, and after the pairs are consumed
+precisely one bare `%` is left in each command. Re-run that check whenever a
+command grows another variable.
+
+**Why `ExtendedSubCommandsKey`.** The folder is a verb carrying that value
+and no `\command` of its own; the key it names holds the children under its
+own `\shell`. That indirection is what keeps everything inside
+`HKEY_CURRENT_USER` and therefore free of administrator rights — the older
+`SubCommands` scheme resolves its verbs against `HKLM`'s CommandStore, which
+is not. Children appear in alphabetical order of their *key* name, hence the
+`10-`/`20-`/`30-` prefixes, and the horizontal rule is
+`"CommandFlags"=dword:00000020` (`ECF_SEPARATORBEFORE`) on the item below it.
+
+**Why the console window is allowed to flash.** Hiding it needs either the
+Windows Script Host — whose "run this command with a hidden window" pattern
+is one of the shapes antivirus heuristics look for, and which Microsoft is
+removing from Windows — or an unsigned stub `.exe`, which is usually worse
+for antivirus rather than better. The trade was weighed and the flash won.
+
+**Why the diff opens maximized.** Two hex views side by side want the full
+width, and a narrow window was also what made Vim stop for a hit-enter
+prompt on each file it opened: a long path plus the file size makes that
+message longer than one line, which is what triggers the prompt.
+`vimhexdiff` therefore sets `shortmess+=F`, which drops the message
+outright, and maximizes with the Win32 GUI's own `:simalt ~x`, guarded by
+`has('gui_running')` so console Vim is unaffected.
+
 ## Publishing
 
 Where the plugin is listed, and what each place wants. None of it is
@@ -478,7 +536,7 @@ ladder of further omissions if a future one is refused again.
 On the compressor, since it is the sort of thing that gets changed on a
 hunch: bzip2 was chosen by measuring, and 7-Zip's `-mx=9` "ultra" is not
 the best answer. It is LZMA2, and it LOSES here — 189 112 bytes against
-bzip2's 185 692 on the same content. What does win is 7-Zip's **PPMd**,
+bzip2's 185 421 on the same content. What does win is 7-Zip's **PPMd**,
 by 14% (160 325 bytes), and it is not used: a `.7z` needs 7-Zip or p7zip
 to open, which a stock Linux, a stock macOS and Windows before 11 do not
 have, and the package already uploads. `tar` and `bzip2` are wherever Vim
