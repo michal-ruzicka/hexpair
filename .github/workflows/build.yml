@@ -260,18 +260,36 @@ jobs:
         # rather than assumed. Hash and file name both, so a missing file
         # fails here instead of comparing one line against another.
         #
-        # The two sides write the name differently - sha256sum echoes the
-        # path it was given, `dist/hexpair...`, while PowerShell's .Name is
-        # the bare file name - so the name is cut down to its last
-        # component before the lists are compared. They are sorted here
-        # too, after that, rather than trusting each producer to have
-        # sorted the form it happened to write.
+        # Each side writes the list in its own dialect, and neither
+        # difference is about the archives:
+        #
+        #   - the NAME. sha256sum echoes back the path it was given,
+        #     `dist/hexpair...`, while PowerShell's .Name is the bare file
+        #     name, so it is cut down to its last component.
+        #   - the LINE ENDING. Tee-Object writes CRLF, which puts a \r on
+        #     the end of the last field - invisible in a log, since a \r
+        #     before a \n prints as nothing, so the two lists show as
+        #     identical and compare as different. That is exactly how this
+        #     was first seen.
+        #
+        # Sorted here, after both, rather than trusting each producer to
+        # have sorted whichever form it happened to write.
         run: |
-          norm() { awk '{ sub(/.*\//, "", $2); print $1, $2 }' "$1" | sort -k2; }
+          norm() {
+            tr -d '\r' < "$1" \
+              | awk '{ sub(/.*\//, "", $2); print $1, $2 }' | sort -k2
+          }
           l=$(norm tarball-linux/linux.sha256)
           w=$(norm tarball-windows/windows.sha256)
           printf 'linux:\n%s\nwindows:\n%s\n' "$l" "$w"
           # Two lines a side, or the packaging produced something other
           # than the two archives and equal lists would mean nothing.
           test "$(printf '%s\n' "$l" | wc -l)" -eq 2
-          test "$l" = "$w"
+          # cat -A on the difference, not a bare exit: an archive that
+          # really differs shows as a changed hash, but everything that
+          # has actually gone wrong here so far was invisible in a diff.
+          if [ "$l" != "$w" ]; then
+            echo "the two lists differ (^M is a carriage return, $ a line end):"
+            diff <(printf '%s\n' "$l") <(printf '%s\n' "$w") | cat -A
+            exit 1
+          fi
