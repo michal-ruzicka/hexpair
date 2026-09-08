@@ -64,9 +64,9 @@ code, releases and issue tracker.
 **Releases:** <https://github.com/michal-ruzicka/hexpair/releases>
 
 **On vim.org:** <https://www.vim.org/scripts/script.php?script_id=6194> — the
-same plugin, packaged without the two files that are for working on it
-rather than with it. Every release above carries that smaller package too,
-as `hexpair.vX.Y.Z.minimal.tar.bz2`, beside the complete one.
+same plugin in the smaller package described under
+[Installation](#installation); the releases above carry it too, beside the
+complete one.
 
 **Support:** If you find this plugin useful, consider supporting its development.
 
@@ -330,6 +330,27 @@ tar xf hexpair.vX.Y.Z.tar -C ~/.vim/pack/plugins/start/
 vim -c 'helptags ALL' -c 'q'
 ```
 
+**Which file to take.** Every release carries two, and either one installs
+the same working plugin:
+
+| | |
+|---|---|
+| `hexpair.vX.Y.Z.tar` | The complete release. Take this one. |
+| `hexpair.vX.Y.Z.minimal.tar.bz2` | The same plugin with the two files that are about *working on* hexpair left out — `CLAUDE.md` and `CONTRIBUTING.md` — and compressed. |
+
+The smaller one exists because [vim.org](https://www.vim.org/scripts/script.php?script_id=6194)
+refuses an upload somewhere between 224 and 250 KiB, and the complete
+tarball is 900 KiB. Nothing a *user* needs is missing from it: the plugin,
+the help, the mappings, the shell and Windows commands, the registry files
+for the Explorer menu, the icons, the licence, the README and the changelog
+are all there. What is gone is the project's own notes and the contributor
+guide, both a click away here. Both files are signed
+([Verifying Releases](#verifying-releases)), and unpack the same way:
+
+```sh
+tar xf hexpair.vX.Y.Z.minimal.tar.bz2 -C ~/.vim/pack/plugins/start/
+```
+
 Or clone the repository directly:
 
 ```sh
@@ -463,14 +484,21 @@ a `<Plug>` target expands). Details: `:help hexpair-mappings`.
 
 ### Verifying Releases
 
-Each release tarball is accompanied by a detached GPG signature file
-(`hexpair.vX.Y.Z.tar.asc`). Before installing, verify that the
-archive has not been tampered with:
+Each release archive is accompanied by a detached GPG signature file —
+`hexpair.vX.Y.Z.tar.asc` for the complete tarball and
+`hexpair.vX.Y.Z.minimal.tar.bz2.asc` for the smaller one. Before
+installing, verify that the archive has not been tampered with:
 
 ```
 gpg --keyserver keys.openpgp.org --recv-keys 489C5EC80FD62BE89E59B4F719C13E8CE0F5DB61
 gpg --verify hexpair.vX.Y.Z.tar.asc hexpair.vX.Y.Z.tar
 ```
+
+Both archives are built from the same sources by the same script and are
+byte-identical whichever platform builds them — CI compares the Linux and
+the Windows build of each on every push. The copy on vim.org is that same
+minimal archive; the signature for it lives here, since vim.org hosts its
+own copy and nothing there vouches for it.
 
 ## Usage
 

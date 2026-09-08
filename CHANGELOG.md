@@ -10,6 +10,16 @@ and this project adheres to
 ## [v2.4.0-devel] – 2026-09-02
 
 ### Added
+- **A second, smaller release archive: `hexpair.vX.Y.Z.minimal.tar.bz2`.**
+  The same plugin with the two files that are about *working on* hexpair
+  left out — `CLAUDE.md` and `CONTRIBUTING.md` — and compressed: 177 KiB
+  against the complete tarball's 900 KiB. It exists because
+  [vim.org](https://www.vim.org/scripts/script.php?script_id=6194), where
+  hexpair is now listed as script #6194, refuses an upload somewhere
+  between 224 and 250 KiB. Nothing a user needs is missing from it, the
+  changelog included; it is signed like the complete one, and CI compares
+  the Linux and the Windows build of both, so each is byte-identical
+  whichever platform makes it. `./pack-release` builds the pair.
 - **`:HexPairModified`, a key that turns the edit marking off.** The marking
   of bytes you have changed and not yet written is the one part of a hex
   page whose cost follows what you *did* rather than what is on screen: an
