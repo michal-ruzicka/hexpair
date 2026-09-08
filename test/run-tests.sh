@@ -5948,11 +5948,18 @@ call add(out, exists(':HPModified') . ' short name')
 " window loses them on its next redraw. That branch is testable headlessly
 " even though the drawing is not: stand in for the marks such a window
 " would have, then let a redraw run with the marking off.
-HexPairModified
+"
+" The ORDER here is what makes it a test of that branch and not of the
+" command. Off first, so the command's own clearing is spent and cannot
+" account for the result; then the marks; then only a redraw. And it
+" starts from a window with none of its own, because whether a headless
+" Vim has drawn any depends on the Vim: 8.0 gives line('w0')/line('w\$')
+" a usable answer in -es and draws, where a current one does not, and the
+" first version of this counted the difference and failed on 8.0 alone.
+HexPairModified!
 let w:hexpair_mod_ids = [matchaddpos('HexPairModified', [[4, 11, 2]])]
 let w:hexpair_mod_state = [b:changedtick, 1, line('\$'), 1]
-call add(out, len(filter(getmatches(), 'v:val.group ==# "HexPairModified"')) . ' seeded')
-HexPairModified!
+call add(out, len(filter(getmatches(), 'v:val.group ==# "HexPairModified"')) . ' standing')
 doautocmd TextChanged
 call add(out, len(filter(getmatches(), 'v:val.group ==# "HexPairModified"')) . ' after a redraw with it off')
 call writefile(out, '$WORK/tmodtog.out')
@@ -5976,7 +5983,7 @@ check "and twice leaves it off" "0 and the bang again" \
     "$(sed -n 6p "$WORK/tmodtog.out")"
 check "the short name is defined too" "2 short name" \
     "$(sed -n 7p "$WORK/tmodtog.out")"
-check "a window's marks stand where they were drawn" "1 seeded" \
+check "a window's marks stand where they were drawn" "1 standing" \
     "$(sed -n 8p "$WORK/tmodtog.out")"
 check "and a redraw with the marking off takes them away" \
     "0 after a redraw with it off" "$(sed -n 9p "$WORK/tmodtog.out")"
