@@ -254,14 +254,24 @@ jobs:
     steps:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
       - name: Compare cross-platform hashes
-        # Both artifacts, sorted by name on each side so the two lists line
-        # up: the canonical tarball, which is uncompressed precisely so
-        # that this can be promised, and the minimal one, whose bzip2
-        # stream is expected to be reproducible and is checked rather than
-        # assumed. Hash and file name both, so a missing file fails here
-        # instead of comparing one line against another.
+        # Both artifacts: the canonical tarball, which is uncompressed
+        # precisely so that this can be promised, and the minimal one,
+        # whose bzip2 stream is expected to be reproducible and is checked
+        # rather than assumed. Hash and file name both, so a missing file
+        # fails here instead of comparing one line against another.
+        #
+        # The two sides write the name differently - sha256sum echoes the
+        # path it was given, `dist/hexpair...`, while PowerShell's .Name is
+        # the bare file name - so the name is cut down to its last
+        # component before the lists are compared. They are sorted here
+        # too, after that, rather than trusting each producer to have
+        # sorted the form it happened to write.
         run: |
-          l=$(sort -k2 tarball-linux/linux.sha256 | awk '{print $1, $2}')
-          w=$(sort -k2 tarball-windows/windows.sha256 | awk '{print $1, $2}')
+          norm() { awk '{ sub(/.*\//, "", $2); print $1, $2 }' "$1" | sort -k2; }
+          l=$(norm tarball-linux/linux.sha256)
+          w=$(norm tarball-windows/windows.sha256)
           printf 'linux:\n%s\nwindows:\n%s\n' "$l" "$w"
+          # Two lines a side, or the packaging produced something other
+          # than the two archives and equal lists would mean nothing.
+          test "$(printf '%s\n' "$l" | wc -l)" -eq 2
           test "$l" = "$w"
