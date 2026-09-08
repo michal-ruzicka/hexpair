@@ -438,8 +438,36 @@ Then one upload per release, which is the recurring part:
 
 ### GitHub
 
-Discovery there is topics and the repository description, neither of which
-lives in a file. Set them once:
+Discovery there is the repository description, the homepage and the
+topics. **None of the three can live in a file in this repository**: they
+are repository settings, held by GitHub and not by git, and there is no
+native manifest for them. Set them once, by whichever of these suits.
+
+**In the web interface** — the shortest route, and the one that needs
+nothing installed. On the repository's main page, the gear next to
+*About* in the right-hand column opens a dialog with all three fields.
+Topics: at most 20, at most 50 characters each, lowercase letters, digits
+and hyphens (GitHub lowercases them anyway).
+
+**With the REST API**, which needs only curl and a token with repository
+write:
+
+```sh
+curl -X PATCH -H "Authorization: Bearer $GITHUB_TOKEN" \
+     -H "Accept: application/vnd.github+json" \
+     https://api.github.com/repos/michal-ruzicka/hexpair \
+     -d '{"description":"A Vim plugin for hex viewing and editing: live hex<->ASCII pair highlighting, paged for files of any size","homepage":"https://github.com/michal-ruzicka/hexpair#readme"}'
+
+curl -X PUT -H "Authorization: Bearer $GITHUB_TOKEN" \
+     -H "Accept: application/vnd.github+json" \
+     https://api.github.com/repos/michal-ruzicka/hexpair/topics \
+     -d '{"names":["vim","vim-plugin","hex-editor","hexdump","xxd","binary-editor","vimscript","vim9script"]}'
+```
+
+Note that the topics call REPLACES the whole list rather than adding to
+it, so it always carries every topic the repository is to have.
+
+**With the `gh` CLI**, if it is installed:
 
 ```sh
 gh repo edit michal-ruzicka/hexpair \
@@ -452,6 +480,14 @@ gh repo edit michal-ruzicka/hexpair \
 
 `vim` and `vim-plugin` are the two that matter: they are what the plugin
 lists and the aggregators filter on.
+
+There IS a way to keep these in a file — the third-party *Settings*
+GitHub App reads `.github/settings.yml` and syncs it — and it is not worth
+it here. Installing it hands admin-equivalent power to anyone who can push,
+since pushing to that file is how settings are changed; the app's own
+README says so and recommends CODEOWNERS to contain it. That is a large
+standing risk to take on for three fields that are set once and then never
+touched.
 
 ### Elsewhere
 
