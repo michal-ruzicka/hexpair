@@ -5464,7 +5464,7 @@ function! Say(cmd) abort
   execute 'silent! ' . a:cmd
   redir END
   let lines = filter(split(m, "\n"), 'v:val =~# "hexpair:"')
-  return empty(lines) ? '' : substitute(matchstr(lines[-1], 'hexpair:.*'), '$WORK/', '', 'g')
+  return empty(lines) ? '' : matchstr(lines[-1], 'hexpair:.*')
 endfunction
 let out = []
 HexPairOpen $WORK/dirty.bin 2
@@ -5489,25 +5489,29 @@ HexPairGoHex
 execute "normal! R58\<Esc>"
 HexPairGoOffset 513
 call add(out, Say('HexPairDiffNext'))
+" What THIS Vim calls that file: a native Windows one spells it with
+" backslashes and shortens the home directory away, so the name is asked
+" for rather than assumed.
+call add(out, fnamemodify('$WORK/dirty2.bin', ':~:.'))
 call writefile(out, '$WORK/tddiff.out')
 qa!
 EOF
 "$HEXPAIR_VIM" -es -u NONE -S "$WORK/tddiff.vim" < /dev/null
-check "the walk finds the one byte the two files differ in" \
-    "hexpair: next change at byte 601 (0x259) against dirty2.bin" \
+check_path "the walk finds the one byte the two files differ in" \
+    "hexpair: next change at byte 601 (0x259) against $(sed -n 7p "$WORK/tddiff.out")" \
     "$(sed -n 1p "$WORK/tddiff.out")"
-check "and it is reported where it landed" \
-    "hexpair: byte 601 (0x259): 54 here, 58 in dirty2.bin" \
+check_path "and it is reported where it landed" \
+    "hexpair: byte 601 (0x259): 54 here, 58 in $(sed -n 7p "$WORK/tddiff.out")" \
     "$(sed -n 2p "$WORK/tddiff.out")"
 check "typing their byte into my page modifies it" "modified: 1" \
     "$(sed -n 3p "$WORK/tddiff.out")"
-check "the byte now agrees, and is reported as agreeing" \
-    "hexpair: byte 601 (0x259): 58 here and in dirty2.bin" \
+check_path "the byte now agrees, and is reported as agreeing" \
+    "hexpair: byte 601 (0x259): 58 here and in $(sed -n 7p "$WORK/tddiff.out")" \
     "$(sed -n 4p "$WORK/tddiff.out")"
 check "and the walk no longer sends the cursor to it" \
     "hexpair: no change after byte 513" "$(sed -n 5p "$WORK/tddiff.out")"
-check "while a difference typed in is one the walk finds" \
-    "hexpair: next change at byte 605 (0x25d) against dirty2.bin" \
+check_path "while a difference typed in is one the walk finds" \
+    "hexpair: next change at byte 605 (0x25d) against $(sed -n 7p "$WORK/tddiff.out")" \
     "$(sed -n 6p "$WORK/tddiff.out")"
 
 # ===========================================================================
@@ -6411,7 +6415,7 @@ check "everything the minimal package omits is something it would have had" \
 #
 # Built in memory through the packaging script's own functions, so nothing
 # is written and the answer is the one ./pack-release would give.
-minimal=$(cd "$ROOT" && python3 -c '
+minimal=$(cd "$ROOT" && "$PY" -c '
 import bz2, calendar, time, importlib.util, pathlib
 spec = importlib.util.spec_from_file_location("pr", "pack-release.py")
 pr = importlib.util.module_from_spec(spec)
