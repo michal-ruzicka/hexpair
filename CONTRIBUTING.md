@@ -58,6 +58,39 @@ the cursor-position mapping and the write path:
 test/run-tests.sh
 ```
 
+### Running it against the oldest Vim
+
+CI builds Vim 8.0.0000 and runs the whole suite against it, and that job
+catches things nothing else does — a headless window there has usable
+geometry where a current Vim's has none, so code that draws behaves
+differently. Worth having locally rather than spending CI cycles guessing:
+
+```sh
+git clone --depth 1 --branch v8.0.0000 https://github.com/vim/vim.git /tmp/vim80
+cd /tmp/vim80
+git rev-parse HEAD   # must be bb76f24af2010943387ce696a7092175b4ecccf2
+CFLAGS="-O2 -Wno-implicit-function-declaration -Wno-implicit-int \
+        -Wno-int-conversion -Wno-return-mismatch" \
+    ./configure --with-features=huge --with-tlib=ncurses
+make -C src -j"$(nproc)" \
+    CFLAGS="-O2 -fpermissive -Wno-implicit-function-declaration \
+            -Wno-implicit-int -Wno-int-conversion -Wno-return-mismatch \
+            -Wno-incompatible-pointer-types" vim
+```
+
+The flags are not optional and are nothing to do with Vim: a 2016 source
+tree meets a compiler that has since made implicit declarations, implicit
+`int` and incompatible function-pointer arguments **errors** rather than
+warnings. Then, from this repository:
+
+```sh
+HEXPAIR_VIM=/tmp/vim80/src/vim VIMRUNTIME=/tmp/vim80/runtime test/run-tests.sh
+```
+
+`xxd` comes from the distribution, not from that tree: Vim 8.0's own
+`xxd.c` has K&R prototypes no current GCC compiles, and a user on such a
+Vim would have the distribution's `xxd` too.
+
 Every behavioural change must come with a test that fails before the
 change and passes after it. The suite is intentionally dependency-free
 beyond `vim`, `xxd` and `python3` (fixture generation), so it runs

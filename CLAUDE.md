@@ -1399,6 +1399,16 @@ was designed and built in Stage 2 - see "What Stage 2 decided".
   bytes the other run does not reach as differences of their own.
   `s:TextComparePositions()`, `s:BytesAsText()` and
   `HexPairPagedTextRuns()` were the spelling comparison and are deleted.
+- **A headless Vim 8.0 HAS window geometry; a current one does not.** In
+  `vim -es`, a modern Vim answers `line('w$')` below `line('w0')` - so
+  anything driven by the visible range draws nothing, which several tests
+  quietly rely on - and 8.0 answers usefully and draws. A test that
+  counts marks, matches or positions must therefore start from a state it
+  has established itself rather than from "a headless window is empty".
+  This cost two CI cycles: the marking-toggle test seeded a mark into a
+  window that already had one on 8.0 alone, and overwrote the id list
+  while doing it. `CONTRIBUTING.md` has the recipe for building 8.0
+  locally; use it instead of guessing.
 - **A |reference| in the help must resolve on VIM 8.0**, not on the Vim
   you are running. The suite resolves them against the tags of the Vim
   under test, so a tag Vim gained later - `readblob()`, added in 8.2.2343
