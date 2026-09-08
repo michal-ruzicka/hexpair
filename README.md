@@ -201,6 +201,8 @@ the same ground as the *Quick Start* above, walked slowly.
 2. [Features](#features)
 3. [Installation](#installation)
     1. [Verifying Releases](#verifying-releases)
+    2. [Other Ways to Install](#other-ways-to-install)
+    3. [Mappings](#mappings)
 4. [Usage](#usage)
     1. [Reading the Bytes](#reading-the-bytes)
     2. [Writing a Character in](#writing-a-character-in)
@@ -322,10 +324,16 @@ the same ground as the *Quick Start* above, walked slowly.
 
 ## Installation
 
+Vim 8.0 or later, and `xxd` — which ships with Vim. Nothing else, and no
+Neovim: this is a Vim plugin, tested against Vim 8.0.0000, current Vim and
+Vim on Windows, and it uses `readblob()` and Vim9 script where they are
+there ([What it costs](#what-it-costs)).
+
 Vim 8+ native packages (recommended):
 
 ```sh
 mkdir -p ~/.vim/pack/plugins/start
+# Check the signature before this line - see "Verifying Releases" below.
 tar xf hexpair.vX.Y.Z.tar -C ~/.vim/pack/plugins/start/
 vim -c 'helptags ALL' -c 'q'
 ```
@@ -346,14 +354,33 @@ the registry files for the Explorer menu, the icons, the licence and the
 README are all there. What is gone is reading matter that is a click away
 here — the project's own notes, the contributor guide, and the changelog,
 which on vim.org is in that site's own per-version release notes anyway.
-Both archives are signed ([Verifying Releases](#verifying-releases)), and
-unpack the same way:
+Both archives are signed, and unpack the same way:
 
 ```sh
 tar xf hexpair.vX.Y.Z.minimal.tar.bz2 -C ~/.vim/pack/plugins/start/
 ```
 
-Or clone the repository directly:
+### Verifying Releases
+
+Each release archive is accompanied by a detached GPG signature file —
+`hexpair.vX.Y.Z.tar.asc` for the complete tarball and
+`hexpair.vX.Y.Z.minimal.tar.bz2.asc` for the smaller one. Before
+installing, verify that the archive has not been tampered with:
+
+```
+gpg --keyserver keys.openpgp.org --recv-keys 489C5EC80FD62BE89E59B4F719C13E8CE0F5DB61
+gpg --verify hexpair.vX.Y.Z.tar.asc hexpair.vX.Y.Z.tar
+```
+
+Both archives are built from the same sources by the same script and are
+byte-identical whichever platform builds them — CI compares the Linux and
+the Windows build of each on every push. The copy on vim.org is that same
+minimal archive; the signature for it lives here, since vim.org hosts its
+own copy and nothing there vouches for it.
+
+### Other Ways to Install
+
+Clone the repository directly:
 
 ```sh
 git clone https://github.com/michal-ruzicka/hexpair.git \
@@ -374,10 +401,7 @@ Plug 'michal-ruzicka/hexpair'
 call minpac#add('michal-ruzicka/hexpair')
 ```
 
-Vim 8.0 or later, and `xxd` — which ships with Vim. Nothing else, and no
-Neovim: this is a Vim plugin, tested against Vim 8.0.0000, current Vim and
-Vim on Windows, and it uses `readblob()` and Vim9 script where they are
-there ([What it costs](#what-it-costs)).
+### Mappings
 
 The plugin defines **no key mappings by default** — it provides commands
 and `<Plug>` targets, and which keys those go on is yours to decide.
@@ -483,24 +507,6 @@ the mappings to use a different prefix. The `<Plug>(HexPair…)` targets
 are named virtual keys exposed by the plugin — map onto them with
 `nmap`, not `nnoremap` (the latter forbids the remapping through which
 a `<Plug>` target expands). Details: `:help hexpair-mappings`.
-
-### Verifying Releases
-
-Each release archive is accompanied by a detached GPG signature file —
-`hexpair.vX.Y.Z.tar.asc` for the complete tarball and
-`hexpair.vX.Y.Z.minimal.tar.bz2.asc` for the smaller one. Before
-installing, verify that the archive has not been tampered with:
-
-```
-gpg --keyserver keys.openpgp.org --recv-keys 489C5EC80FD62BE89E59B4F719C13E8CE0F5DB61
-gpg --verify hexpair.vX.Y.Z.tar.asc hexpair.vX.Y.Z.tar
-```
-
-Both archives are built from the same sources by the same script and are
-byte-identical whichever platform builds them — CI compares the Linux and
-the Windows build of each on every push. The copy on vim.org is that same
-minimal archive; the signature for it lives here, since vim.org hosts its
-own copy and nothing there vouches for it.
 
 ## Usage
 

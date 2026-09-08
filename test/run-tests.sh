@@ -6441,7 +6441,7 @@ check "and leaves none of them out" "missing: []" \
     "$(sed -n 2p "$WORK/toutline.out")"
 check "and links no section that is gone" "stale: []" \
     "$(sed -n 3p "$WORK/toutline.out")"
-check "and there are as many sections as there are" "sections: 20" \
+check "and there are as many sections as there are" "sections: 22" \
     "$(sed -n 4p "$WORK/toutline.out")"
 
 # --- Leaving the window is not free, and not always allowed ---------------
