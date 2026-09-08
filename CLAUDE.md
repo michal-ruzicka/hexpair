@@ -122,8 +122,11 @@ vimhex-contex-entry.  add.reg wires gvimhex.cmd/gvimhexdiff.cmd into the
                       straight in the "*" menu). Nothing was ever released
                       with those, so there is no installed base to tidy;
                       carrying deletions for a layout no user ever had is
-                      dead weight. Same reasoning applies to the next
-                      restructure while v2.3.0 is unreleased.
+                      dead weight. THAT LICENCE HAS EXPIRED: v2.3.0
+                      shipped the submenu, so a user can have it
+                      installed, and a future restructure has to remove
+                      what that release put there rather than leaving it
+                      orphaned in the registry.
                       Submenu mechanics, all three of which are load-
                       bearing: the folder is a verb with
                       "ExtendedSubCommandsKey" and NO \command subkey (a

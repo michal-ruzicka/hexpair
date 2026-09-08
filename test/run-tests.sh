@@ -6416,6 +6416,10 @@ check "everything the minimal package omits is something it would have had" \
 # Built in memory through the packaging script's own functions, so nothing
 # is written and the answer is the one ./pack-release would give.
 minimal=$(cd "$ROOT" && "$PY" -c '
+import sys
+# Importing the script would otherwise leave a __pycache__ in the
+# repository on every run of the suite.
+sys.dont_write_bytecode = True
 import bz2, calendar, time, importlib.util, pathlib
 spec = importlib.util.spec_from_file_location("pr", "pack-release.py")
 pr = importlib.util.module_from_spec(spec)

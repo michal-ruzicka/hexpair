@@ -443,7 +443,12 @@ developer's machine.
    ```
 6. On the GitHub repository page, go to **Releases → Draft a new release**,
    select the `vX.Y.Z` tag, paste the CHANGELOG entry as the description,
-   and attach both files (`.tar` and `.tar.asc`).
+   and attach **all four** files — both packages and a signature for each:
+   `hexpair.vX.Y.Z.tar`, `hexpair.vX.Y.Z.tar.asc`,
+   `hexpair.vX.Y.Z.minimal.tar.bz2` and
+   `hexpair.vX.Y.Z.minimal.tar.bz2.asc`. The README sends readers to the
+   smaller one when the complete tarball is more than they want, so a
+   release that carries only the `.tar` leaves that pointing at nothing.
 
 The CI workflow also produces the tarball as a downloadable Actions
 artifact, but that copy is unsigned and is intended for testing PRs only.
