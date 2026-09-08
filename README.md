@@ -794,12 +794,22 @@ has spaces, line breaks and an ASCII column through the middle of it.
 
 ```vim
 :HexPairFind de ad be ef      " or deadbeef, or de ?? be ef
-:HexPairFindText PK\x03\x04   " the bytes of a string
+:HexPairFindText Makefile     " the bytes of a string, taken as typed
+:HexPairFindText Škola        " ... in whatever 'encoding' spells it as
 :HexPairFindNext              " and again, obeying 'wrapscan'
 ```
 
 Every match on the page is marked (`HexPairFind`), and the search lands
 the cursor on the byte it found, turning the page if it is elsewhere.
+
+What is searched is the file, **with the page in view as you have it**:
+bytes typed over the dump and not yet written are found where they are
+shown, and the bytes they replaced are not found any more. Only one page
+can be in that state, since turning a page needs an unmodified buffer, so
+the rest of the file is the file. Comparing (`:HexPairDiffNext`) reads
+this side the same way; the file it is compared *against* is read as it
+is on disk. Details, including what an insert defers until `:w`:
+`:help :HexPairFind`.
 
 ```vim
 :HexPairReplace 11 22 33 44                    " over the match under the cursor

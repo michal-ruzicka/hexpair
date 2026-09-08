@@ -1512,11 +1512,33 @@ HexPairOpenFile({file} [, {page}])
                         a few of the neighbouring page's on either side,
                         since such a match fits whole inside neither.
 
-                        What is searched is the file on disk.  Unwritten
-                        edits are on the screen, where |/| and the eye can
-                        find them.
+                        What is searched is the file, WITH the page in
+                        view as the buffer holds it: bytes you have typed
+                        over the dump and not yet written are found where
+                        they are shown, and the bytes they replaced are
+                        not found any more.  Only one page can be in that
+                        state - turning a page needs an unmodified buffer
+                        or a ! that discards - so the rest of the file is
+                        the file.
 
-:HexPairFindText {text} The same, for the bytes of {text}.
+                        An insert grows the page past where it ends on
+                        disk, and those bytes have no offset to report or
+                        to jump to until |:w| gives them one; that many
+                        bytes at the page's tail are searched after the
+                        write.  It is the boundary
+                        |:HexPairModifiedShow| names.
+
+:HexPairFindText {text} The same, for the bytes of {text}. >
+
+                            :HexPairFindText Makefile
+                            :HexPairFindText Škola
+<
+                        {text} is taken as typed, to the end of the line:
+                        there are no escapes, so "\x03" is those four
+                        characters and not one byte.  Its bytes are the
+                        ones Vim holds it in, so a character outside ASCII
+                        finds what |'encoding'| spells it as - use
+                        |:HexPairFind| to say the bytes themselves.
 :HexPairFindNext        Repeat the last search forwards,
 :HexPairFindPrev        or backwards.
 
@@ -1583,11 +1605,10 @@ HexPairOpenFile({file} [, {page}])
                         that is absent cannot be read as a byte that
                         happens to be 00.
 
-                        The bytes reported are the page as it was READ,
-                        not as the buffer now holds it, for the reason
-                        |:HexPairDiff|'s counts are: this is about how the
-                        two FILES compare, which unwritten edits are no
-                        part of.  A long selection is summarised and the
+                        The bytes reported on this side are the ones the
+                        BUFFER holds - the same ones the marking beside
+                        them compares, and the ones the cursor is sitting
+                        on.  A long selection is summarised and the
                         listing stops after 32 bytes.
                         |<Plug>(HexPairDiffShow)| has a Normal-mode and a
                         Visual-mode form, `<Leader>D` in `hexpair.vimrc`.
@@ -1614,6 +1635,19 @@ HexPairOpenFile({file} [, {page}])
                         A difference past the end of THIS file (the other
                         one is longer) has nowhere to put the cursor, so
                         it is reported instead.
+
+                        The walk reads this file WITH the page in view as
+                        the buffer holds it, exactly as |:HexPairFind|
+                        does and for the same reason: the marking has
+                        always compared what is on the screen, so a walk
+                        that read this file from disk would send the
+                        cursor to bytes the screen shows as agreeing, and
+                        past the ones it shows as differing.  The OTHER
+                        file is read as it is on disk - including in a
+                        bound pair of views, where the other window may
+                        have unwritten edits of its own.  Which is the
+                        question these ask: how what is here differs from
+                        that file.
 
                         `vimhexdiff` (|hexpair-vimhex|) opens two files
                         side by side this way.

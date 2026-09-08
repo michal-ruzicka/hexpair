@@ -2048,3 +2048,31 @@ naming the two ways out: write the buffer, or `:HexPairOpen` the file.
 - **The cursor across a `++bin` reload** is exact for single-byte
   encodings and for any encoding where 0x0a separates lines; binary
   data opened *without* `-b` still maps approximately.
+
+## What a search and a comparison read
+
+Both scan the FILE a block at a time, and both lay the page in view over
+the block where the two meet, so what is found is what is on the screen -
+`s:SearchPageHex()` is the one source of that, and `s:FindInBlock()` and
+`s:CmpPair()` are the two choke points that apply it. Only one page can
+ever be modified (turning a page needs an unmodified buffer), which is
+what makes a single contiguous overlay enough.
+
+The overlay is CLAMPED to the length the page was read with, and that is
+what keeps every reported offset a file offset. Do not "fix" the blind
+spot it leaves at a grown page's tail by dropping the clamp: bytes an
+insert has added have no file offset until `:w` gives them one, and a
+match reported at one would be a byte `:HexPairGoOffset` cannot reach.
+
+The marking follows the same bytes (`s:PageHexForSearch()`), or the
+cursor lands on a match that is not highlighted.
+
+## A Blob literal is 8.1.0735
+
+`0z` - including the empty `0z` - is younger than the 8.0 floor, and Vim
+parses a function's expressions when it RUNS them, so such a line is fine
+until an old Vim reaches it and then it is `E722: Missing comma in
+Dictionary`. Keep `0z` on lines only a Vim with `readblob()` can reach;
+where a Blob is optional, say so with a missing key rather than an empty
+one. The suite catches this only against the oldest Vim, and prints the
+failures in a list - read all of it, not its last line.

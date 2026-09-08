@@ -316,6 +316,26 @@ open(os.path.join(w, 'nul2.bin'), 'wb').write(b'AB\x0aCD\x0aEF')
 _dn = bytearray(b'\x41\x42' * 2048)
 _dn[2000] = 0x42
 open(os.path.join(w, 'dense.bin'), 'wb').write(bytes(_dn))
+# A fixture that alternates two bytes and nothing else: "42 42" and "43"
+# both occur NOWHERE in it, so a search that finds either has found what
+# the buffer holds. "42 42" is also too dense for the byte reader to walk,
+# and 43 is rare enough that it does - one fixture asks both readers.
+open(os.path.join(w, 'dirtydense.bin'), 'wb').write(b'\x41\x42' * 1024)
+# A fixture for searching a page that has been typed over and not written.
+# Filler no needle can hide in, then four needles at known offsets: one on
+# an earlier page, one on the page that gets edited, one at the very END of
+# that page (which a length-changing edit pushes past where the page ends
+# on disk), and one on a later page.
+_dy = bytearray(b'.' * 2048)
+_dy[100:105] = b'EARLY'
+_dy[600:606] = b'TARGET'
+_dy[1020:1024] = b'TAIL'
+_dy[1600:1604] = b'LATE'
+open(os.path.join(w, 'dirty.bin'), 'wb').write(bytes(_dy))
+# and the same file differing in one byte of that page, to compare against
+_dy2 = bytearray(_dy)
+_dy2[600] = ord('X')
+open(os.path.join(w, 'dirty2.bin'), 'wb').write(bytes(_dy2))
 # a fixture whose only occurrence of a pattern STRADDLES a page boundary:
 # with the 512-byte pages the suite uses, "64 20" sits at the last byte of
 # page 1 and the first of page 2
@@ -5168,6 +5188,327 @@ check "a nibble wildcard finds the same byte on either reader" \
 check "and so does the backward scan" \
     "hexpair: bytes de ?? be ef at byte 4997 (0x1385) (wrapped)" \
     "$(sed -n 9p "$WORK/tbfind.out")"
+
+# ===========================================================================
+# Searching and comparing a page that has been typed over
+# ===========================================================================
+# A scan reads the FILE, and unwritten edits are in the BUFFER. Where the
+# two meet - the one page in view, which is the only one that can be
+# modified - the buffer is what the block says, so that what is found is
+# what is on the screen. Without that the answers were wrong in both
+# directions at once: bytes typed INTO the page were "not found in this
+# file", and bytes typed OVER were still found, at an offset the cursor
+# then jumped to and where they were no longer to be seen.
+#
+# The arithmetic of the overlap is asked separately, below: through a real
+# scan the smallest block the setting allows is a megabyte, so a fixture
+# that reached every seam would have to be one.
+cat > "$WORK/tdirty.vim" <<EOF
+source $PLUGIN
+let g:hexpair_page_size = 512
+function! Msg(m) abort
+  let lines = filter(split(a:m, "\n"), 'v:val =~# "hexpair:"')
+  return empty(lines) ? '' : matchstr(lines[-1], 'hexpair:.*')
+endfunction
+function! Find(cmd) abort
+  redir => m
+  execute 'silent! ' . a:cmd
+  redir END
+  return Msg(m)
+endfunction
+let out = []
+" Page 2 is bytes 513-1024, which is where TARGET and TAIL are.
+HexPairOpen $WORK/dirty.bin 2
+" Type over TARGET, making it MARKER: same length, so the page is the
+" length it was read with and every offset is still a file offset.
+silent! %s/54 41 52 47 45 54/4d 41 52 4b 45 52/
+call add(out, 'modified: ' . &modified)
+call add(out, Find('HexPairFindText MARKER'))
+call add(out, Find('HexPairFindText TARGET'))
+call add(out, Find('HexPairFindText EARLY'))
+call add(out, Find('HexPairFindText LATE'))
+call add(out, Find('HexPairFindText TAIL'))
+" The backward scan reads the same page through the same overlay.
+HexPairGoOffset 1024
+call add(out, Find('HexPairFindText MARKER'))
+call add(out, Find('HexPairFindPrev'))
+" Undone, the file is the file again.
+silent undo
+call add(out, 'modified: ' . &modified)
+call add(out, Find('HexPairFindText TARGET'))
+call add(out, Find('HexPairFindText MARKER'))
+call writefile(out, '$WORK/tdirty.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tdirty.vim" < /dev/null
+check "the buffer is modified once the dump is typed over" "modified: 1" \
+    "$(sed -n 1p "$WORK/tdirty.out")"
+check "bytes typed into the page are found where they are shown" \
+    "hexpair: text 'MARKER' at byte 601 (0x259)" \
+    "$(sed -n 2p "$WORK/tdirty.out")"
+check "and the bytes they were typed over are not found any more" \
+    "hexpair: text 'TARGET' not found in this file" \
+    "$(sed -n 3p "$WORK/tdirty.out")"
+check "a page before the edited one still answers from the file" \
+    "hexpair: text 'EARLY' at byte 101 (0x65) (wrapped)" \
+    "$(sed -n 4p "$WORK/tdirty.out")"
+check "and so does a page after it" "hexpair: text 'LATE' at byte 1601 (0x641)" \
+    "$(sed -n 5p "$WORK/tdirty.out")"
+check "and the untouched tail of the edited page itself" \
+    "hexpair: text 'TAIL' at byte 1021 (0x3fd)" \
+    "$(sed -n 6p "$WORK/tdirty.out")"
+check "a scan that wraps past the end sees the same page" \
+    "hexpair: text 'MARKER' at byte 601 (0x259) (wrapped)" \
+    "$(sed -n 7p "$WORK/tdirty.out")"
+check "and so does the backward one, which reads its blocks differently" \
+    "hexpair: text 'MARKER' at byte 601 (0x259) (wrapped)" \
+    "$(sed -n 8p "$WORK/tdirty.out")"
+check "an undo puts the buffer back" "modified: 0" \
+    "$(sed -n 9p "$WORK/tdirty.out")"
+check "and the file's own bytes are found again" \
+    "hexpair: text 'TARGET' at byte 601 (0x259)" \
+    "$(sed -n 10p "$WORK/tdirty.out")"
+check "and what was only ever in the buffer is not" \
+    "hexpair: text 'MARKER' not found in this file" \
+    "$(sed -n 11p "$WORK/tdirty.out")"
+
+# The overlap itself, put to the arithmetic directly. A block that ends
+# inside the page, one that starts inside it, one that swallows it whole,
+# one that is exactly it and two that miss it are the cases the scan can
+# produce, and through a real scan the smallest block the setting allows
+# is a megabyte - so they are asked here rather than with a fixture large
+# enough to reach them.
+cat > "$WORK/tovl.vim" <<EOF
+source $PLUGIN
+let out = []
+" A four-byte page at file offset 4.
+for c in [[0, 4, 'block ends where the page begins'], [0, 6, 'block ends inside it'], [6, 4, 'block begins inside it'], [0, 12, 'block swallows it'], [4, 4, 'block is exactly it'], [8, 4, 'block begins past it'], [0, 3, 'block ends before it']]
+  call add(out, c[2] . ': ' . string(HexPairPagedOverlayRange(c[0], c[1], 4, 4)))
+endfor
+call writefile(out, '$WORK/tovl.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tovl.vim" < /dev/null
+check "a block ending where the page begins overlaps nothing" \
+    "block ends where the page begins: [0, 0]" "$(sed -n 1p "$WORK/tovl.out")"
+check "a block ending inside the page overlaps its front" \
+    "block ends inside it: [4, 6]" "$(sed -n 2p "$WORK/tovl.out")"
+check "a block beginning inside it overlaps its back" \
+    "block begins inside it: [6, 8]" "$(sed -n 3p "$WORK/tovl.out")"
+check "a block swallowing it overlaps all of it" \
+    "block swallows it: [4, 8]" "$(sed -n 4p "$WORK/tovl.out")"
+check "a block that is the page overlaps all of it too" \
+    "block is exactly it: [4, 8]" "$(sed -n 5p "$WORK/tovl.out")"
+check "a block past it overlaps nothing" \
+    "block begins past it: [0, 0]" "$(sed -n 6p "$WORK/tovl.out")"
+check "and neither does one before it" \
+    "block ends before it: [0, 0]" "$(sed -n 7p "$WORK/tovl.out")"
+
+# The two readers over an edited page. Which one runs is not the question -
+# that a search answers the same either way is. A dense pattern is handed
+# BACK by the byte reader and goes through the hex one; a rare byte it
+# walks itself. Neither is anywhere in the fixture, so both are found only
+# if the buffer is what was searched.
+#
+# The edits are made through the cursor, the way one is made by hand:
+# |:HexPairGoOffset| to the byte, |:HexPairGoHex| to its digits, and two
+# characters typed over them.
+cat > "$WORK/tdread.vim" <<EOF
+source $PLUGIN
+let g:hexpair_page_size = 512
+function! Find(cmd) abort
+  redir => m
+  execute 'silent! ' . a:cmd
+  redir END
+  let lines = filter(split(m, "\n"), 'v:val =~# "hexpair:"')
+  return empty(lines) ? '' : matchstr(lines[-1], 'hexpair:.*')
+endfunction
+let out = []
+" Page 2 is bytes 513-1024.
+HexPairOpen $WORK/dirtydense.bin 2
+call add(out, Find('HexPairFind 42 42'))
+call add(out, Find('HexPairFind 43'))
+" Byte 601 is a 41 with a 42 in front of it: make it a 42 and there is a
+" "42 42" at byte 600, which is dense and goes through the hex reader.
+HexPairGoOffset 601
+HexPairGoHex
+execute "normal! R42\<Esc>"
+" And byte 701 into the file's only 43, which the byte reader walks.
+HexPairGoOffset 701
+HexPairGoHex
+execute "normal! R43\<Esc>"
+call add(out, 'modified: ' . &modified)
+call add(out, Find('HexPairFind 42 42'))
+call add(out, Find('HexPairFind 43'))
+call writefile(out, '$WORK/tdread.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tdread.vim" < /dev/null
+check "neither pattern is in the file to begin with" \
+    "hexpair: bytes 42 42 not found in this file" \
+    "$(sed -n 1p "$WORK/tdread.out")"
+check "nor the other one" "hexpair: bytes 43 not found in this file" \
+    "$(sed -n 2p "$WORK/tdread.out")"
+check "typing two bytes over the dump modifies it" "modified: 1" \
+    "$(sed -n 3p "$WORK/tdread.out")"
+check "a pattern the byte reader hands back finds what was typed" \
+    "hexpair: bytes 42 42 at byte 600 (0x258) (wrapped)" \
+    "$(sed -n 4p "$WORK/tdread.out")"
+check "and so does one it walks itself" \
+    "hexpair: bytes 43 at byte 701 (0x2bd)" \
+    "$(sed -n 5p "$WORK/tdread.out")"
+
+# The windowed text view holds text, not a dump, and its bytes are got a
+# different way (writefile() and xxd, see s:LiveHex()). The question is
+# the same one, so the answer has to be.
+cat > "$WORK/tdtext.vim" <<EOF
+source $PLUGIN
+let g:hexpair_page_size = 512
+function! Find(cmd) abort
+  redir => m
+  execute 'silent! ' . a:cmd
+  redir END
+  let lines = filter(split(m, "\n"), 'v:val =~# "hexpair:"')
+  return empty(lines) ? '' : matchstr(lines[-1], 'hexpair:.*')
+endfunction
+let out = []
+HexPairOpen $WORK/dirty.bin 2
+" Out of the dump and into the text view, where TARGET is text.
+HexPairToggle
+" The needle is TEXT here, not a pair of digits: that is what says this
+" is the text view and not the dump.
+call add(out, 'shows: ' . matchstr(join(getline(1, '$'), ''), 'TARGET'))
+silent! %s/TARGET/MARKER/
+call add(out, 'modified: ' . &modified)
+call add(out, Find('HexPairFindText MARKER'))
+call add(out, Find('HexPairFindText TARGET'))
+call add(out, Find('HexPairFindText LATE'))
+call writefile(out, '$WORK/tdtext.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tdtext.vim" < /dev/null
+check "the text view shows the bytes as text" "shows: TARGET" \
+    "$(sed -n 1p "$WORK/tdtext.out")"
+check "and typing in it modifies the buffer" "modified: 1" \
+    "$(sed -n 2p "$WORK/tdtext.out")"
+check "text typed into the text view is found where it is shown" \
+    "hexpair: text 'MARKER' at byte 601 (0x259)" \
+    "$(sed -n 3p "$WORK/tdtext.out")"
+check "and the text it replaced is not found any more" \
+    "hexpair: text 'TARGET' not found in this file" \
+    "$(sed -n 4p "$WORK/tdtext.out")"
+check "while the rest of the file answers from the file" \
+    "hexpair: text 'LATE' at byte 1601 (0x641)" \
+    "$(sed -n 5p "$WORK/tdtext.out")"
+
+# An insert grows the page past its own end on disk, and those bytes have
+# no file offset yet - not to report and not to jump to. They are searched
+# once :w has given them one, and until then the page is searched up to
+# where it ended when it was read. This pins that boundary, which is the
+# one |:HexPairModifiedShow| names.
+cat > "$WORK/tdgrow.vim" <<EOF
+source $PLUGIN
+let g:hexpair_page_size = 512
+function! Find(cmd) abort
+  redir => m
+  execute 'silent! ' . a:cmd
+  redir END
+  let lines = filter(split(m, "\n"), 'v:val =~# "hexpair:"')
+  return empty(lines) ? '' : matchstr(lines[-1], 'hexpair:.*')
+endfunction
+let out = []
+HexPairOpen $WORK/dirty.bin 2
+" Two bytes MORE than were there: the page is now 514 bytes long, and
+" everything on it has moved along by two.
+HexPairGoOffset 513
+HexPairGoHex
+execute "normal! i5a 5a \<Esc>"
+call add(out, 'modified: ' . &modified)
+" TARGET has moved along with the rest of the page, and is found there.
+call add(out, Find('HexPairFindText TARGET'))
+" TAIL was the last four bytes of the page; two of them are now past
+" where the page ends on disk, so it is no longer whole inside what has
+" an offset. Written, it would be found again.
+call add(out, Find('HexPairFindText TAIL'))
+" And the pages either side are untouched by any of it.
+call add(out, Find('HexPairFindText LATE'))
+call add(out, Find('HexPairFindText EARLY'))
+call writefile(out, '$WORK/tdgrow.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tdgrow.vim" < /dev/null
+check "inserting bytes into the dump modifies it" "modified: 1" \
+    "$(sed -n 1p "$WORK/tdgrow.out")"
+check "an insert moves what follows it on the page, and it is found there" \
+    "hexpair: text 'TARGET' at byte 603 (0x25b)" \
+    "$(sed -n 2p "$WORK/tdgrow.out")"
+check "what an insert pushed past the page's end on disk waits for a write" \
+    "hexpair: text 'TAIL' not found in this file" \
+    "$(sed -n 3p "$WORK/tdgrow.out")"
+check "the page after it is untouched by the insert" \
+    "hexpair: text 'LATE' at byte 1601 (0x641)" \
+    "$(sed -n 4p "$WORK/tdgrow.out")"
+check "and so is the page before it" \
+    "hexpair: text 'EARLY' at byte 101 (0x65) (wrapped)" \
+    "$(sed -n 5p "$WORK/tdgrow.out")"
+
+# Comparing follows the buffer for the same reason searching does: the
+# marking on the screen has always compared the buffer's own digits
+# against the other file, so a walk that read this file from disk sent
+# |:HexPairDiffNext| to bytes the screen showed as agreeing.
+cat > "$WORK/tddiff.vim" <<EOF
+source $PLUGIN
+let g:hexpair_page_size = 512
+function! Say(cmd) abort
+  redir => m
+  execute 'silent! ' . a:cmd
+  redir END
+  let lines = filter(split(m, "\n"), 'v:val =~# "hexpair:"')
+  return empty(lines) ? '' : substitute(matchstr(lines[-1], 'hexpair:.*'), '$WORK/', '', 'g')
+endfunction
+let out = []
+HexPairOpen $WORK/dirty.bin 2
+HexPairDiff $WORK/dirty2.bin
+" They differ in byte 601 alone: 54 here, 58 there.
+call add(out, Say('HexPairDiffNext'))
+HexPairGoOffset 601
+call add(out, Say('HexPairDiffShow'))
+" Type their byte into my page: the screen now agrees with them.
+HexPairGoHex
+execute "normal! R58\<Esc>"
+call add(out, 'modified: ' . &modified)
+HexPairGoOffset 601
+call add(out, Say('HexPairDiffShow'))
+" Back to the page's first byte: the walk looks after the cursor, and a
+" page turn is refused while the buffer is modified.
+HexPairGoOffset 513
+call add(out, Say('HexPairDiffNext'))
+" And put a difference somewhere they agreed.
+HexPairGoOffset 605
+HexPairGoHex
+execute "normal! R58\<Esc>"
+HexPairGoOffset 513
+call add(out, Say('HexPairDiffNext'))
+call writefile(out, '$WORK/tddiff.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tddiff.vim" < /dev/null
+check "the walk finds the one byte the two files differ in" \
+    "hexpair: next change at byte 601 (0x259) against dirty2.bin" \
+    "$(sed -n 1p "$WORK/tddiff.out")"
+check "and it is reported where it landed" \
+    "hexpair: byte 601 (0x259): 54 here, 58 in dirty2.bin" \
+    "$(sed -n 2p "$WORK/tddiff.out")"
+check "typing their byte into my page modifies it" "modified: 1" \
+    "$(sed -n 3p "$WORK/tddiff.out")"
+check "the byte now agrees, and is reported as agreeing" \
+    "hexpair: byte 601 (0x259): 58 here and in dirty2.bin" \
+    "$(sed -n 4p "$WORK/tddiff.out")"
+check "and the walk no longer sends the cursor to it" \
+    "hexpair: no change after byte 513" "$(sed -n 5p "$WORK/tddiff.out")"
+check "while a difference typed in is one the walk finds" \
+    "hexpair: next change at byte 605 (0x25d) against dirty2.bin" \
+    "$(sed -n 6p "$WORK/tddiff.out")"
 
 # ===========================================================================
 # A scan crosses its own block seams

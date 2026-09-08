@@ -5674,8 +5674,15 @@ endfunction
 " a:limit is for the backward direction only: the match wanted is the
 " last one that STARTS before it, counted from the start of the block.
 function! s:FindInBlock(file, off, len, limit, forward) abort
+  " Unwritten edits live on one page; where a block meets that page, the
+  " page is what the block says (s:SearchPageHex()). Empty for a page
+  " nobody has touched, which is every block of most searches.
+  let page = s:SearchLivePage()
   if !empty(s:find.filter)
     let blob = s:FileBlob(a:file, a:off, a:len)
+    if !empty(page)
+      let blob = s:OverlayBlobFind(blob, a:off, a:len, page)
+    endif
     let at = a:forward
           \ ? hexpair#FindForward(blob, s:find.filter[0], s:find.filter[1])
           \ : hexpair#FindBackward(blob, s:find.filter[0], s:find.filter[1],
@@ -5692,8 +5699,12 @@ function! s:FindInBlock(file, off, len, limit, forward) abort
     " file and a write on the path that is not rare.
     unlet blob
   endif
-  let idx = HexPairPagedFindInHex(s:FileHex(a:file, a:off, a:len),
-        \ s:find.hex, a:forward ? 0 : a:limit * 2, a:forward)
+  let hex = s:FileHex(a:file, a:off, a:len)
+  if !empty(page)
+    let hex = s:OverlayHexFind(hex, a:off, a:len, page)
+  endif
+  let idx = HexPairPagedFindInHex(hex, s:find.hex,
+        \ a:forward ? 0 : a:limit * 2, a:forward)
   return idx < 0 ? -1 : idx / 2
 endfunction
 
@@ -5757,10 +5768,132 @@ endfunction
 " mark the forty matches that are on screen. What can be marked is what is
 " on screen, and there is a window's worth of it.
 "
-" The bytes are the page's as it was READ, which is what keeps the marking
-" about the FILE: an edit of yours shows up as a changed byte
-" (HexPairModified), not as a match appearing or vanishing under the
-" cursor.
+" The bytes are the page's AS THE BUFFER HOLDS THEM (s:SearchPageHex()),
+" so what is marked is what is on the screen - and what |:HexPairFindNext|
+" jumped to is marked where it landed.
+" The bytes of the page in view, as the SEARCH sees them.
+"
+" The buffer's, when anything has been typed over the dump and they are
+" still readable as bytes; the page as it was read otherwise. Searching
+" the file and ignoring the buffer made |:HexPairFind| disagree with the
+" screen in both directions at once: bytes just written INTO the page were
+" "not found in this file", and bytes just written OVER were still found -
+" at an offset the cursor then jumped to, where they were no longer to be
+" seen. |:HexPairReplace| has always decided on the buffer for that second
+" reason, and answered such a jump with "the cursor is not on a match".
+"
+" CLAMPED to the length the page was read with, which is what keeps every
+" offset reported a FILE offset. An insert grows the page past its own end
+" on disk, and those bytes have no offset yet to report or to jump to;
+" they are searched once |:w| has given them one. So a length-changing
+" edit leaves that many bytes at the page's tail out of the search until
+" it is written - the same boundary |:HexPairModifiedShow| names when it
+" says where the page as read ends.
+"
+" Only ever ONE page is in this state: turning a page needs an unmodified
+" buffer or a bang that discards (see s:ModifiedRuns()), so everywhere
+" else the file is still the whole truth.
+function! s:SearchPageHex() abort
+  let hex = get(b:, 'hexpair_page_hex', '')
+  if !&modified || !get(b:, 'hexpair_page_active', 0)
+    return hex
+  endif
+  " '' also means "cannot be read as bytes" - a dump caught mid-edit. The
+  " file's own bytes are then the best answer there is, and the same one
+  " this gave before there was a buffer in it.
+  let live = s:LiveHex()
+  return live ==# '' ? hex : strpart(live, 0, strlen(hex))
+endfunction
+
+" That page as the file-wide scan needs it: {'base', 'hex', 'blob'}, or {}
+" when the file's own bytes need nothing laid over them. Kept against
+" |b:changedtick|, because a scan is thousands of blocks and this is the
+" same page for every one of them.
+function! s:SearchLivePage() abort
+  if !&modified || !get(b:, 'hexpair_page_active', 0)
+    return {}
+  endif
+  if get(b:, 'hexpair_livepage_tick', -1) == b:changedtick
+    return b:hexpair_livepage
+  endif
+  let b:hexpair_livepage_tick = b:changedtick
+  let b:hexpair_livepage = {}
+  let hex = s:SearchPageHex()
+  if hex ==# '' || hex ==# get(b:, 'hexpair_page_hex', '')
+    return b:hexpair_livepage
+  endif
+  " NO 'blob' KEY, and no 0z anywhere a Vim 8.0 can reach: a Blob literal
+  " is 8.1.0735, and this line runs on every Vim the moment a search or a
+  " comparison meets a modified page. Its absence is also what says the
+  " Blob has not been built yet.
+  let b:hexpair_livepage = {'base': b:hexpair_page_base, 'hex': hex}
+  return b:hexpair_livepage
+endfunction
+
+" The same page as a Blob, for the readers that work in bytes.
+"
+" On first use rather than with the page: a scan that finds its answer
+" before it ever reaches the page needs no Blob at all, and this is 0.14 s
+" on a 128 KiB page. The dict is the cached one, so filling it here fills
+" it for the rest of the scan.
+"
+" list2blob() is 8.2.4763 and a reader in bytes needs readblob() with an
+" offset, which is 9.0.0795 - so it is there wherever this is reached.
+function! s:LivePageBlob(page) abort
+  if !has_key(a:page, 'blob')
+    let a:page.blob = list2blob(
+          \ map(split(a:page.hex, '..\zs'), 'str2nr(v:val, 16)'))
+  endif
+  return a:page.blob
+endfunction
+
+" Where a block and that page overlap, in file offsets, or [0, 0] for no
+" overlap. Global so the suite can put the seams to it directly: a block
+" ending inside the page, one starting inside it, one swallowing it whole
+" and one missing it are four pieces of arithmetic worth asking about
+" without a megabyte of file to reach them with.
+function! HexPairPagedOverlayRange(off, len, base, pagebytes) abort
+  let lo = a:off > a:base ? a:off : a:base
+  let end = a:base + a:pagebytes
+  let hi = a:off + a:len < end ? a:off + a:len : end
+  return lo >= hi ? [0, 0] : [lo, hi]
+endfunction
+
+function! s:OverlayRange(off, len, page) abort
+  return HexPairPagedOverlayRange(a:off, a:len, a:page.base,
+        \ strlen(a:page.hex) / 2)
+endfunction
+
+" The block a:off..a:off + a:len as it is ON DISK, with that page put back
+" over the part of it the page covers. The overlay is exactly as long as
+" what it replaces, so an index into the result is still an index into the
+" block: the scan's seams, overlaps and offsets are untouched.
+"
+" Two of these, because the readers want the block in their own form - a
+" Blob joins with + and a string with ., and one function taking either
+" would be a switch over that and nothing else.
+function! s:OverlayBlobFind(blob, off, len, page) abort
+  let [lo, hi] = s:OverlayRange(a:off, a:len, a:page)
+  if lo >= hi
+    return a:blob
+  endif
+  let out = lo > a:off ? a:blob[0 : (lo - a:off) - 1] : 0z
+  let out += s:LivePageBlob(a:page)[(lo - a:page.base) : (hi - a:page.base) - 1]
+  " A Blob slice starting past the end is an error rather than an empty
+  " Blob, so the tail is asked for only where a short read left one.
+  return hi - a:off < len(a:blob) ? out + a:blob[(hi - a:off) :] : out
+endfunction
+
+function! s:OverlayHexFind(hex, off, len, page) abort
+  let [lo, hi] = s:OverlayRange(a:off, a:len, a:page)
+  if lo >= hi
+    return a:hex
+  endif
+  return strpart(a:hex, 0, (lo - a:off) * 2)
+        \ . strpart(a:page.hex, (lo - a:page.base) * 2, (hi - lo) * 2)
+        \ . strpart(a:hex, (hi - a:off) * 2)
+endfunction
+
 " The page's bytes for searching, with up to a:span - 1 bytes of the pages
 " on either side. A match that straddles a page boundary belongs to both
 " pages it touches: without the margins it can be found in NEITHER, since
@@ -5773,14 +5906,15 @@ endfunction
 " which can be negative, meaning a match that began on the page before.
 " Kept against the page and the pattern's length: it costs two small reads.
 function! s:PageHexForSearch(span) abort
-  let hex = get(b:, 'hexpair_page_hex', '')
+  let hex = s:SearchPageHex()
   if hex ==# '' || a:span <= 1
     return [hex, 0]
   endif
   " The file too: a view can be pointed at another one, and page 1 of that
-  " is the same base and length as page 1 of this.
+  " is the same base and length as page 1 of this. And |b:changedtick|,
+  " since the page's own bytes are now the buffer's while it is modified.
   let key = [b:hexpair_page_file, b:hexpair_page_base, b:hexpair_page_len,
-        \ a:span]
+        \ a:span, b:changedtick]
   if get(b:, 'hexpair_searchhex_key', []) ==# key
     return b:hexpair_searchhex
   endif
@@ -5803,7 +5937,7 @@ function! HexPairPagedFindPositions(first, last) abort
   let out = []
   let n = b:hexpair_n
   let span = s:find.bytes
-  let hex = get(b:, 'hexpair_page_hex', '')
+  let hex = s:SearchPageHex()
   if span <= 0 || s:find.hex ==# '' || hex ==# ''
     return out
   endif
@@ -6784,7 +6918,11 @@ function! s:DiffShow(...) abort
   " NOT `count`: that is v:count and read-only, and a local of that name
   " aborts the function with E46. Same for errmsg, line and friends.
   let span = last - first + 1
-  let mine = strpart(get(b:, 'hexpair_page_hex', ''), at * 2, span * 2)
+  " The buffer's bytes, which is what the marking beside them compares
+  " and what the cursor is sitting on. This used to be the page as read,
+  " and then a byte the marking called different - because the buffer's
+  " digit differs from theirs - was reported here as agreeing.
+  let mine = strpart(s:LiveHex(), at * 2, span * 2)
   " Their bytes for the same offsets, which past the end of that file is
   " simply nothing - strpart() beyond the end gives '' and the text
   " function reads that as "not there" rather than as an error.
@@ -6866,11 +7004,25 @@ endfunction
 " the four questions through the dispatchers under it, so which form is
 " in play is decided ONCE and no walker has to know.
 function! s:CmpPair(other, off, len) abort
+  " MY side is the page as the buffer holds it where the block meets the
+  " page in view (s:SearchPageHex()), for the reason |:HexPairFind| reads
+  " it that way: the marking on the screen has always compared the
+  " buffer's own digits against that file, so a walk that read my file
+  " from disk would send |:HexPairDiffNext| to bytes the screen shows as
+  " agreeing, and past the ones it shows as differing.
+  "
+  " THEIR side stays the file on disk. That asymmetry is the question the
+  " command asks - how what I have here differs from that file - and it is
+  " the one the marking has always answered, including in a bound pair of
+  " views where the other window has unwritten edits of its own.
+  let page = s:SearchLivePage()
   if HexPairPagedBlobRangeSupported()
-    return [s:FileBlob(b:hexpair_page_file, a:off, a:len),
+    let mine = s:FileBlob(b:hexpair_page_file, a:off, a:len)
+    return [empty(page) ? mine : s:OverlayBlobFind(mine, a:off, a:len, page),
           \ s:FileBlob(a:other, a:off, a:len)]
   endif
-  return [s:FileHex(b:hexpair_page_file, a:off, a:len),
+  let mine = s:FileHex(b:hexpair_page_file, a:off, a:len)
+  return [empty(page) ? mine : s:OverlayHexFind(mine, a:off, a:len, page),
         \ s:FileHex(a:other, a:off, a:len)]
 endfunction
 
@@ -8510,11 +8662,12 @@ endfunction
 
 
 " The matches of the current pattern, and the marks, over the visible
-" lines. Both are about the FILE - the page as it was read - so neither
-" looks at the buffer at all; see HexPairPagedFindPositions() for why the
-" search is a slice of the page and not the whole of it.
+" lines. The marks are about the FILE; the matches are about the page as
+" the buffer holds it (s:SearchPageHex()), the same bytes |:HexPairFind|
+" scans. See HexPairPagedFindPositions() for why the search is a slice of
+" the page and not the whole of it.
 function! s:TextFindPositions(first, last) abort
-  let hex = get(b:, 'hexpair_page_hex', '')
+  let hex = s:SearchPageHex()
   let span = s:find.bytes
   if span <= 0 || s:find.hex ==# '' || hex ==# ''
     return []
