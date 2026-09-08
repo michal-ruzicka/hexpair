@@ -6501,19 +6501,30 @@ check "every command the plugin defines is named in the README" \
     "36 commands, all in the README" "$(cat "$WORK/tcmds.out")"
 
 # --- Every option is listed everywhere an option is listed ------------------
-# Three places promise to be complete and are kept by hand: the option list
+# Four places promise to be complete and are kept by hand: the option list
 # in plugin/hexpair.vim's own header, the tagged entries in doc/hexpair.txt,
-# and the block in README.md that says "Every option, with its default".
-# g:hexpair_verify_writes was in none of the three - it is read with
+# the block in README.md that says "Every option, with its default", and
+# the Options block of hexpair.vimrc, which is the one a user actually
+# edits - it is meant to be copied into a vimrc, so an option missing from
+# it is an option nobody finds by reading the file they were handed.
+# g:hexpair_verify_writes was in none of the first three - it is read with
 # get(g:, ...) rather than given a default, so it slipped past the eye that
-# checks the others - while being described in prose in all of them. The
-# rule is mechanical: an option the PLUGIN reads is an option a user can
-# set, however it is read.
+# checks the others - while being described in prose in all of them. And
+# hexpair.vimrc, which was not checked at all until this line was written,
+# was missing four: that one, g:hexpair_scan_block, g:hexpair_show_inspect
+# and g:hexpair_insert_encoding, the last of which it MENTIONED in prose
+# without ever giving the line to uncomment. The rule is mechanical: an
+# option the PLUGIN reads is an option a user can set, however it is read
+# and wherever it is described.
+#
+# The vimrc writes the NON-default value and the README the default, which
+# is why this looks at the name and not at what follows it.
 "$PY" - "$ROOT" > "$WORK/topts.out" <<'OPTS'
 import re, sys, os
 root = sys.argv[1]
 read = lambda p: open(os.path.join(root, p), encoding='utf-8').read()
 plug, doc, rdme = read('plugin/hexpair.vim'), read('doc/hexpair.txt'), read('README.md')
+vrc = read('hexpair.vimrc')
 # What the plugin actually reads, both ways it reads one.
 opts = set(re.findall(r"if !exists\('(g:hexpair_[a-z_]+)'\)", plug))
 opts |= {'g:' + o for o in re.findall(r"get\(g:, '(hexpair_[a-z_]+)'", plug)}
@@ -6521,6 +6532,7 @@ places = {
     'the plugin header': set(re.findall(r'^"   (g:hexpair_[a-z_]+)', plug, re.M)),
     'doc/hexpair.txt': set(re.findall(r'\*(g:hexpair_[a-z_]+)\*', doc)),
     'the README block': set(re.findall(r'^" let (g:hexpair_[a-z_]+)', rdme, re.M)),
+    'hexpair.vimrc': set(re.findall(r'^"let (g:hexpair_[a-z_]+)', vrc, re.M)),
 }
 bad = []
 for where, listed in sorted(places.items()):
@@ -6528,10 +6540,10 @@ for where, listed in sorted(places.items()):
         bad.append('%s missing from %s' % (missing, where))
     for extra in sorted(listed - opts):
         bad.append('%s listed in %s but the plugin never reads it' % (extra, where))
-print('%d options; %s' % (len(opts), '; '.join(bad) if bad else 'all listed in all three'))
+print('%d options; %s' % (len(opts), '; '.join(bad) if bad else 'all listed in all four'))
 OPTS
-check "every option the plugin reads is listed in all three places" \
-    "15 options; all listed in all three" "$(cat "$WORK/topts.out")"
+check "every option the plugin reads is listed in all four places" \
+    "15 options; all listed in all four" "$(cat "$WORK/topts.out")"
 
 # --- The diff runs are dropped when what they compare against moves ---------
 # In the text view s:DiffRuns() caches its answer against b:changedtick,
