@@ -63,6 +63,11 @@ code, releases and issue tracker.
 
 **Releases:** <https://github.com/michal-ruzicka/hexpair/releases>
 
+**On vim.org:** <https://www.vim.org/scripts/script.php?script_id=6194> — the
+same plugin, packaged without the two files that are for working on it
+rather than with it. Every release above carries that smaller package too,
+as `hexpair.vX.Y.Z.minimal.tar.bz2`, beside the complete one.
+
 **Support:** If you find this plugin useful, consider supporting its development.
 
 - <https://github.com/sponsors/michal-ruzicka> — GitHub Sponsors (GitHub account needed).

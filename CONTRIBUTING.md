@@ -389,12 +389,24 @@ developer's machine.
    git tag -s vX.Y.Z -m "Release vX.Y.Z"
    git push origin vX.Y.Z
    ```
-4. Run `./pack-release` locally to produce `dist/hexpair.vX.Y.Z.tar`.
+4. Run `./pack-release` locally. It produces two files, and **both are
+   release artifacts**: `dist/hexpair.vX.Y.Z.tar`, the complete and
+   canonical one, and `dist/hexpair.vX.Y.Z.minimal.tar.bz2`, which leaves
+   out `CLAUDE.md` and this file and is the one vim.org will accept (see
+   *Publishing*). CI compares both across Linux and Windows, so the
+   minimal package's reproducibility is checked and not merely hoped for;
+   `pack-release` also prints the hash of its uncompressed tar, which is
+   what stays the same if a compressor ever does not.
 5. GPG-sign the tarball:
    ```
    gpg --detach-sign --armor dist/hexpair.vX.Y.Z.tar
    ```
-   This creates `dist/hexpair.vX.Y.Z.tar.asc`.
+   This creates `dist/hexpair.vX.Y.Z.tar.asc`. Sign the vim.org package
+   too if it is to be uploaded, since vim.org hosts its own copy and
+   nothing else vouches for it:
+   ```
+   gpg --detach-sign --armor dist/hexpair.vX.Y.Z.minimal.tar.bz2
+   ```
 6. On the GitHub repository page, go to **Releases → Draft a new release**,
    select the `vX.Y.Z` tag, paste the CHANGELOG entry as the description,
    and attach both files (`.tar` and `.tar.asc`).
@@ -410,10 +422,31 @@ reads — so this section is the record of what has to be typed where.
 
 ### vim.org
 
+hexpair is script #6194:
+<https://www.vim.org/scripts/script.php?script_id=6194>
+
 The script registry at [vim.org/scripts](https://www.vim.org/scripts/) is
 still live and still browsed, and it is one of the sources
 [VimAwesome](https://vimawesome.com/) indexes. Registration is a web form
 under a vim.org account; there is nothing to add to the repository for it.
+
+**Upload the minimal package**, not the canonical tarball:
+`dist/hexpair.vX.Y.Z.minimal.tar.bz2`. vim.org refuses a POST body
+somewhere between 224 and 250 KiB — the limit is documented nowhere and
+arrives as a bare `413` from the web server, or, just under it, as an
+internal error — and the plain tarball is 900 KiB. That package is
+compressed and leaves out `CLAUDE.md` and this file; `pack-release.py`
+carries the measurements and the ladder of further omissions if a future
+one is refused again.
+
+On the compressor, since it is the sort of thing that gets changed on a
+hunch: bzip2 was chosen by measuring, and 7-Zip's `-mx=9` "ultra" is not
+the best answer. It is LZMA2, and it LOSES here — 189 112 bytes against
+bzip2's 185 692 on the same content. What does win is 7-Zip's **PPMd**,
+by 14% (160 325 bytes), and it is not used: a `.7z` needs 7-Zip or p7zip
+to open, which a stock Linux, a stock macOS and Windows before 11 do not
+have, and the package already uploads. `tar` and `bzip2` are wherever Vim
+is.
 
 The one-time fields, which should stay SHORT — everything that changes
 lives in the README and in `:help hexpair`, and a second full copy of

@@ -6040,6 +6040,21 @@ packed=$(sed -n '/^FILES/,/^]/p' "$ROOT/pack-release.py" \
 check "the packaging list is what the repository gives a user" \
     "$shipped" "$packed"
 
+# The minimal package is the same list less a few entries, and the entries
+# are named as strings - so a rename or a typo would quietly omit nothing
+# and the package would go back over the size vim.org refuses.
+omits=$(sed -n '/^MINIMAL_OMITS/,/^]/p' "$ROOT/pack-release.py" \
+    | grep -o '"hexpair/[^"]*"' | tr -d '"' | sort | tr '\n' ' ')
+notpacked=
+for o in $omits; do
+    case " $(sed -n '/^FILES/,/^]/p' "$ROOT/pack-release.py" | grep -o '"hexpair/[^"]*"' | tr -d '"' | tr '\n' ' ') " in
+        *" $o "*) ;;
+        *) notpacked="$notpacked $o" ;;
+    esac
+done
+check "everything the minimal package omits is something it would have had" \
+    "" "$notpacked"
+
 # --- Every reader of a byte RANGE asks whether it may seek there ------------
 # The 2 GiB rule cannot be exercised off Windows, so what can be checked
 # everywhere is that each reader still ASKS. Taking the question out of one

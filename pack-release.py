@@ -27,6 +27,7 @@ Normalized sources of non-determinism (see CONTRIBUTING.md,
 Python 3.8+, standard library only.
 """
 
+import bz2
 import datetime
 import hashlib
 import io
@@ -62,6 +63,31 @@ FILES = [
 ]
 
 
+# What the MINIMAL package leaves out: the two files written for somebody
+# working ON hexpair rather than for someone using it. Both are a click
+# away on GitHub. CHANGELOG.md stays - what changed in a release is a
+# user's business.
+#
+# It exists because vim.org refuses a POST body somewhere between 224 and
+# 250 KiB, measured: the limit is documented nowhere and arrives as a bare
+# 413 from the web server, or as an internal error just under it. The
+# uncompressed release tarball is 900 KiB. Should a future upload be
+# refused anyway, this is the ladder, all bzip2 -9 and measured on
+# v2.4.0-devel:
+#
+#     nothing omitted                     223 707
+#     CLAUDE.md                           185 692
+#     + CONTRIBUTING.md                   177 265   <- what this list does
+#     + CHANGELOG.md as well              164 027
+#
+# Adding a name here is the whole change; the suite holds the list to
+# being a subset of FILES, so a typo cannot silently omit nothing.
+MINIMAL_OMITS = [
+    "hexpair/CLAUDE.md",
+    "hexpair/CONTRIBUTING.md",
+]
+
+
 def parse_header(plugin: Path):
     text = plugin.read_text(encoding="utf-8")
     version = re.search(r'^" Version:\s+(\S+)', text, re.MULTILINE)
@@ -71,10 +97,10 @@ def parse_header(plugin: Path):
     return version.group(1), date.group(1)
 
 
-def build_tar(root: Path, mtime: int) -> bytes:
+def build_tar(root: Path, mtime: int, files=None) -> bytes:
     buf = io.BytesIO()
     with tarfile.open(fileobj=buf, mode="w", format=tarfile.USTAR_FORMAT) as tar:
-        for name in FILES:
+        for name in files if files is not None else FILES:
             data = (root / name[len("hexpair/"):]).read_bytes()
             info = tarfile.TarInfo(name)
             info.size = len(data)
@@ -102,6 +128,59 @@ def main():
     out.write_bytes(tarball)
 
     print("%s  %s" % (hashlib.sha256(tarball).hexdigest(), out))
+
+    # The minimal package: a release artifact in its own right, and the
+    # one vim.org will take. Compressed, because that site will not take
+    # the plain tarball at any file list this project would ship.
+    #
+    # bzip2, and measured rather than assumed. On this content, which is
+    # one very large and very repetitive text file plus some smaller ones:
+    #
+    #     bzip2 -9                 185 692     <- this
+    #     xz -9e                   189 112     (= 7-Zip's "ultra", LZMA2)
+    #     gzip -9                  249 401
+    #     7-Zip PPMd, order 32     160 325
+    #
+    # PPMd wins by 14%, and is not used. A .7z needs 7-Zip or p7zip to
+    # open - not on a stock Linux, not on macOS, not on Windows before 11
+    # - and 185 KiB already uploads, so the only thing that saving could
+    # buy is a package some readers cannot unpack. tar and bzip2 are
+    # everywhere Vim is. Note also that 7-Zip's "ultra" preset is LZMA2,
+    # which LOSES here: the win is PPMd specifically, and only if asked
+    # for by name.
+    #
+    # It does NOT end in ".tar", and that is load-bearing: CI matches the
+    # canonical tarball with `dist/*.tar`, which wants exactly one file.
+    #
+    # Its bytes are compared across platforms too, and that is a claim
+    # worth stating carefully.
+    #
+    # GZIP WOULD NOT DO, and not only for the reason CONTRIBUTING.md gives
+    # about deflate streams differing between compressor builds (zlib-ng
+    # is a real and widely shipped drop-in). The gzip HEADER carries the
+    # source file's mtime and its name: compress the same bytes from a
+    # file checked out at a different time and the output differs, which
+    # is exactly what a second CI runner does. `gzip -n` drops both, and
+    # then there is still zlib-ng.
+    #
+    # A bzip2 stream has nowhere to put either. Its header is "BZh" plus
+    # one digit of block size, and then blocks - no time, no name, no
+    # flags. And there is no second implementation in the library path:
+    # libbzip2 1.0.x has been algorithmically still for a very long time,
+    # and the bytes this module produces here are the same bytes the
+    # standalone bzip2(1) binary produces from the same input.
+    #
+    # So this is EXPECTED to be reproducible - and expectation is not
+    # proof, which is why CI compares it across Linux and Windows rather
+    # than trusting it. If a platform ever diverges, that check says so.
+    reduced = [f for f in FILES if f not in MINIMAL_OMITS]
+    inner = build_tar(root, mtime, reduced)
+    small = root / "dist" / ("hexpair.v%s.minimal.tar.bz2" % version)
+    small.write_bytes(bz2.compress(inner, 9))
+
+    print("%s  %s" % (hashlib.sha256(small.read_bytes()).hexdigest(), small))
+    print("%s  (its uncompressed tar, %d bytes)"
+          % (hashlib.sha256(inner).hexdigest(), len(inner)))
     print("pack-release: packaged version %s (dated %s)" % (version, date))
 
 
