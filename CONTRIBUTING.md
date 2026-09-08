@@ -425,8 +425,9 @@ developer's machine.
 4. Run `./pack-release` locally. It produces two files, and **both are
    release artifacts**: `dist/hexpair.vX.Y.Z.tar`, the complete and
    canonical one, and `dist/hexpair.vX.Y.Z.minimal.tar.bz2`, which leaves
-   out `CLAUDE.md` and this file and is the one vim.org will accept (see
-   *Publishing*). CI compares both across Linux and Windows, so the
+   out `CLAUDE.md`, this file and `CHANGELOG.md`, and is the one vim.org
+   will accept (see *Publishing*). CI compares both across Linux and
+   Windows, so the
    minimal package's reproducibility is checked and not merely hoped for;
    `pack-release` also prints the hash of its uncompressed tar, which is
    what stays the same if a compressor ever does not.
@@ -468,9 +469,11 @@ under a vim.org account; there is nothing to add to the repository for it.
 somewhere between 224 and 250 KiB — the limit is documented nowhere and
 arrives as a bare `413` from the web server, or, just under it, as an
 internal error — and the plain tarball is 900 KiB. That package is
-compressed and leaves out `CLAUDE.md` and this file; `pack-release.py`
-carries the measurements and the ladder of further omissions if a future
-one is refused again.
+compressed and leaves out `CLAUDE.md`, this file and `CHANGELOG.md` — the
+last of those because vim.org carries the release notes for each version
+in a field of its own, so shipping the whole changelog inside the package
+is 62 KiB spent twice. `pack-release.py` carries the measurements and the
+ladder of further omissions if a future one is refused again.
 
 On the compressor, since it is the sort of thing that gets changed on a
 hunch: bzip2 was chosen by measuring, and 7-Zip's `-mx=9` "ultra" is not

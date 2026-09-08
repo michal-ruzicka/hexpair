@@ -63,10 +63,11 @@ FILES = [
 ]
 
 
-# What the MINIMAL package leaves out: the two files written for somebody
-# working ON hexpair rather than for someone using it. Both are a click
-# away on GitHub. CHANGELOG.md stays - what changed in a release is a
-# user's business.
+# What the MINIMAL package leaves out: the files that are not the plugin
+# and are a click away on GitHub anyway. Two of them are written for
+# somebody working ON hexpair rather than with it; the third is the
+# changelog, which is not redundant in general but IS on vim.org, where
+# every version carries its own release notes in a field of its own.
 #
 # It exists because vim.org refuses a POST body somewhere between 224 and
 # 250 KiB, measured: the limit is documented nowhere and arrives as a bare
@@ -77,12 +78,13 @@ FILES = [
 #
 #     nothing omitted                     223 707
 #     CLAUDE.md                           185 692
-#     + CONTRIBUTING.md                   177 265   <- what this list does
-#     + CHANGELOG.md as well              164 027
+#     + CONTRIBUTING.md                   177 265
+#     + CHANGELOG.md                      164 027   <- what this list does
 #
 # Adding a name here is the whole change; the suite holds the list to
 # being a subset of FILES, so a typo cannot silently omit nothing.
 MINIMAL_OMITS = [
+    "hexpair/CHANGELOG.md",
     "hexpair/CLAUDE.md",
     "hexpair/CONTRIBUTING.md",
 ]

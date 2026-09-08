@@ -336,16 +336,18 @@ the same working plugin:
 | | |
 |---|---|
 | `hexpair.vX.Y.Z.tar` | The complete release. Take this one. |
-| `hexpair.vX.Y.Z.minimal.tar.bz2` | The same plugin with the two files that are about *working on* hexpair left out — `CLAUDE.md` and `CONTRIBUTING.md` — and compressed. |
+| `hexpair.vX.Y.Z.minimal.tar.bz2` | The same plugin, compressed, without `CLAUDE.md`, `CONTRIBUTING.md` and `CHANGELOG.md`. |
 
 The smaller one exists because [vim.org](https://www.vim.org/scripts/script.php?script_id=6194)
 refuses an upload somewhere between 224 and 250 KiB, and the complete
-tarball is 900 KiB. Nothing a *user* needs is missing from it: the plugin,
-the help, the mappings, the shell and Windows commands, the registry files
-for the Explorer menu, the icons, the licence, the README and the changelog
-are all there. What is gone is the project's own notes and the contributor
-guide, both a click away here. Both files are signed
-([Verifying Releases](#verifying-releases)), and unpack the same way:
+tarball is 900 KiB. **Nothing the plugin needs to run is missing from it**:
+the plugin itself, the help, the mappings, the shell and Windows commands,
+the registry files for the Explorer menu, the icons, the licence and the
+README are all there. What is gone is reading matter that is a click away
+here — the project's own notes, the contributor guide, and the changelog,
+which on vim.org is in that site's own per-version release notes anyway.
+Both archives are signed ([Verifying Releases](#verifying-releases)), and
+unpack the same way:
 
 ```sh
 tar xf hexpair.vX.Y.Z.minimal.tar.bz2 -C ~/.vim/pack/plugins/start/
