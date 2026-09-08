@@ -12,7 +12,7 @@ and this project adheres to
 ### Added
 - **A second, smaller release archive: `hexpair.vX.Y.Z.minimal.tar.bz2`.**
   The same plugin, compressed, without `CLAUDE.md`, `CONTRIBUTING.md` and
-  this file: 161 KiB against the complete tarball's 900 KiB. It exists
+  this file: 164 KiB against the complete tarball's 900 KiB. It exists
   because [vim.org](https://www.vim.org/scripts/script.php?script_id=6194),
   where hexpair is now listed as script #6194, refuses an upload somewhere
   between 224 and 250 KiB. Nothing the plugin needs to run is missing from
@@ -204,6 +204,22 @@ and this project adheres to
   mapped yourself is still left alone.
 
 ### Fixed
+- **`:HexPairFind` and `:HexPairDiffNext` searched the file and ignored what
+  you had typed.** Both walk the file a block at a time, and both read those
+  blocks from disk — so on the one page that can hold unwritten edits their
+  answers were wrong in both directions at once. Bytes typed into the page
+  were *"not found in this file"* while they were on the screen; bytes typed
+  **over** were still found, and the cursor jumped to an offset where they
+  were no longer to be seen. The page in view is now laid over each block as
+  it is read, so what is found is what is shown, and `:HexPairDiffShow`
+  reports the buffer's byte on this side — the one the marking beside it
+  compares and the one the cursor is on. The file being compared *against*
+  is still read as it is on disk: how what is here differs from that file is
+  the question these ask. An insert grows the page past its own end on disk
+  and those bytes have no offset to report or to jump to, so that many bytes
+  at the page's tail are searched once `:w` has given them one — the
+  boundary `:HexPairModifiedShow` already names. `:HexPairReplace` was never
+  affected: it has always decided on the buffer's bytes.
 - **The version gate was documented as two operations where it is three.**
   `README.md`'s *Pages* section and `:help hexpair-paged` both said that
   only shortening a file and `:w {file}` need Vim 9.0.0795, and then listed

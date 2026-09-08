@@ -6403,6 +6403,29 @@ done
 check "everything the minimal package omits is something it would have had" \
     "" "$notpacked"
 
+# And that it still FITS. The reason the smaller package exists is a size
+# limit on vim.org - an upload somewhere between 224 and 250 KiB gets a
+# 413 - so what is worth pinning is the promise, not the byte count: a
+# figure copied into the prose drifts every time a document grows, and has
+# twice. 200 000 B leaves room under the lower end of that range.
+#
+# Built in memory through the packaging script's own functions, so nothing
+# is written and the answer is the one ./pack-release would give.
+minimal=$(cd "$ROOT" && python3 -c '
+import bz2, calendar, time, importlib.util, pathlib
+spec = importlib.util.spec_from_file_location("pr", "pack-release.py")
+pr = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(pr)
+root = pathlib.Path(".")
+version, date = pr.parse_header(root / "plugin" / "hexpair.vim")
+mtime = calendar.timegm(time.strptime(date, "%Y-%m-%d"))
+files = [f for f in pr.FILES if f not in pr.MINIMAL_OMITS]
+size = len(bz2.compress(pr.build_tar(root, mtime, files), 9))
+print("fits" if size < 200000 else "TOO BIG: %d B" % size)
+')
+check "and the minimal package fits under what vim.org will take" \
+    "fits" "$minimal"
+
 # --- Every reader of a byte RANGE asks whether it may seek there ------------
 # The 2 GiB rule cannot be exercised off Windows, so what can be checked
 # everywhere is that each reader still ASKS. Taking the question out of one

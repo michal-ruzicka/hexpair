@@ -72,14 +72,18 @@ FILES = [
 # It exists because vim.org refuses a POST body somewhere between 224 and
 # 250 KiB, measured: the limit is documented nowhere and arrives as a bare
 # 413 from the web server, or as an internal error just under it. The
-# uncompressed release tarball is 900 KiB. Should a future upload be
-# refused anyway, this is the ladder, all bzip2 -9 and measured on
-# v2.4.0-devel:
+# uncompressed release tarball is 900 KiB, and compressing it whole no
+# longer gets under the limit either. Should a future upload be refused
+# anyway, this is the ladder, all bzip2 -9:
 #
-#     nothing omitted                     223 373
-#     CLAUDE.md                           185 421
-#     + CONTRIBUTING.md                   174 949
-#     + CHANGELOG.md                      161 339   <- what this list does
+#     nothing omitted                     225 869   (over the limit now)
+#     CLAUDE.md                           187 406
+#     + CONTRIBUTING.md                   176 942
+#     + CHANGELOG.md                      163 593   <- what this list does
+#
+# A SNAPSHOT: every one of those moves whenever a document grows, and they
+# have twice. What holds is the suite, which builds this package and fails
+# if it is not under 200 000 B - the promise rather than the measurement.
 #
 # Adding a name here is the whole change; the suite holds the list to
 # being a subset of FILES, so a typo cannot silently omit nothing.
@@ -138,14 +142,14 @@ def main():
     # bzip2, and measured rather than assumed. On this content, which is
     # one very large and very repetitive text file plus some smaller ones:
     #
-    #     bzip2 -9                 185 421     <- this
-    #     xz -9e                   188 816     (= 7-Zip's "ultra", LZMA2)
-    #     gzip -9                  246 475
-    #     7-Zip PPMd, order 32     160 048
+    #     bzip2 -9                 163 593     <- this
+    #     xz -9e                   166 612     (= 7-Zip's "ultra", LZMA2)
+    #     gzip -9                  213 804
+    #     7-Zip PPMd, order 32     14% under bzip2 when measured
     #
-    # PPMd wins by 14%, and is not used. A .7z needs 7-Zip or p7zip to
-    # open - not on a stock Linux, not on macOS, not on Windows before 11
-    # - and 185 KiB already uploads, so the only thing that saving could
+    # PPMd wins by that 14%, and is not used. A .7z needs 7-Zip or p7zip
+    # to open - not on a stock Linux, not on macOS, not on Windows before
+    # 11 - and this already uploads, so the only thing that saving could
     # buy is a package some readers cannot unpack. tar and bzip2 are
     # everywhere Vim is. Note also that 7-Zip's "ultra" preset is LZMA2,
     # which LOSES here: the win is PPMd specifically, and only if asked

@@ -535,9 +535,10 @@ ladder of further omissions if a future one is refused again.
 
 On the compressor, since it is the sort of thing that gets changed on a
 hunch: bzip2 was chosen by measuring, and 7-Zip's `-mx=9` "ultra" is not
-the best answer. It is LZMA2, and it LOSES here — 189 112 bytes against
-bzip2's 185 421 on the same content. What does win is 7-Zip's **PPMd**,
-by 14% (160 325 bytes), and it is not used: a `.7z` needs 7-Zip or p7zip
+the best answer. It is LZMA2, and it LOSES here — `xz -9e`, the same
+algorithm at the same setting, gives 166 620 bytes against bzip2's
+163 593 on the same content. What does win is 7-Zip's **PPMd**, by about
+14%, and it is not used: a `.7z` needs 7-Zip or p7zip
 to open, which a stock Linux, a stock macOS and Windows before 11 do not
 have, and the package already uploads. `tar` and `bzip2` are wherever Vim
 is.
