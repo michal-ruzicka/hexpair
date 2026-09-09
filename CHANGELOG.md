@@ -238,6 +238,27 @@ and this project adheres to
   confidently, from the wrong place. It now asks the same question the
   markings and the jumps ask, which is right in either view.
 
+- **`hexpair.vimrc` was missing three options and a highlight group.** The
+  file a user is told to copy into their vimrc lists every option
+  commented out, so that setting one is a matter of uncommenting a line —
+  and `g:hexpair_insert_encoding`, `g:hexpair_show_inspect` and
+  `g:hexpair_verify_writes` had no line, nor did the `HexPairInspect`
+  highlight group, which was the only one of eight absent from the Colours
+  block. `g:hexpair_insert_encoding` was the worst of them: the same file
+  *mentions* it in prose a hundred lines above, so a reader learned the
+  option exists and then could not find it. All four are there now, and a
+  check holds the file to listing every option, every `<Plug>` target and
+  every highlight group the plugin defines.
+- **The picture at the top of `README.md` never appeared for anyone
+  reading it outside GitHub.** It is a relative link to
+  `demo/hexpair-demo.gif`, and that file is 5.7 MB and has never been in
+  the release tarball. Neither have `CHANGELOG.md`, `CLAUDE.md` and
+  `CONTRIBUTING.md` been in the new minimal package, which the README also
+  linked to. All four are absolute URLs now — which is what the README's
+  own sentence about the omissions already said they were, "a click away
+  here" — and a check holds every shipped document to linking relatively
+  only to files that ship beside it.
+
 ## [v2.3.0] – 2026-09-02
 
 ### Added
