@@ -20,7 +20,7 @@ walks, searches by text and by bytes across the whole file, a byte typed over
 and the ASCII column catching up, the two bytes of a multi-byte character read
 back by the data inspector, a character written in by its bytes, a write that
 says what a longer file costs, and the two files side by side with their
-differences marked](demo/hexpair-demo.gif)
+differences marked](https://raw.githubusercontent.com/michal-ruzicka/hexpair/main/demo/hexpair-demo.gif)
 
 **It is not the best hex editor in the world**, and does not try to be. **But it
 is always a _single command_ away wherever you already
@@ -1378,10 +1378,10 @@ measurements for both, and why 8 MiB is where the trade stops paying.
 ## Contributing
 
 Bug reports and patches are welcome — see
-[CONTRIBUTING.md](CONTRIBUTING.md) for the repository layout, the test
+[CONTRIBUTING.md](https://github.com/michal-ruzicka/hexpair/blob/main/CONTRIBUTING.md) for the repository layout, the test
 harness, the reproducible release packaging and the signing policy.
 Project notes for AI-assisted development live in
-[CLAUDE.md](CLAUDE.md), including the architecture of the **paged
+[CLAUDE.md](https://github.com/michal-ruzicka/hexpair/blob/main/CLAUDE.md), including the architecture of the **paged
 large-file mode**.
 
 ## License
@@ -1393,4 +1393,4 @@ plugin.
 
 Distributed under the same terms as Vim itself (the Vim License) — see
 [LICENSE.md](LICENSE.md). Release notes are in
-[CHANGELOG.md](CHANGELOG.md).
+[CHANGELOG.md](https://github.com/michal-ruzicka/hexpair/blob/main/CHANGELOG.md).
