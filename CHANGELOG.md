@@ -12,7 +12,7 @@ and this project adheres to
 ### Added
 - **A second, smaller release archive: `hexpair.vX.Y.Z.minimal.tar.bz2`.**
   The same plugin, compressed, without `CLAUDE.md`, `CONTRIBUTING.md` and
-  this file: 164 KiB against the complete tarball's 900 KiB. It exists
+  this file: about 160 KiB against the complete tarball's 900 KiB. It exists
   because [vim.org](https://www.vim.org/scripts/script.php?script_id=6194),
   where hexpair is now listed as script #6194, refuses an upload somewhere
   between 224 and 250 KiB. Nothing the plugin needs to run is missing from

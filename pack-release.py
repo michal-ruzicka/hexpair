@@ -74,16 +74,19 @@ FILES = [
 # 413 from the web server, or as an internal error just under it. The
 # uncompressed release tarball is 900 KiB, and compressing it whole no
 # longer gets under the limit either. Should a future upload be refused
-# anyway, this is the ladder, all bzip2 -9:
+# anyway, this is the ladder, all bzip2 -9 and rounded:
 #
-#     nothing omitted                     225 869   (over the limit now)
-#     CLAUDE.md                           187 406
-#     + CONTRIBUTING.md                   176 942
-#     + CHANGELOG.md                      163 593   <- what this list does
+#     nothing omitted                     ~221 KiB   (over the limit now)
+#     CLAUDE.md                           ~184 KiB
+#     + CONTRIBUTING.md                   ~173 KiB
+#     + CHANGELOG.md                      ~160 KiB   <- what this list does
 #
-# A SNAPSHOT: every one of those moves whenever a document grows, and they
-# have twice. What holds is the suite, which builds this package and fails
-# if it is not under 200 000 B - the promise rather than the measurement.
+# ROUNDED on purpose. Exact byte counts were carried here twice and were
+# wrong both times within a week: every one of them moves when any
+# document grows, and again when the version string in the header changes
+# length at release. What holds is the suite, which builds this package
+# and fails if it is not under 200 000 B - the promise rather than the
+# measurement, and the only one of the two worth keeping true.
 #
 # Adding a name here is the whole change; the suite holds the list to
 # being a subset of FILES, so a typo cannot silently omit nothing.
@@ -142,10 +145,10 @@ def main():
     # bzip2, and measured rather than assumed. On this content, which is
     # one very large and very repetitive text file plus some smaller ones:
     #
-    #     bzip2 -9                 163 593     <- this
-    #     xz -9e                   166 612     (= 7-Zip's "ultra", LZMA2)
-    #     gzip -9                  213 804
-    #     7-Zip PPMd, order 32     14% under bzip2 when measured
+    #     bzip2 -9                 ~160 KiB    <- this
+    #     xz -9e                     +2%       (= 7-Zip's "ultra", LZMA2)
+    #     gzip -9                   +31%
+    #     7-Zip PPMd, order 32       -14%
     #
     # PPMd wins by that 14%, and is not used. A .7z needs 7-Zip or p7zip
     # to open - not on a stock Linux, not on macOS, not on Windows before

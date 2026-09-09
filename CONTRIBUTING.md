@@ -535,15 +535,16 @@ internal error — and the plain tarball is 900 KiB. That package is
 compressed and leaves out `CLAUDE.md`, this file and `CHANGELOG.md` — the
 last of those because vim.org carries the release notes for each version
 in a field of its own, so shipping the whole changelog inside the package
-is 62 KiB spent twice. `pack-release.py` carries the measurements and the
-ladder of further omissions if a future one is refused again.
+is 61 KiB spent twice. `pack-release.py` carries the ladder of further
+omissions if a future one is refused again; the sizes there are rounded,
+because an exact one is wrong as soon as any document changes.
 
 On the compressor, since it is the sort of thing that gets changed on a
 hunch: bzip2 was chosen by measuring, and 7-Zip's `-mx=9` "ultra" is not
 the best answer. It is LZMA2, and it LOSES here — `xz -9e`, the same
-algorithm at the same setting, gives 166 620 bytes against bzip2's
-163 593 on the same content. What does win is 7-Zip's **PPMd**, by about
-14%, and it is not used: a `.7z` needs 7-Zip or p7zip
+algorithm at the same setting, comes out about 2% *larger* than bzip2 on
+the same content. What does win is 7-Zip's **PPMd**, by about 14%, and it
+is not used: a `.7z` needs 7-Zip or p7zip
 to open, which a stock Linux, a stock macOS and Windows before 11 do not
 have, and the package already uploads. `tar` and `bzip2` are wherever Vim
 is.
