@@ -6545,6 +6545,53 @@ OPTS
 check "every option the plugin reads is listed in all four places" \
     "15 options; all listed in all four" "$(cat "$WORK/topts.out")"
 
+# --- And the same for what else promises to be complete ---------------------
+# Options were checked and <Plug> targets and highlight groups were not, so
+# they drifted the same way and were found by hand: <Plug>(HexPairModified)
+# reached the README and hexpair.vimrc but never the help - no tag, and no
+# line in the help's own copy of the mapping set - and the HexPairInspect
+# highlight group reached the README and the help but not hexpair.vimrc,
+# which listed the other seven. Both are the newest of their kind, which is
+# how a hand-kept list fails: the entry that is added last is added to the
+# places the author happened to have open.
+#
+# Names only, and each file matched in its own dialect: the help tags a
+# highlight group <name> or <name>-highlight, the README writes commented
+# `" highlight`, the vimrc `"highlight`.
+"$PY" - "$ROOT" > "$WORK/tlists.out" <<'LISTS'
+import re, sys, os
+root = sys.argv[1]
+read = lambda p: open(os.path.join(root, p), encoding='utf-8').read()
+plug, doc = read('plugin/hexpair.vim'), read('doc/hexpair.txt')
+rdme, vrc = read('README.md'), read('hexpair.vimrc')
+
+plugs = set(re.findall(r'^[nx]noremap <silent> <Plug>\((HexPair\w+)\)', plug, re.M))
+groups = (set(re.findall(r"hlexists\('(HexPair\w+)'\)", plug))
+          | set(re.findall(r'highlight default link (HexPair\w+)', plug))
+          | set(re.findall(r'highlight default (HexPair\w+)', plug)))
+
+bad = []
+def check(what, defined, places):
+    for where, listed in places:
+        for m in sorted(defined - listed):
+            bad.append('%s missing from %s' % (m, where))
+        for e in sorted(listed - defined):
+            bad.append('%s in %s is not a %s' % (e, where, what))
+
+anyplug = lambda t: set(re.findall(r'<Plug>\((HexPair\w+)\)', t))
+check('<Plug> target', plugs,
+      [('the help', anyplug(doc)), ('the README', anyplug(rdme)),
+       ('hexpair.vimrc', anyplug(vrc))])
+check('highlight group', groups,
+      [('the help', set(re.findall(r'\*(HexPair\w+)(?:-highlight)?\*', doc))),
+       ('the README', set(re.findall(r'^" highlight (?:link )?(HexPair\w+)', rdme, re.M))),
+       ('hexpair.vimrc', set(re.findall(r'^"highlight (?:link )?(HexPair\w+)', vrc, re.M)))])
+print('%d targets, %d groups; %s'
+      % (len(plugs), len(groups), '; '.join(bad) if bad else 'all listed everywhere'))
+LISTS
+check "every <Plug> target and highlight group is listed everywhere" \
+    "35 targets, 8 groups; all listed everywhere" "$(cat "$WORK/tlists.out")"
+
 # --- The diff runs are dropped when what they compare against moves ---------
 # In the text view s:DiffRuns() caches its answer against b:changedtick,
 # which reports an EDIT and nothing else. Two things change what is being

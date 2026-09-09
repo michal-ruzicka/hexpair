@@ -555,7 +555,7 @@ The hex view shows which byte it was.
                   *<Plug>(HexPairDiffNext)* *<Plug>(HexPairDiffPrev)*
                                                      *<Plug>(HexPairDiffShow)*
          *<Plug>(HexPairModifiedNext)* *<Plug>(HexPairModifiedPrev)*
-                                                 *<Plug>(HexPairModifiedShow)*
+                        *<Plug>(HexPairModified)* *<Plug>(HexPairModifiedShow)*
                  *<Plug>(HexPairFindClear)* *<Plug>(HexPairDiffClear)*
                                                        *<Plug>(HexPairMarks)*
 The plugin defines NO key mappings by default; it only provides the
@@ -606,6 +606,8 @@ and so do the three that need a name typed - they ask for it: >
     " What was here before I edited it - a byte, or a whole selection
     nmap <Leader>d <Plug>(HexPairModifiedShow)
     xmap <Leader>d <Plug>(HexPairModifiedShow)
+    " Stop marking them, or start again
+    nmap <Leader>M <Plug>(HexPairModified)
 
     " Comparing with another file
     nmap <Leader>] <Plug>(HexPairDiffNext)

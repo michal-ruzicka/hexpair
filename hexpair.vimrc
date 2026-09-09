@@ -321,6 +321,11 @@ call s:Map('x', '<Leader>D', '<Plug>(HexPairDiffShow)')
 " The byte a mark stands on (default: bold underline and no colour at all,
 " so that it coexists with the three above instead of competing with them):
 "highlight HexPairMark ctermbg=195 ctermfg=23 guibg=#d7ffff guifg=#005f5f
+"
+" The bytes :HexPairInspect has just read, marked for as long as the cursor
+" stays on the byte they were read from (g:hexpair_show_inspect turns this
+" off altogether):
+"highlight HexPairInspect ctermbg=189 ctermfg=54 guibg=#d7d7ff guifg=#5f0087
 
 let &cpoptions = s:save_cpo
 unlet s:save_cpo
