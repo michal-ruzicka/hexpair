@@ -258,9 +258,12 @@ and this project adheres to
   and in a checkout — and `pack-release` now rewrites the ones an archive
   cannot answer into GitHub URLs as it packs, per archive: `CHANGELOG.md`
   stays a relative link in the complete tarball, which carries it, and
-  becomes a URL in the minimal one, which does not. A check unpacks both
-  archives and holds every relative link in them to resolving inside the
-  same archive.
+  becomes a URL in the minimal one, which does not. Those URLs name the
+  **release tag**, so a link out of a package reaches the files that
+  package was built beside rather than whatever `main` has become since. A
+  check unpacks both archives and holds every relative link in them to
+  resolving inside the same archive, and every absolute one to naming the
+  tag the version will carry.
 
 ## [v2.3.0] – 2026-09-02
 

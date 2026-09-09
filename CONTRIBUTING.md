@@ -267,9 +267,17 @@ Keep them **relative in the repository**. That is the right form for the
 file as GitHub renders it and as a checkout holds it, and the rewriting is
 per archive: `CHANGELOG.md` stays a relative link in the complete tarball,
 which carries it, and becomes a URL only in the minimal one. Images get
-`raw.githubusercontent.com`, everything else the `blob` viewer, and both
-point at `main` rather than at the release tag — a tag exists only after
-step 3 of the *Release Process* and never for a `-devel` build.
+`raw.githubusercontent.com`, everything else the `blob` viewer.
+
+Both point at the **release tag**, not at a branch: a package is a fixed
+set of bytes, and a link out of it should reach the files those bytes were
+built beside rather than whatever `main` has become since. The tag is
+derived from the version in the plugin header with `-devel` removed, so
+`2.4.0-devel` packs links to `v2.4.0` — a package built mid-cycle
+therefore carries links that do not resolve until the tag is pushed in
+step 3 of the *Release Process*. That is the intended trade: the packages
+that reach users are release packages, and theirs are right. Any other
+suffix is left alone, so a `2.4.0-rc1` would link to `v2.4.0-rc1`.
 
 The suite unpacks both archives and fails if any relative link in them
 does not resolve inside the same archive, so neither the omission list nor

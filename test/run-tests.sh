@@ -6477,6 +6477,39 @@ print("; ".join(bad) if bad else "every relative link resolves inside its archiv
 check "a shipped document links only to what ships beside it" \
     "every relative link resolves inside its archive" "$links"
 
+# The absolute ones name the release TAG, and the tag is derived from the
+# version in the plugin header - "-devel" being this project's marker for
+# the cycle in progress and no part of any tag, so 2.4.0-devel packs links
+# to v2.4.0. Pinned here because it is a guess about a name that does not
+# exist yet when a mid-cycle package is built: get it wrong and every
+# release ships dead links that nothing else would notice.
+tags=$(cd "$ROOT" && "$PY" -c '
+import sys
+sys.dont_write_bytecode = True
+import calendar, io, re, tarfile, time, importlib.util, pathlib
+spec = importlib.util.spec_from_file_location("pr", "pack-release.py")
+pr = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(pr)
+derived = [pr.release_tag(v) for v in
+           ("2.4.0-devel", "2.4.0", "2.4.0-rc1", "10.0.1-devel")]
+root = pathlib.Path(".")
+version, date = pr.parse_header(root / "plugin" / "hexpair.vim")
+mtime = calendar.timegm(time.strptime(date, "%Y-%m-%d"))
+files = [f for f in pr.FILES if f not in pr.MINIMAL_OMITS]
+tf = tarfile.open(fileobj=io.BytesIO(pr.build_tar(root, mtime, files)))
+text = tf.extractfile("hexpair/README.md").read().decode("utf-8")
+# The two forms the packer writes, and only those - the README has
+# other github.com links of its own (/actions, /releases).
+refs = sorted(set(
+    re.findall(r"https://github\.com/[\w-]+/hexpair/blob/([^/)]+)/", text)
+    + re.findall(r"https://raw\.githubusercontent\.com/[\w-]+/hexpair/([^/)]+)/", text)))
+print("%s packed %s" % (" ".join(derived), " ".join(refs)))
+')
+check "the links out of a package name the tag that version will carry" \
+    "v2.4.0 v2.4.0 v2.4.0-rc1 v10.0.1 packed $(sed -n 4p "$ROOT/plugin/hexpair.vim" \
+        | sed 's/.*Version:  *//; s/-devel$//; s/^/v/')" \
+    "$tags"
+
 # --- Every reader of a byte RANGE asks whether it may seek there ------------
 # The 2 GiB rule cannot be exercised off Windows, so what can be checked
 # everywhere is that each reader still ASKS. Taking the question out of one
