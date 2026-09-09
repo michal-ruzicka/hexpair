@@ -6676,6 +6676,14 @@ print("lone-percent %s" % sorted(lone))
 print("all-cmd %s" % all(c.startswith('cmd.exe /c ""') for c in commands))
 print("sides %s" % sorted(re.findall(r'"(/[a-z]+)"', " ".join(commands))))
 print("all-icons-ico %s" % all(i.endswith(".ico") for i in icons))
+# And that each one is a file that ships. A menu entry whose "Icon" names
+# a path that is not there gets no icon and no error - Explorer simply
+# draws nothing - so a renamed .ico would be found by a user and not here.
+import os
+root = os.path.dirname(os.path.abspath(sys.argv[1]))
+print("icons-present %s" % sorted(
+    i.split("\\")[-1] for i in set(icons)
+    if not os.path.exists(os.path.join(root, "icons", i.split("\\")[-1]))))
 REGCHECK
 check "every registry value decodes back to the string it should be" \
     "values 7 commands 3 icons 4" \
@@ -6686,6 +6694,8 @@ check "and %1 is the only bare percent left after the variables expand" \
 check "and the two diff entries select a side each, either order" \
     "all-cmd True sides ['/left', '/right'] all-icons-ico True" \
     "$(sed -n '5,7p' "$WORK/regcheck.out" | tr '\n' ' ' | sed 's/ $//')"
+check "and every icon it names is a file the release ships" \
+    "icons-present []" "$(sed -n 8p "$WORK/regcheck.out")"
 
 # And that they are what the GENERATOR makes. The checks above read the
 # committed files and would pass just as well on a hand-edit, while
