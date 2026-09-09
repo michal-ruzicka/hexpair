@@ -9,6 +9,54 @@ and this project adheres to
 
 ## [v2.5.0-devel] – 2026-09-09
 
+### Added
+- **The Explorer context menu offers console Vim, not only gVim — and a
+  plain-Vim pair beside the hex ones.** Every action is in the submenu
+  twice now, once for the console `vim` and once for `gvim`, and two
+  entries at the bottom open the right-clicked file *normally*, with no hex
+  view and no paging:
+
+  ```
+  vimhex ▸  vimhex this                   the file you right-clicked, in hex with Vim
+            gvimhex this                  the file you right-clicked, in hex with gVim
+            ──────────────────────────
+            vimhexdiff select as left     this is the left-hand side with Vim
+            gvimhexdiff select as left    this is the left-hand side with gVim
+            vimhexdiff select as right    this is the right-hand side with Vim
+            gvimhexdiff select as right   this is the right-hand side with gVim
+            ──────────────────────────
+            vim this                      the file you right-clicked with regular Vim
+            gvim this                     the file you right-clicked with regular gVim
+  ```
+
+  The three entries this replaces all opened gVim, because they run
+  `gvimhex.cmd`/`gvimhexdiff.cmd`, whose default exists for a verb that has
+  no console to run the console Vim in. That is about the *default*: the
+  `cmd.exe` a menu entry runs creates a console window either way — the
+  flash this project has already decided to accept — and console Vim simply
+  takes it over and keeps it until you quit. So the choice belongs to the
+  user, and `VIMHEX_VIM` still overrides both halves. **The last pair are
+  not hexpair at all**, and are there because Vim's own installer
+  contributes exactly one entry, *Edit with gVim*, and none for the
+  console: on a stock Windows there is no way to right-click a file into
+  console Vim, and a menu that has to exist anyway can carry the two for
+  nothing. They run whatever `vim` and `gvim` `PATH` finds — not
+  `VIMHEX_VIM`, which names the Vim hexpair's *own* commands open. The four
+  diff entries stay symmetric, and the two sides need not agree on a Vim.
+  A fourth icon ships for the plain pair, `icons/hexpair-vim.ico`: the bare
+  mark without the `0x` badge the hexpair entries carry. See `README.md`
+  under *Windows Explorer Context Menu*, or `:help hexpair-vimhex-windows`.
+
+### Fixed
+- **Importing the context menu now replaces it instead of adding to it.**
+  A `.reg` import is a merge, so `vimhex-contex-entry.add.reg` deletes its
+  two keys before writing them. Without that, upgrading from v2.3.0 or
+  v2.4.0 — whose three children are named differently from the eight above
+  — would have left those three in the menu beside the new ones, still
+  clickable and still running what they were written with, and only
+  `vimhex-contex-entry.remove.reg` would have cleared them. It also makes a
+  second import of the same file a no-op rather than an accumulation.
+
 ## [v2.4.0] – 2026-09-09
 
 ### Added

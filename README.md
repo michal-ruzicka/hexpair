@@ -1128,12 +1128,12 @@ They default to the console `vim`. Set `VIMHEX_VIM` for another one —
 
 `gvimhex.cmd` and `gvimhexdiff.cmd` are the same two commands again
 (`gvimhex`/`gvimhexdiff` in `hexpair.bashrc` are the Bash pair),
-defaulting to `gvim` instead — for double-clicking a file, or wiring into
-the Explorer context menu below, where there is no console for `vim` to run
-in and no way to pass `VIMHEX_VIM` in anyway. They delegate to
-`vimhex.cmd`/`vimhexdiff.cmd` rather than duplicating their argument
-parsing, so keep all four files together; a `VIMHEX_VIM` already set in
-your environment overrides `gvim` there too.
+defaulting to `gvim` instead — for double-clicking a file, or for the half
+of the Explorer context menu below that opens the GUI, where there is no way
+to pass `VIMHEX_VIM` in. They delegate to `vimhex.cmd`/`vimhexdiff.cmd`
+rather than duplicating their argument parsing, so keep all four files
+together; a `VIMHEX_VIM` already set in your environment overrides `gvim`
+there too.
 
 **Where to put them.** They only need to be on `PATH`, and the plugin's own
 directory is the tidiest place to point at, because then updating the plugin
@@ -1172,17 +1172,37 @@ The paths inside are written against
 the install instructions above use. What you get:
 
 ```
-vimhex ▸  gvimhex this                  the file you right-clicked, in hex
+vimhex ▸  vimhex this                   the file you right-clicked, in hex with Vim
+          gvimhex this                  the file you right-clicked, in hex with gVim
           ──────────────────────────
-          gvimhexdiff select as left    this is the left-hand side
-          gvimhexdiff select as right   this is the right-hand side
+          vimhexdiff select as left     this is the left-hand side with Vim
+          gvimhexdiff select as left    this is the left-hand side with gVim
+          vimhexdiff select as right    this is the right-hand side with Vim
+          gvimhexdiff select as right   this is the right-hand side with gVim
+          ──────────────────────────
+          vim this                      the file you right-clicked with regular Vim
+          gvim this                     the file you right-clicked with regular gVim
 ```
 
-**The two diff entries are symmetric — pick either side first.** Each one
+**Every action is offered in both Vims** — the `vimhex*` entries open the
+console `vim`, in the console window the menu creates for it anyway, and
+the `gvimhex*` entries open `gvim`. There is nothing to configure either
+way; a `VIMHEX_VIM` set in your environment still overrides both.
+
+**The last pair are not hexpair at all.** `vim this` and `gvim this` open
+the file the ordinary way — no hex view, no paging, no plugin. They are
+there because Vim's own installer contributes one context-menu entry,
+*Edit with gVim*, and none for the console: on a stock Windows there is no
+way to right-click a file into console Vim. They run whatever `vim` and
+`gvim` `PATH` finds, and `VIMHEX_VIM` is not consulted — that one names the
+Vim hexpair's own commands open.
+
+**The four diff entries are symmetric — pick either side first.** Each one
 records its side and stops; whichever completes the pair opens the
 comparison and clears both, so the next diff starts clean. Picking the same
-side twice just overwrites it, and there is no order to get wrong. The same
-two steps work from `cmd.exe`:
+side twice just overwrites it, and there is no order to get wrong. The two
+sides need not agree on a Vim either: the entry that completes the pair is
+the one that opens the comparison. The same two steps work from `cmd.exe`:
 
 ```bat
 vimhexdiff /left old.img
@@ -1190,16 +1210,25 @@ vimhexdiff /right new.img
 ```
 
 **The diff opens maximized**, in gVim: two hex views side by side want the
-full width.
+full width. Console Vim is left alone — its window is the one the menu
+opened, and its size is the console's.
 
 Everything lives under `HKEY_CURRENT_USER`, so it needs no administrator
-rights and touches nobody else's account. On Windows 11 it is a "legacy"
-context menu and therefore sits under *Show more options* (Shift+F10 opens
-that directly); file managers that use the classic menu — Total Commander
-among them — show it straight away. **A console window flashes** while the
-`.cmd` runs, which is accepted rather than worked around; `CONTRIBUTING.md`
-says why, along with how the two files are built and why they are generated
-rather than edited.
+rights and touches nobody else's account. **Importing replaces the menu**
+rather than adding to it: the file deletes its own two keys before it
+writes them, so upgrading from a hexpair whose entries were named
+differently leaves none of them behind, and a second import of the same
+file changes nothing.
+
+On Windows 11 it is a "legacy" context menu and therefore sits under *Show
+more options* (Shift+F10 opens that directly); file managers that use the
+classic menu — Total Commander among them — show it straight away. **A
+console window opens** with every entry, because each one runs through
+`cmd.exe`: the console entries take it over and keep it until you quit,
+and the gVim ones flash it for as long as it takes to start gVim. The
+flash is accepted rather than worked around; `CONTRIBUTING.md` says why,
+along with how the two files are built and why they are generated rather
+than edited.
 
 Installed somewhere else? Re-generate the pair rather than editing them:
 

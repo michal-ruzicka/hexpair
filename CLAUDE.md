@@ -109,24 +109,45 @@ gvimhexdiff.cmd       "gvim" instead of "vim" - what a context-menu verb
                       treatment as vimhex.cmd/vimhexdiff.cmd; the
                       packaging test's glob is `*vimhex*.cmd` (leading
                       `*`) so it catches these without a separate rule.
-vimhex-contex-entry.  add.reg wires gvimhex.cmd/gvimhexdiff.cmd into the
-  add.reg / .remove.reg  Explorer context menu under HKEY_CURRENT_USER, as
-                      ONE `vimhex` submenu holding three items (open, a
-                      separator, then the diff /left+/right pair);
+vimhex-contex-entry.  add.reg wires the plugin's four .cmd wrappers, plus
+  add.reg / .remove.reg  a plain `vim`/`gvim` off PATH, into the Explorer
+                      context menu under HKEY_CURRENT_USER, as ONE
+                      `vimhex` submenu holding eight items: open, the
+                      diff /left+/right pair, and a plain-Vim "open it
+                      normally" - each in BOTH console Vim and gVim, in
+                      three groups separated by a rule.
                       .remove.reg deletes the folder and its child key by
                       name, and needs no path of its own, so it undoes an
                       add.reg generated for ANY path. Each item carries an
                       "Icon" pointing into icons/.
-                      It deliberately does NOT clean up after the shapes
-                      this menu had earlier in development (three keys
-                      straight in the "*" menu). Nothing was ever released
-                      with those, so there is no installed base to tidy;
-                      carrying deletions for a layout no user ever had is
-                      dead weight. THAT LICENCE HAS EXPIRED: v2.3.0
-                      shipped the submenu, so a user can have it
-                      installed, and a future restructure has to remove
-                      what that release put there rather than leaving it
-                      orphaned in the registry.
+                      add.reg now OPENS with those same two deletions.
+                      An import is a merge, so v2.5.0's rename of every
+                      child (10-open -> 10-open-vim, and so on) would
+                      have left v2.3.0's and v2.4.0's three entries in
+                      the menu beside the new eight, still clickable -
+                      the orphaning this file used to note as a debt and
+                      has now paid. Deleting by name covers ANY earlier
+                      layout, including the three keys straight in the
+                      "*" menu that this had in development, and makes a
+                      re-import a replacement rather than an accumulation.
+                      Keep them first: the file is applied top to bottom,
+                      so a deletion below the additions would take the
+                      new menu out instead.
+                      WHY EVERY ACTION APPEARS TWICE: which Vim a user
+                      wants is not something a menu can guess, and the
+                      console half is the half nothing else offers - Vim's
+                      own installer contributes "Edit with gVim" and no
+                      console entry at all. That is also why the plain
+                      pair is here despite not being hexpair: on a stock
+                      Windows there is otherwise no way to right-click a
+                      file into console Vim. Those two take `vim`/`gvim`
+                      from PATH, NOT through VIMHEX_VIM - that names the
+                      Vim hexpair's own commands open, and these two are
+                      deliberately outside hexpair. They go through
+                      cmd.exe like everything else even though gVim needs
+                      no console: one quoting story for the whole menu,
+                      and a bare command name resolves only because a
+                      shell is what searches PATH.
                       Submenu mechanics, all three of which are load-
                       bearing: the folder is a verb with
                       "ExtendedSubCommandsKey" and NO \command subkey (a
@@ -137,11 +158,13 @@ vimhex-contex-entry.  add.reg wires gvimhex.cmd/gvimhexdiff.cmd into the
                       "SubCommands" scheme resolves against HKLM's
                       CommandStore and needs admin; children sort
                       ALPHABETICALLY BY KEY NAME, not by write order,
-                      hence the 10-/20-/30- prefixes, and the separator is
-                      "CommandFlags"=dword:20 (ECF_SEPARATORBEFORE) on the
-                      item BELOW the rule.
-                      The two diff items are SYMMETRIC (/left and /right,
-                      either order) - see vimhexdiff.cmd's :side.
+                      hence the 10- to 80- prefixes (two digits, so a
+                      ninth entry does not disturb the order), and each
+                      separator is "CommandFlags"=dword:20
+                      (ECF_SEPARATORBEFORE) on the item BELOW the rule.
+                      The four diff items are SYMMETRIC (/left and /right,
+                      either order, and the two sides need not agree on a
+                      Vim) - see vimhexdiff.cmd's :side.
                       BOTH ARE GENERATED - see make-context-entry-reg.py;
                       do not hand-edit them. Bundled in the release
                       tarball; same packaging-glob mechanism as the .cmd
@@ -153,8 +176,10 @@ vimhex-contex-entry.  add.reg wires gvimhex.cmd/gvimhexdiff.cmd into the
                       there.
 The console flash        DECIDED, do not re-litigate without new
   from a context-menu    information. A "cmd.exe /c" verb creates a
-  verb                   console window; the reported problem was not the
-                      flash itself but the FOCUS - with a Windows Terminal
+  verb                   console window - which the menu's console-Vim
+                      entries then take over and keep until Vim quits, so
+                      it only flashes on the gVim half; the reported
+                      problem was not the flash itself but the FOCUS - with a Windows Terminal
                       window already open, the new console attaches to it
                       and takes focus, dropping the file manager the menu
                       was used from (Total Commander) into the background.
@@ -268,17 +293,25 @@ icons/                three custom icons for the entries above, and
                         packs PNG-format entries per the Vista+ scheme
                         (a 0 width/height byte in an ICONDIRENTRY means
                         256, since the field is one byte).
-                      - design.py: the three icon specs. A V mark
+                      - design.py: the four icon specs. A V mark
                         (ORIGINAL - not extracted from a real gvim.exe,
                         there being no Windows box handy to pull one off
                         of - in Vim's own green) plus a "0x" badge
                         (bottom-right, smaller, the blocky 5x7 font) on
-                        all three, and on the diff pair a bigger
-                        bottom-left badge of two window panes (echoing
-                        vimhexdiff's own actual `vsplit`) - blue left /
-                        orange right, the side THIS icon represents at
-                        full colour and the other dimmed toward the
-                        badge's dark frame.
+                        the three hexpair ones, and on the diff pair a
+                        bigger bottom-left badge of two window panes
+                        (echoing vimhexdiff's own actual `vsplit`) - blue
+                        left / orange right, the side THIS icon
+                        represents at full colour and the other dimmed
+                        toward the badge's dark frame.
+                        hexpair-vim.ico is the bare mark, no "0x": it is
+                        the menu's two PLAIN-Vim entries, which open an
+                        ordinary edit session, and a badge saying "this
+                        is hexpair" over one would be the set's only
+                        outright lie. An icon says which ACTION and never
+                        which Vim - the console and gVim entries of a
+                        pair share one, the caption carries the
+                        difference, and at 16px it could not.
                         SUPERSEDED first design, kept here for why:
                         top-right diff mark plus top-left L/R letter (or
                         a left/right arrow) - all discarded once actually
@@ -289,7 +322,7 @@ icons/                three custom icons for the entries above, and
                         timestamps, no randomness) - confirmed by hash,
                         re-running it after an unrelated change must not
                         touch the .ico files.
-                      Only the three .ico files are bundled in the
+                      Only the four .ico files are bundled in the
                       release tarball (pack-release.py's FILES) - the
                       packaging test's glob gained a bare `*.ico`
                       (asymmetric with the `*vimhex*.{cmd,reg}` rule

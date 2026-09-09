@@ -35,7 +35,7 @@ reports and patches are welcome via the project's
 | `NOTICE.md` | Third-party notices, currently one: the Unicode License V3, which the derived block table in `plugin/hexpair.vim` requires to travel with the copies or appear in the documentation. Bundled in every release tarball |
 | `make-unicode-blocks.py` | Regenerates the Unicode block table inside `plugin/hexpair.vim` from `Blocks.txt`, which it pins by version and SHA-256. The data inspector names a code point's block with it; Vim has no Unicode database of its own. Development-only, not in the tarball |
 | `make-context-entry-reg.py` | Generates the two `.reg` files above (they carry `REG_EXPAND_SZ` values, which `.reg` can only write as `hex(2):` plus UTF-16LE bytes). Takes an optional install path. Development-only, not in the tarball |
-| `icons/` | The three context-menu icons and what draws them: `build.py` renders `hexpair-{open,pick,with}.ico` from `design.py` via `rasticon.py`, a from-scratch PNG/ICO encoder. Only the `.ico` files are bundled in a release tarball; the generators are development-only |
+| `icons/` | The four context-menu icons and what draws them: `build.py` renders `hexpair-{open,pick,with,vim}.ico` from `design.py` via `rasticon.py`, a from-scratch PNG/ICO encoder. Only the `.ico` files are bundled in a release tarball; the generators are development-only |
 | `test/` | Headless regression tests (`run-tests.sh`, see *Testing*) and the large-file checks, which the suite cannot replace: they build a multi-gigabyte file and edit it past 2 GiB, the only way to exercise what Windows does there. Run by hand, and by CI as a step of its own on each platform, with a budget of its own. `check-large-file.cmd` (`.ps1`) is the native-Windows one and needs nothing Windows does not ship — PowerShell being what hexpair itself uses past 2 GiB; `check-large-file.sh` is the POSIX one, for Linux, WSL, and the Vim that Git Bash launches, and needs `python3` |
 | `.gitattributes` | Line-ending normalization rules |
 | `.gitignore` | Excludes `build/`, `dist/` and the demo MP4 from version control |
@@ -493,19 +493,22 @@ by `make-context-entry-reg.py` and carry a "do not edit by hand" banner.
 shell expands when it reads the value — a plain `REG_SZ` would send Explorer
 looking for a folder literally named `%USERPROFILE%`. The `.reg` text format
 can only write that type as `hex(2):` followed by the string's UTF-16LE
-bytes, which no one is going to edit correctly by hand. What the first entry
-decodes to:
+bytes, which no one is going to edit correctly by hand. What the head of the
+file, and the first of its eight entries, decode to:
 
 ```
+[-HKEY_CURRENT_USER\Software\Classes\*\shell\vimhex]
+[-HKEY_CURRENT_USER\Software\Classes\hexpair.ContextMenu]
+
 [HKEY_CURRENT_USER\Software\Classes\*\shell\vimhex]
 "MUIVerb"="vimhex"
 "Icon"    = %USERPROFILE%\...\hexpair\icons\hexpair-open.ico
 "ExtendedSubCommandsKey"="hexpair.ContextMenu"
 
-[HKEY_CURRENT_USER\Software\Classes\hexpair.ContextMenu\shell\10-open]
-"MUIVerb"="gvimhex this"
+[HKEY_CURRENT_USER\Software\Classes\hexpair.ContextMenu\shell\10-open-vim]
+"MUIVerb"="vimhex this"
 "Icon"    = %USERPROFILE%\...\hexpair\icons\hexpair-open.ico
-(command) = cmd.exe /c ""%USERPROFILE%\...\hexpair\gvimhex.cmd" "%1""
+(command) = cmd.exe /c ""%USERPROFILE%\...\hexpair\vimhex.cmd" "%1""
 ```
 
 **The expansion order is what makes it safe.** The shell expands the
@@ -517,16 +520,47 @@ round-trips to the intended string, and after the pairs are consumed
 precisely one bare `%` is left in each command. Re-run that check whenever a
 command grows another variable.
 
+**Why the two deletions come first.** A `.reg` import is a *merge*, so a
+release that renames its children adds them beside the old ones instead of
+replacing them, and the leftovers stay in the menu and stay clickable —
+which is what happened when the three v2.3.0 entries (`10-open`, `20-left`,
+`30-right`) became the eight of v2.5.0. Deleting by name takes every subkey
+and value with it whatever the previous layout was, and both deletions have
+to precede every addition, since the file is applied top to bottom. It also
+makes re-importing the same file a replacement rather than an accumulation.
+
+**Why every action appears twice.** The `vimhex*` half runs the console
+`vim` and the `gvimhex*` half runs `gvim`; which one a user wants is not
+something the menu can guess, and the console half is the half nothing else
+offers — Vim's own installer contributes *Edit with gVim* and no console
+entry at all. The last pair, `vim this` and `gvim this`, are not hexpair:
+they open the file with no hex view and no paging, and they are the only
+entries with no `.cmd` of the plugin's behind them, so they take `vim` and
+`gvim` from `PATH` rather than through `VIMHEX_VIM` — that variable selects
+the Vim *hexpair's* commands open. They still go through `cmd.exe`, though
+gVim would need no console: one quoting story for the whole menu is worth
+more than saving one flash, and a bare command name is only resolvable
+because a shell is what searches `PATH`.
+
+**Why the icons are per action and not per Vim.** The two entries of a pair
+share an icon; at 16px a console/GUI distinction would be a guess about what
+a user can read, and the caption already says it. What *is* drawn is whether
+an entry is hexpair's: the `0x` badge marks the six that are, and
+`hexpair-vim.ico` is the bare mark without it, for the two plain-Vim entries
+that open an ordinary edit session.
+
 **Why `ExtendedSubCommandsKey`.** The folder is a verb carrying that value
 and no `\command` of its own; the key it names holds the children under its
 own `\shell`. That indirection is what keeps everything inside
 `HKEY_CURRENT_USER` and therefore free of administrator rights — the older
 `SubCommands` scheme resolves its verbs against `HKLM`'s CommandStore, which
 is not. Children appear in alphabetical order of their *key* name, hence the
-`10-`/`20-`/`30-` prefixes, and the horizontal rule is
+`10-` to `80-` prefixes, and each horizontal rule is
 `"CommandFlags"=dword:00000020` (`ECF_SEPARATORBEFORE`) on the item below it.
 
-**Why the console window is allowed to flash.** Hiding it needs either the
+**Why the console window is allowed to flash.** Every entry runs through
+`cmd.exe`, so every entry opens a console: the console entries take it over
+and keep it, the gVim ones flash it. Hiding it needs either the
 Windows Script Host — whose "run this command with a hidden window" pattern
 is one of the shapes antivirus heuristics look for, and which Microsoft is
 removing from Windows — or an unsigned stub `.exe`, which is usually worse
