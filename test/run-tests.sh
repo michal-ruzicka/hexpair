@@ -6435,39 +6435,47 @@ check "and the minimal package fits under what vim.org will take" \
     "fits" "$minimal"
 
 # --- A shipped document may only link to what ships beside it --------------
-# README.md goes into BOTH archives and linked relatively to CHANGELOG.md,
-# CLAUDE.md and CONTRIBUTING.md, which the minimal package leaves out on
-# purpose - so the copy uploaded to vim.org carried three links to files
-# that were not there, plus one to demo/hexpair-demo.gif, which is 5.7 MB
-# and is in neither archive. The README's own text calls those "a click
-# away here", meaning GitHub, so they are absolute now.
+# README.md links relatively to CHANGELOG.md, CLAUDE.md and CONTRIBUTING.md,
+# and to demo/hexpair-demo.gif - which is right in the repository and on
+# GitHub, and dead inside an archive: the minimal package omits the three
+# documents on purpose, and the 5.7 MB GIF ships in nothing. So
+# pack-release.py rewrites a link the archive cannot answer into a GitHub
+# URL, per archive - CHANGELOG.md stays relative in the complete tarball,
+# which carries it, and becomes a URL in the minimal one, which does not.
 #
-# The rule: a relative link in a document must resolve inside every archive
-# that carries that document. Anything on GitHub and not in the tarball is
-# an absolute URL, or it is a dead link for whoever unpacked it.
+# This checks the PACKAGED documents rather than the repository's, which is
+# what makes it a check of that rewriting and not merely of the file list:
+# both archives are built in memory and every relative link in every .md
+# they contain has to resolve inside the same archive.
 links=$(cd "$ROOT" && "$PY" -c '
 import sys
 sys.dont_write_bytecode = True
-import re, importlib.util, pathlib
+import calendar, io, re, tarfile, time, importlib.util, pathlib
 spec = importlib.util.spec_from_file_location("pr", "pack-release.py")
 pr = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(pr)
-strip = lambda f: f[len("hexpair/"):]
-full = {strip(f) for f in pr.FILES}
-minimal = {strip(f) for f in pr.FILES if f not in pr.MINIMAL_OMITS}
+root = pathlib.Path(".")
+version, date = pr.parse_header(root / "plugin" / "hexpair.vim")
+mtime = calendar.timegm(time.strptime(date, "%Y-%m-%d"))
+archives = [
+    ("the tarball", pr.FILES),
+    ("the minimal package", [f for f in pr.FILES if f not in pr.MINIMAL_OMITS]),
+]
 bad = []
-for doc in sorted(f for f in full if f.endswith(".md")):
-    ships_in = minimal if doc in minimal else full
-    where = "the minimal package" if doc in minimal else "the tarball"
-    text = pathlib.Path(doc).read_text(encoding="utf-8")
-    for m in re.finditer(r"\]\((?!https?:|#|mailto:)([^)]+)\)", text):
-        target = m.group(1).split("#")[0]
-        if target and target not in ships_in:
-            bad.append("%s links to %s, which is not in %s" % (doc, target, where))
-print("; ".join(bad) if bad else "every relative link resolves where it ships")
+for label, files in archives:
+    tf = tarfile.open(fileobj=io.BytesIO(pr.build_tar(root, mtime, files)))
+    names = set(tf.getnames())
+    for member in sorted(n for n in names if n.endswith(".md")):
+        text = tf.extractfile(member).read().decode("utf-8")
+        for m in re.finditer(r"\]\((?!https?:|#|mailto:)([^)]+)\)", text):
+            target = m.group(1).split("#")[0]
+            if target and "hexpair/" + target not in names:
+                bad.append("%s in %s links to %s, which is not there"
+                           % (member, label, target))
+print("; ".join(bad) if bad else "every relative link resolves inside its archive")
 ')
 check "a shipped document links only to what ships beside it" \
-    "every relative link resolves where it ships" "$links"
+    "every relative link resolves inside its archive" "$links"
 
 # --- Every reader of a byte RANGE asks whether it may seek there ------------
 # The 2 GiB rule cannot be exercised off Windows, so what can be checked

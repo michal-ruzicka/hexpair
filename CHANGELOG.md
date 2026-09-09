@@ -252,12 +252,15 @@ and this project adheres to
 - **The picture at the top of `README.md` never appeared for anyone
   reading it outside GitHub.** It is a relative link to
   `demo/hexpair-demo.gif`, and that file is 5.7 MB and has never been in
-  the release tarball. Neither have `CHANGELOG.md`, `CLAUDE.md` and
-  `CONTRIBUTING.md` been in the new minimal package, which the README also
-  linked to. All four are absolute URLs now — which is what the README's
-  own sentence about the omissions already said they were, "a click away
-  here" — and a check holds every shipped document to linking relatively
-  only to files that ship beside it.
+  the release tarball; the new minimal package leaves out three more of
+  the documents the README links to. The links stay relative in the
+  repository, where they are right — that is how the file reads on GitHub
+  and in a checkout — and `pack-release` now rewrites the ones an archive
+  cannot answer into GitHub URLs as it packs, per archive: `CHANGELOG.md`
+  stays a relative link in the complete tarball, which carries it, and
+  becomes a URL in the minimal one, which does not. A check unpacks both
+  archives and holds every relative link in them to resolving inside the
+  same archive.
 
 ## [v2.3.0] – 2026-09-02
 

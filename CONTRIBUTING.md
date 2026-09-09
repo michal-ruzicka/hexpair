@@ -254,6 +254,27 @@ library only), which reads `Version:` and `Date:` from the header of
 ready to be extracted into `~/.vim/pack/plugins/start/`. Bump the
 version *and* the date in the plugin header before tagging a release.
 
+### Links that leave the archive
+
+The Markdown files are packed with one transformation: a **relative link
+the archive cannot answer becomes a GitHub URL**. `README.md` points at
+`demo/hexpair-demo.gif`, which is 5.7 MB and ships in nothing, and at
+`CHANGELOG.md`, `CLAUDE.md` and `CONTRIBUTING.md`, which the minimal
+package leaves out — inside a tarball those are dead ends, and the reader
+has no way to guess what they pointed at.
+
+Keep them **relative in the repository**. That is the right form for the
+file as GitHub renders it and as a checkout holds it, and the rewriting is
+per archive: `CHANGELOG.md` stays a relative link in the complete tarball,
+which carries it, and becomes a URL only in the minimal one. Images get
+`raw.githubusercontent.com`, everything else the `blob` viewer, and both
+point at `main` rather than at the release tag — a tag exists only after
+step 3 of the *Release Process* and never for a `-devel` build.
+
+The suite unpacks both archives and fails if any relative link in them
+does not resolve inside the same archive, so neither the omission list nor
+this rewriting can drift away from the other.
+
 ### Reproducible Builds
 
 Every packaging run from the same source commit must produce a

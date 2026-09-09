@@ -106,11 +106,60 @@ def parse_header(plugin: Path):
     return version.group(1), date.group(1)
 
 
+# Where a link that leaves the archive has to point instead. "main" and
+# not the release tag: a tag exists only after step 3 of the release
+# process and never for a -devel build, so pointing at one would ship 404s
+# from every intermediate package - and for the changelog and the
+# contributor guide, which is what these mostly are, the current file is
+# the more useful answer anyway.
+GITHUB_BLOB = "https://github.com/michal-ruzicka/hexpair/blob/main/"
+GITHUB_RAW = "https://raw.githubusercontent.com/michal-ruzicka/hexpair/main/"
+
+# A relative link in a Markdown file, excluding the absolute ones and the
+# same-document anchors.
+MD_LINK = re.compile(rb"\]\((?!https?:|#|mailto:)([^)]+)\)")
+
+
+def absolutise(data: bytes, present: set) -> bytes:
+    """Point this document's relative links at GitHub where the archive
+    cannot answer them.
+
+    The repository keeps them relative, which is right for the file being
+    read on GitHub and in a checkout. An archive is a different context:
+    demo/hexpair-demo.gif is 5.7 MB and ships in nothing, and the minimal
+    package leaves out three of the documents the README links to - so
+    inside a tarball those same links are dead ends, and the reader has no
+    way to guess what they were pointing at.
+
+    Rewritten per ARCHIVE, not once: CHANGELOG.md stays a relative link in
+    the complete tarball, which carries it, and becomes a URL in the
+    minimal one, which does not. An image gets the raw host; everything
+    else gets the blob viewer.
+    """
+
+    def fix(m):
+        target = m.group(1).decode("utf-8")
+        path = target.split("#")[0]
+        if not path or path in present:
+            return m.group(0)
+        base = GITHUB_RAW if path.lower().endswith(
+            (".gif", ".png", ".jpg", ".jpeg", ".svg")) else GITHUB_BLOB
+        return b"](" + (base + target).encode("utf-8") + b")"
+
+    return MD_LINK.sub(fix, data)
+
+
 def build_tar(root: Path, mtime: int, files=None) -> bytes:
+    names = list(files if files is not None else FILES)
+    # What this archive can answer a relative link with, in the form the
+    # links are written in - repo-relative, without the "hexpair/" prefix.
+    present = {n[len("hexpair/"):] for n in names}
     buf = io.BytesIO()
     with tarfile.open(fileobj=buf, mode="w", format=tarfile.USTAR_FORMAT) as tar:
-        for name in files if files is not None else FILES:
+        for name in names:
             data = (root / name[len("hexpair/"):]).read_bytes()
+            if name.endswith(".md"):
+                data = absolutise(data, present)
             info = tarfile.TarInfo(name)
             info.size = len(data)
             info.mtime = mtime
