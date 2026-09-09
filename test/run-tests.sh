@@ -6790,6 +6790,15 @@ root = os.path.dirname(os.path.abspath(sys.argv[1]))
 print("icons-present %s" % sorted(
     i.split("\\")[-1] for i in set(icons)
     if not os.path.exists(os.path.join(root, "icons", i.split("\\")[-1]))))
+# The same for what each entry RUNS. Every command names a .cmd of this
+# plugin's by path, and a renamed or unshipped one is a menu entry that
+# does nothing but flash a console - which is what the two plain-Vim
+# wrappers exist to prevent, so they are the last thing that should go
+# missing quietly. Nothing here is looked up on PATH on purpose: a bare
+# name would be resolved at click time against whatever the user has.
+progs = sorted(set(re.findall(r'\\([^\\"]+\.cmd)"', " ".join(commands))))
+print("programs %d %s" % (len(progs), [
+    p for p in progs if not os.path.exists(os.path.join(root, p))]))
 REGCHECK
 check "every registry value decodes back to the string it should be" \
     "values 17 commands 8 icons 9" \
@@ -6806,6 +6815,8 @@ check "and the menu is replaced, not merged into" \
     "deletes-first True" "$(sed -n 9p "$WORK/regcheck.out")"
 check "and every icon it names is a file the release ships" \
     "icons-present []" "$(sed -n 10p "$WORK/regcheck.out")"
+check "and so is every .cmd it runs" \
+    "programs 6 []" "$(sed -n 11p "$WORK/regcheck.out")"
 
 # And that they are what the GENERATOR makes. The checks above read the
 # committed files and would pass just as well on a hand-edit, while

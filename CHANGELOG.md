@@ -40,9 +40,15 @@ and this project adheres to
   contributes exactly one entry, *Edit with gVim*, and none for the
   console: on a stock Windows there is no way to right-click a file into
   console Vim, and a menu that has to exist anyway can carry the two for
-  nothing. They run whatever `vim` and `gvim` `PATH` finds — not
-  `VIMHEX_VIM`, which names the Vim hexpair's *own* commands open. The four
-  diff entries stay symmetric, and the two sides need not agree on a Vim.
+  nothing. They run two new commands, **`vimhex-vim.cmd` and
+  `vimhex-gvim.cmd`**, which start whatever `vim` and `gvim` `PATH` finds
+  and report a Vim they could not start instead of flashing a console —
+  and which read `VIMHEX_PLAIN_VIM`, not `VIMHEX_VIM`, since that one names
+  the Vim hexpair's *own* commands open and is quite reasonably set to
+  `gvim`. They are not called `vim.cmd`/`gvim.cmd` because on `PATH` those
+  would shadow the real `vim.exe` for everything that looks Vim up there.
+  The four diff entries stay symmetric, and the two sides need not agree on
+  a Vim.
   A fourth icon ships for the plain pair, `icons/hexpair-vim.ico`: the bare
   mark without the `0x` badge the hexpair entries carry. See `README.md`
   under *Windows Explorer Context Menu*, or `:help hexpair-vimhex-windows`.

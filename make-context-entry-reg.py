@@ -68,8 +68,11 @@ HEADER_ADD = """\
 ;
 ; The last pair open the file NORMALLY - no hex view, no paging, no plugin
 ; involved - which is the ordinary "edit this file" the rest of the menu
-; does not do. They run whatever `vim` / `gvim` is on PATH; VIMHEX_VIM is
-; not consulted, since that names the Vim hexpair's own commands use.
+; does not do. They run vimhex-vim.cmd / vimhex-gvim.cmd, which start
+; whatever `vim` / `gvim` is on PATH and say so, readably, when they
+; cannot. Those two read VIMHEX_PLAIN_VIM, not VIMHEX_VIM: that one names
+; the Vim hexpair's own commands use, and pointing "vim this" at it would
+; open the GUI for anybody who has set it to gvim.
 ;
 ; The folder is a verb carrying "ExtendedSubCommandsKey" and no \\command of
 ; its own; the key it names ({submenu}) holds the children
@@ -164,12 +167,9 @@ SUBMENU_ICON = "hexpair-open.ico"
 # order they are written here, which is what the numeric prefixes are for.
 # Two digits throughout, so the order survives a ninth entry.
 #
-# `program` is either one of the plugin's own .cmd files, taken from the
-# install directory (in_root), or a command name looked up on PATH.
-#
 # /left and /right may be used in either order: each records its side, and
 # whichever completes the pair opens the comparison and clears both.
-Item = namedtuple("Item", "key caption icon program args in_root separator")
+Item = namedtuple("Item", "key caption icon program args separator")
 
 # Each action twice, console Vim first and gVim second: the console half is
 # the one nothing else offers, since Vim's own installer contributes a gVim
@@ -180,29 +180,30 @@ Item = namedtuple("Item", "key caption icon program args in_root separator")
 #
 # The last pair are not hexpair at all: they open the file the ordinary way,
 # in a plain Vim with no hex view and no paging, which is the one thing a
-# menu full of hex verbs could not otherwise do. They are also the only
-# entries with no .cmd of the plugin's behind them, so they take `vim` and
-# `gvim` from PATH -- the same names vimhex.cmd/gvimhex.cmd default
-# VIMHEX_VIM to, but read straight rather than through that variable: it
-# selects the Vim hexpair's commands open, and these two are deliberately
-# outside hexpair.
+# menu full of hex verbs could not otherwise do. They go through wrappers
+# of their own rather than naming `vim` and `gvim` here, for the reason
+# every other entry does: a verb whose program will not start leaves a
+# console that closes before cmd.exe's own message can be read, and
+# vimhex-vim.cmd says what is wrong and waits. Those two read
+# VIMHEX_PLAIN_VIM and not VIMHEX_VIM -- that one names the Vim HEXPAIR's
+# commands open, and set to "gvim" it would make "vim this" open the GUI.
 ITEMS = [
     Item("10-open-vim", "vimhex this", "hexpair-open.ico",
-         "vimhex.cmd", "", True, False),
+         "vimhex.cmd", "", False),
     Item("20-open-gvim", "gvimhex this", "hexpair-open.ico",
-         "gvimhex.cmd", "", True, False),
+         "gvimhex.cmd", "", False),
     Item("30-left-vim", "vimhexdiff select as left", "hexpair-pick.ico",
-         "vimhexdiff.cmd", "/left", True, True),
+         "vimhexdiff.cmd", "/left", True),
     Item("40-left-gvim", "gvimhexdiff select as left", "hexpair-pick.ico",
-         "gvimhexdiff.cmd", "/left", True, False),
+         "gvimhexdiff.cmd", "/left", False),
     Item("50-right-vim", "vimhexdiff select as right", "hexpair-with.ico",
-         "vimhexdiff.cmd", "/right", True, False),
+         "vimhexdiff.cmd", "/right", False),
     Item("60-right-gvim", "gvimhexdiff select as right", "hexpair-with.ico",
-         "gvimhexdiff.cmd", "/right", True, False),
+         "gvimhexdiff.cmd", "/right", False),
     Item("70-plain-vim", "vim this", "hexpair-vim.ico",
-         "vim", "", False, True),
+         "vimhex-vim.cmd", "", True),
     Item("80-plain-gvim", "gvim this", "hexpair-vim.ico",
-         "gvim", "", False, False),
+         "vimhex-gvim.cmd", "", False),
 ]
 
 # ECF_SEPARATORBEFORE. "CommandFlags" is a DWORD on the item that is to have
@@ -277,16 +278,7 @@ def build_add(root):
         # The outer pair of quotes is cmd.exe's own rule 2 (strip the outer
         # pair, run the rest), which is what lets the .cmd path and the file
         # name each contain spaces.
-        #
-        # The plain-Vim pair go through cmd.exe as well, though they have no
-        # .cmd to run and gVim would need no console: it keeps ONE quoting
-        # story for the whole menu, and it is what makes `vim` and `gvim`
-        # bare names resolvable at all -- PATH lookup, and the .bat stubs a
-        # Vim install may put there, are the shell's job and not the
-        # registry's.
-        program = "%s\\%s" % (root, entry.program) if entry.in_root \
-            else entry.program
-        command = 'cmd.exe /c ""%s"' % program
+        command = 'cmd.exe /c ""%s\\%s"' % (root, entry.program)
         if entry.args:
             command += ' "%s"' % entry.args
         command += ' "%1""'

@@ -2166,6 +2166,19 @@ context menu that opens the GUI, where there is no way to pass $VIMHEX_VIM.
 They call vimhex.cmd/vimhexdiff.cmd rather than duplicating their parsing,
 so keep all four files together.
 
+vimhex-vim.cmd and vimhex-gvim.cmd are the odd pair out: they open a file
+in a PLAIN Vim or gVim - no hex view, no paging, no plugin - and exist for
+the last two entries of the context menu below.  Vim's own installer
+contributes one entry, "Edit with gVim", and none for the console, so a
+stock Windows cannot right-click a file into console Vim at all; these fill
+that in, and report a Vim they could not start rather than flashing a
+console.  NOT named vim.cmd/gvim.cmd on purpose: on $PATH those would
+shadow the real vim.exe for everything that looks Vim up there, hexpair's
+own commands included.  They read $VIMHEX_PLAIN_VIM, not $VIMHEX_VIM -
+that one names the Vim hexpair's commands open, and set to `gvim`, which is
+an ordinary thing to set it to, it would make "vim this" open the GUI.
+vimhex-gvim.cmd calls vimhex-vim.cmd, so keep those two together as well.
+
 vimhexdiff.cmd (and gvimhexdiff.cmd) takes two more forms, for the Explorer
 context menu: >
 
@@ -2232,9 +2245,9 @@ The last pair are not hexpair at all: they open the right-clicked file the
 ordinary way, with no hex view and no paging.  They are there because Vim's
 own installer contributes one context-menu entry, "Edit with gVim", and
 none for the console, so a stock Windows has no way to right-click a file
-into console Vim.  They run whatever `vim` and `gvim` are on $PATH;
-$VIMHEX_VIM is not consulted, since that names the Vim hexpair's own
-commands open and these two are outside hexpair.
+into console Vim.  They run vimhex-vim.cmd/vimhex-gvim.cmd, which start
+whatever `vim` and `gvim` are on $PATH and say so readably when they
+cannot; $VIMHEX_PLAIN_VIM names another one.
 
 The folder is a verb carrying "ExtendedSubCommandsKey" and no \command of
 its own, naming a key whose own \shell holds the children - the indirection

@@ -1135,6 +1135,19 @@ rather than duplicating their argument parsing, so keep all four files
 together; a `VIMHEX_VIM` already set in your environment overrides `gvim`
 there too.
 
+`vimhex-vim.cmd` and `vimhex-gvim.cmd` are the odd pair out: they open a
+file in a **plain** Vim or gVim — no hex view, no paging, no plugin — and
+exist for the last two entries of the context menu below. Vim's own
+installer contributes one entry, *Edit with gVim*, and none for the
+console, so a stock Windows has no way to right-click a file into console
+Vim; these fill that in, and say so readably when Vim cannot be started
+instead of flashing a console at you. They are *not* called `vim.cmd` and
+`gvim.cmd` on purpose: on `PATH` those would shadow the real `vim.exe` for
+everything that looks Vim up there, hexpair's own commands included. They
+read `VIMHEX_PLAIN_VIM`, not `VIMHEX_VIM` — that one names the Vim
+*hexpair's* commands open, and pointing it at `gvim`, which is an ordinary
+thing to do, would make *vim this* open the GUI.
+
 **Where to put them.** They only need to be on `PATH`, and the plugin's own
 directory is the tidiest place to point at, because then updating the plugin
 updates the commands:
@@ -1150,11 +1163,12 @@ editing **Path** under *User variables*. Do not do it with
 joined together, so that writes the whole lot into your user `Path` and
 truncates it at 1024 characters.
 
-Copying the four files into a directory you already have on `PATH` works
+Copying the six files into a directory you already have on `PATH` works
 just as well — they find Vim through `PATH` or `VIMHEX_VIM` rather than
-through where they sit themselves. `gvimhex.cmd`/`gvimhexdiff.cmd` do
-depend on where `vimhex.cmd`/`vimhexdiff.cmd` sit, though: copy all four
-together, not a pair on their own.
+through where they sit themselves. The `g` ones do depend on where their
+counterparts sit, though — `gvimhex.cmd`/`gvimhexdiff.cmd` call
+`vimhex.cmd`/`vimhexdiff.cmd`, and `vimhex-gvim.cmd` calls
+`vimhex-vim.cmd` — so copy all six together, not a pair on their own.
 
 #### Windows Explorer Context Menu
 
@@ -1193,9 +1207,10 @@ way; a `VIMHEX_VIM` set in your environment still overrides both.
 the file the ordinary way — no hex view, no paging, no plugin. They are
 there because Vim's own installer contributes one context-menu entry,
 *Edit with gVim*, and none for the console: on a stock Windows there is no
-way to right-click a file into console Vim. They run whatever `vim` and
-`gvim` `PATH` finds, and `VIMHEX_VIM` is not consulted — that one names the
-Vim hexpair's own commands open.
+way to right-click a file into console Vim. They run
+`vimhex-vim.cmd`/`vimhex-gvim.cmd` (above), which start whatever `vim` and
+`gvim` `PATH` finds and say so, readably, when they cannot; set
+`VIMHEX_PLAIN_VIM` for a Vim that is not on `PATH`.
 
 **The four diff entries are symmetric — pick either side first.** Each one
 records its side and stops; whichever completes the pair opens the

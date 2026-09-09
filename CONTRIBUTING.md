@@ -30,7 +30,8 @@ reports and patches are welcome via the project's
 | `hexpair.bashrc` | The `vimhex`/`vimhexdiff` shell wrappers, and the `gvimhex`/`gvimhexdiff` GUI variants, to be sourced from `~/.bashrc`; bundled in every release tarball |
 | `hexpair.vimrc` | The ready-made mappings, to be sourced from the user's vimrc; bundled in every release tarball |
 | `vimhex.cmd`, `vimhexdiff.cmd` | The `cmd.exe` counterparts of the two shell functions, same names and arguments; CRLF, bundled in every release tarball |
-| `gvimhex.cmd`, `gvimhexdiff.cmd` | The same two, defaulting `VIMHEX_VIM` to `gvim` — what a context-menu verb needs. They `call` the `vimhex*.cmd` beside them, so keep all four together |
+| `gvimhex.cmd`, `gvimhexdiff.cmd` | The same two, defaulting `VIMHEX_VIM` to `gvim` — what the GUI half of the context menu needs. They `call` the `vimhex*.cmd` beside them, so keep all four together |
+| `vimhex-vim.cmd`, `vimhex-gvim.cmd` | Open a file in a **plain** Vim or gVim, for the context menu's last two entries — no hex view, no paging, nothing of the plugin. Named so they cannot shadow the real `vim.exe` on `PATH`; they read `VIMHEX_PLAIN_VIM`, and `vimhex-gvim.cmd` `call`s `vimhex-vim.cmd`. CRLF, bundled in every release tarball |
 | `vimhex-contex-entry.add.reg`, `.remove.reg` | Explorer context-menu submenu, added and removed. **Generated** — see `make-context-entry-reg.py`; bundled in every release tarball |
 | `NOTICE.md` | Third-party notices, currently one: the Unicode License V3, which the derived block table in `plugin/hexpair.vim` requires to travel with the copies or appear in the documentation. Bundled in every release tarball |
 | `make-unicode-blocks.py` | Regenerates the Unicode block table inside `plugin/hexpair.vim` from `Blocks.txt`, which it pins by version and SHA-256. The data inspector names a code point's block with it; Vim has no Unicode database of its own. Development-only, not in the tarball |
@@ -534,13 +535,17 @@ makes re-importing the same file a replacement rather than an accumulation.
 something the menu can guess, and the console half is the half nothing else
 offers — Vim's own installer contributes *Edit with gVim* and no console
 entry at all. The last pair, `vim this` and `gvim this`, are not hexpair:
-they open the file with no hex view and no paging, and they are the only
-entries with no `.cmd` of the plugin's behind them, so they take `vim` and
-`gvim` from `PATH` rather than through `VIMHEX_VIM` — that variable selects
-the Vim *hexpair's* commands open. They still go through `cmd.exe`, though
-gVim would need no console: one quoting story for the whole menu is worth
-more than saving one flash, and a bare command name is only resolvable
-because a shell is what searches `PATH`.
+they open the file with no hex view and no paging. They still get a wrapper
+of the plugin's, `vimhex-vim.cmd`/`vimhex-gvim.cmd`, for the reason every
+other entry has one — a verb whose program will not start leaves a console
+that closes before `cmd.exe`'s own message can be read, and the wrapper
+says what is wrong and waits. Those two read `VIMHEX_PLAIN_VIM` rather than
+`VIMHEX_VIM`: that variable selects the Vim *hexpair's* commands open, and
+pointing `vim this` at it would open the GUI for anybody who has set it to
+`gvim`. Their names are deliberately not `vim.cmd`/`gvim.cmd` — they sit on
+`PATH` beside `vimhex.cmd`, where those names would shadow the real
+`vim.exe` for everything that looks Vim up there, hexpair's own commands
+included.
 
 **Why the icons are per action and not per Vim.** The two entries of a pair
 share an icon; at 16px a console/GUI distinction would be a guess about what

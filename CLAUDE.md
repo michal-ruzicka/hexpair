@@ -109,10 +109,32 @@ gvimhexdiff.cmd       "gvim" instead of "vim" - what a context-menu verb
                       treatment as vimhex.cmd/vimhexdiff.cmd; the
                       packaging test's glob is `*vimhex*.cmd` (leading
                       `*`) so it catches these without a separate rule.
-vimhex-contex-entry.  add.reg wires the plugin's four .cmd wrappers, plus
-  add.reg / .remove.reg  a plain `vim`/`gvim` off PATH, into the Explorer
-                      context menu under HKEY_CURRENT_USER, as ONE
-                      `vimhex` submenu holding eight items: open, the
+vimhex-vim.cmd        open a file in a PLAIN Vim or gVim - no hex view,
+vimhex-gvim.cmd       no paging, nothing of the plugin - for the context
+                      menu's last two entries. NOT named vim.cmd/gvim.cmd:
+                      they sit on PATH beside vimhex.cmd, where those names
+                      would shadow the real vim.exe for everything that
+                      looks Vim up there, hexpair's own commands included.
+                      They read VIMHEX_PLAIN_VIM, NOT VIMHEX_VIM - that one
+                      names the Vim hexpair's commands open, and set to
+                      `gvim` (an ordinary thing to set it to) it would make
+                      "vim this" open the GUI. vimhex-gvim.cmd `call`s
+                      vimhex-vim.cmd via %~dp0, same one-source-of-truth
+                      shape as gvimhex.cmd, and inherits the same
+                      not-relocatable-apart consequence.
+                      WHY A WRAPPER AT ALL for something the registry could
+                      run directly: a verb whose program will not start
+                      leaves a console that closes before cmd.exe's "not
+                      recognized" can be read. This checks the exit status,
+                      names the variable to set, and pauses - the same
+                      treatment, and the same HEXPAIR_NO_PAUSE escape, as
+                      vimhex.cmd. It shares that one's known limit too: a
+                      Vim that ran and exited nonzero (`:cq`) lands in the
+                      same branch, which is why the message asks rather
+                      than asserts.
+vimhex-contex-entry.  add.reg wires the plugin's six .cmd wrappers into
+  add.reg / .remove.reg  the Explorer context menu under HKEY_CURRENT_USER,
+                      as ONE `vimhex` submenu holding eight items: open, the
                       diff /left+/right pair, and a plain-Vim "open it
                       normally" - each in BOTH console Vim and gVim, in
                       three groups separated by a rule.
@@ -140,14 +162,12 @@ vimhex-contex-entry.  add.reg wires the plugin's four .cmd wrappers, plus
                       console entry at all. That is also why the plain
                       pair is here despite not being hexpair: on a stock
                       Windows there is otherwise no way to right-click a
-                      file into console Vim. Those two take `vim`/`gvim`
-                      from PATH, NOT through VIMHEX_VIM - that names the
-                      Vim hexpair's own commands open, and these two are
-                      deliberately outside hexpair. They go through
-                      cmd.exe like everything else even though gVim needs
-                      no console: one quoting story for the whole menu,
-                      and a bare command name resolves only because a
-                      shell is what searches PATH.
+                      file into console Vim. Those two run vimhex-vim.cmd/
+                      vimhex-gvim.cmd (above) and so read VIMHEX_PLAIN_VIM,
+                      not VIMHEX_VIM. Every command in the menu therefore
+                      names a .cmd of this plugin's BY PATH and nothing is
+                      looked up on PATH at click time - one quoting story,
+                      and a check in the suite that each of the six ships.
                       Submenu mechanics, all three of which are load-
                       bearing: the folder is a verb with
                       "ExtendedSubCommandsKey" and NO \command subkey (a
