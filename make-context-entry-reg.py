@@ -23,6 +23,7 @@ Python 3.8+, standard library only, deterministic output.
 """
 
 import sys
+from collections import namedtuple
 from pathlib import Path
 
 # Vim on Windows keeps the user's runtime files in %USERPROFILE%\vimfiles
@@ -47,20 +48,43 @@ HEADER_ADD = """\
 ;              or :help license); SPDX-License-Identifier: Vim
 ;
 ; Adds ONE right-click folder under HKEY_CURRENT_USER - no administrator
-; rights needed, nobody else's account touched - holding three entries:
+; rights needed, nobody else's account touched - holding eight entries:
 ;
-;   vimhex >  gvimhex this                  the file you right-clicked
-;             ------------------------      (a separator)
-;             gvimhexdiff select as left    this is the left-hand side
-;             gvimhexdiff select as right   this is the right-hand side
+;   vimhex >  vimhex this                  right-clicked file, in hex, Vim
+;             gvimhex this                 the same, in gVim
+;             ---------------------------  (a separator)
+;             vimhexdiff select as left    left-hand side, in Vim
+;             gvimhexdiff select as left   the same, in gVim
+;             vimhexdiff select as right   right-hand side, in Vim
+;             gvimhexdiff select as right  the same, in gVim
+;             ---------------------------  (a separator)
+;             vim this                     right-clicked file, plain Vim
+;             gvim this                    the same, in plain gVim
+;
+; Every action is offered in both Vims because which one you want is not
+; something a menu can guess, and the console half is the half nothing else
+; offers: Vim's own installer adds a gVim entry to this menu and no console
+; one at all.
+;
+; The last pair open the file NORMALLY - no hex view, no paging, no plugin
+; involved - which is the ordinary "edit this file" the rest of the menu
+; does not do. They run whatever `vim` / `gvim` is on PATH; VIMHEX_VIM is
+; not consulted, since that names the Vim hexpair's own commands use.
 ;
 ; The folder is a verb carrying "ExtendedSubCommandsKey" and no \\command of
 ; its own; the key it names ({submenu}) holds the children
 ; under its own \\shell. That indirection keeps all of this inside HKCU: the
 ; older "SubCommands" scheme resolves verbs against HKLM's CommandStore,
 ; which would need administrator rights. Children are ordered alphabetically
-; by KEY NAME, hence the 10-/20-/30- prefixes, and the separator is
+; by KEY NAME, hence the 10- to 80- prefixes, and each separator is
 ; "CommandFlags"=dword:20 (ECF_SEPARATORBEFORE) on the item under the rule.
+;
+; The two leading "[-...]" lines delete the folder and the child key before
+; either is written again, so importing this over an OLDER hexpair leaves
+; nothing of that release's menu behind. An import is a MERGE otherwise, and
+; children that have since been renamed would stay in the menu beside the
+; new ones, still clickable. It also makes re-importing this file a no-op
+; rather than an accumulation.
 ;
 ; The two diff entries are SYMMETRIC: select either side first. Each records
 ; its side and stops; whichever completes the pair opens the comparison and
@@ -73,8 +97,13 @@ HEADER_ADD = """\
 ; is removing from Windows) or an unsigned stub .exe (usually worse for
 ; antivirus, not better).
 ;
-; They run gvimhex.cmd / gvimhexdiff.cmd, not vimhex.cmd / vimhexdiff.cmd:
-; those default to gVim, so no VIMHEX_VIM is needed in your environment.
+; The gvimhex* entries run gvimhex.cmd / gvimhexdiff.cmd, which default
+; VIMHEX_VIM to "gvim", so the GUI opens with nothing set in your
+; environment; the vimhex* entries run vimhex.cmd / vimhexdiff.cmd, which
+; default to the console "vim" and get their console from the "cmd.exe /c"
+; that starts them - that window is the editor's for as long as it runs.
+; A VIMHEX_VIM already set in your environment overrides the default on
+; both halves, which is what it is for.
 ;
 ; NOTHING TO EDIT for a default install. Just double-click this file, or
 ; run:  reg import vimhex-contex-entry.add.reg
@@ -91,7 +120,7 @@ HEADER_ADD = """\
 ; "Show more options" (Shift+F10 goes straight there). File managers that
 ; use the classic menu - Total Commander, for one - show it directly.
 ;
-; The three .ico files are generated too, by icons/build.py - see
+; The four .ico files are generated too, by icons/build.py - see
 ; icons/design.py. Only the .ico output ships in the release tarball.
 ; ===========================================================================
 """
@@ -119,7 +148,7 @@ HEADER_REMOVE = """\
 ; ===========================================================================
 """
 
-# The submenu the three entries live in. A verb carrying
+# The submenu all the entries live in. A verb carrying
 # "ExtendedSubCommandsKey" is a FOLDER rather than a command -- it must not
 # have a \command subkey of its own -- and the key it names holds the
 # children under its own \shell. That indirection is what keeps this
@@ -133,17 +162,47 @@ SUBMENU_ICON = "hexpair-open.ico"
 
 # Children are shown in ALPHABETICAL order of their key name, not in the
 # order they are written here, which is what the numeric prefixes are for.
+# Two digits throughout, so the order survives a ninth entry.
+#
+# `program` is either one of the plugin's own .cmd files, taken from the
+# install directory (in_root), or a command name looked up on PATH.
 #
 # /left and /right may be used in either order: each records its side, and
 # whichever completes the pair opens the comparison and clears both.
+Item = namedtuple("Item", "key caption icon program args in_root separator")
+
+# Each action twice, console Vim first and gVim second: the console half is
+# the one nothing else offers, since Vim's own installer contributes a gVim
+# entry to this menu and no console entry at all. The pair differ in nothing
+# but which command they call, and the ICON says which ACTION rather than
+# which Vim - a console/GUI difference drawn at 16px would be a guess about
+# what a user can read, and the caption already spells it out.
 #
-# key, caption, icon, .cmd, args, separator-before
+# The last pair are not hexpair at all: they open the file the ordinary way,
+# in a plain Vim with no hex view and no paging, which is the one thing a
+# menu full of hex verbs could not otherwise do. They are also the only
+# entries with no .cmd of the plugin's behind them, so they take `vim` and
+# `gvim` from PATH -- the same names vimhex.cmd/gvimhex.cmd default
+# VIMHEX_VIM to, but read straight rather than through that variable: it
+# selects the Vim hexpair's commands open, and these two are deliberately
+# outside hexpair.
 ITEMS = [
-    ("10-open", "gvimhex this", "hexpair-open.ico", "gvimhex.cmd", "", False),
-    ("20-left", "gvimhexdiff select as left", "hexpair-pick.ico",
-     "gvimhexdiff.cmd", "/left", True),
-    ("30-right", "gvimhexdiff select as right", "hexpair-with.ico",
-     "gvimhexdiff.cmd", "/right", False),
+    Item("10-open-vim", "vimhex this", "hexpair-open.ico",
+         "vimhex.cmd", "", True, False),
+    Item("20-open-gvim", "gvimhex this", "hexpair-open.ico",
+         "gvimhex.cmd", "", True, False),
+    Item("30-left-vim", "vimhexdiff select as left", "hexpair-pick.ico",
+         "vimhexdiff.cmd", "/left", True, True),
+    Item("40-left-gvim", "gvimhexdiff select as left", "hexpair-pick.ico",
+         "gvimhexdiff.cmd", "/left", True, False),
+    Item("50-right-vim", "vimhexdiff select as right", "hexpair-with.ico",
+         "vimhexdiff.cmd", "/right", True, False),
+    Item("60-right-gvim", "gvimhexdiff select as right", "hexpair-with.ico",
+         "gvimhexdiff.cmd", "/right", True, False),
+    Item("70-plain-vim", "vim this", "hexpair-vim.ico",
+         "vim", "", False, True),
+    Item("80-plain-gvim", "gvim this", "hexpair-vim.ico",
+         "gvim", "", False, False),
 ]
 
 # ECF_SEPARATORBEFORE. "CommandFlags" is a DWORD on the item that is to have
@@ -178,6 +237,22 @@ def build_add(root):
     lines = ["Windows Registry Editor Version 5.00", ""]
     lines.append(HEADER_ADD.format(root=root, submenu=SUBMENU_KEY))
 
+    # Whatever an EARLIER hexpair left here, removed before this one writes
+    # its own -- the same two deletions remove.reg makes, and by name for
+    # the same reason: "[-key]" takes every subkey and value with it, so it
+    # does not matter what the previous release called its children. An
+    # import is a merge otherwise, and a child that has since been renamed
+    # would stay in the menu next to the new one, still clickable and still
+    # running the command it was written with. v2.3.0 was the first release
+    # whose submenu a user can have installed, so this is not hypothetical.
+    #
+    # regedit and `reg import` both apply a file top to bottom, which is
+    # what makes delete-then-create in ONE file work.
+    lines.append("[-HKEY_CURRENT_USER\\Software\\Classes\\*\\shell\\vimhex]")
+    lines.append("")
+    lines.append("[-HKEY_CURRENT_USER\\Software\\Classes\\%s]" % SUBMENU_KEY)
+    lines.append("")
+
     # The folder itself. No \command subkey: that is what makes it a folder
     # rather than something clickable.
     lines.append("[HKEY_CURRENT_USER\\Software\\Classes\\*\\shell\\vimhex]")
@@ -188,7 +263,7 @@ def build_add(root):
     lines.append('"ExtendedSubCommandsKey"="%s"' % SUBMENU_KEY)
     lines.append("")
 
-    for key, caption, icon, cmd, args, separator in ITEMS:
+    for entry in ITEMS:
         # cmd.exe, and the console window it briefly creates, is accepted
         # rather than worked around. A wscript.exe/.vbs launcher did hide it,
         # but "run a command with a hidden window" through the Windows Script
@@ -202,19 +277,29 @@ def build_add(root):
         # The outer pair of quotes is cmd.exe's own rule 2 (strip the outer
         # pair, run the rest), which is what lets the .cmd path and the file
         # name each contain spaces.
-        command = 'cmd.exe /c ""%s\\%s"' % (root, cmd)
-        if args:
-            command += ' "%s"' % args
+        #
+        # The plain-Vim pair go through cmd.exe as well, though they have no
+        # .cmd to run and gVim would need no console: it keeps ONE quoting
+        # story for the whole menu, and it is what makes `vim` and `gvim`
+        # bare names resolvable at all -- PATH lookup, and the .bat stubs a
+        # Vim install may put there, are the shell's job and not the
+        # registry's.
+        program = "%s\\%s" % (root, entry.program) if entry.in_root \
+            else entry.program
+        command = 'cmd.exe /c ""%s"' % program
+        if entry.args:
+            command += ' "%s"' % entry.args
         command += ' "%1""'
 
         item = "HKEY_CURRENT_USER\\Software\\Classes\\%s\\shell\\%s" % (
             SUBMENU_KEY,
-            key,
+            entry.key,
         )
         lines.append("[%s]" % item)
-        lines.append('"MUIVerb"="%s"' % caption)
-        lines.append(expand_sz("%s\\icons\\%s" % (root, icon), '"Icon"='))
-        if separator:
+        lines.append('"MUIVerb"="%s"' % entry.caption)
+        lines.append(expand_sz("%s\\icons\\%s" % (root, entry.icon),
+                               '"Icon"='))
+        if entry.separator:
             lines.append('"CommandFlags"=dword:%08x' % ECF_SEPARATORBEFORE)
         lines.append("")
         lines.append("[%s\\command]" % item)

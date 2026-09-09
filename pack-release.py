@@ -54,6 +54,7 @@ FILES = [
     "hexpair/hexpair.vimrc",
     "hexpair/icons/hexpair-open.ico",
     "hexpair/icons/hexpair-pick.ico",
+    "hexpair/icons/hexpair-vim.ico",
     "hexpair/icons/hexpair-with.ico",
     "hexpair/plugin/hexpair.vim",
     "hexpair/vimhex-contex-entry.add.reg",

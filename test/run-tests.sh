@@ -6752,6 +6752,22 @@ print("lone-percent %s" % sorted(lone))
 print("all-cmd %s" % all(c.startswith('cmd.exe /c ""') for c in commands))
 print("sides %s" % sorted(re.findall(r'"(/[a-z]+)"', " ".join(commands))))
 print("all-icons-ico %s" % all(i.endswith(".ico") for i in icons))
+# Every action is offered in BOTH Vims, and the console half is the half
+# that matters: Vim's own installer contributes a gVim entry to this menu
+# and no console one, which is the whole reason the pairs exist. A caption
+# whose partner went missing would leave the menu half-console again.
+verbs = re.findall(r'^"MUIVerb"="([^"]+)"$', flat, re.M)
+print("paired %s" % sorted(v for v in verbs
+                           if v != "vimhex" and not v.startswith("g")
+                           and "g" + v not in verbs))
+# And the file REPLACES the menu rather than merging into it: an import
+# over an older hexpair whose children were named differently would
+# otherwise leave those entries behind, still clickable. Both deletions
+# have to come before anything is written, or they would take the new
+# entries with them.
+dels = [m.start() for m in re.finditer(r"^\[-HKEY", flat, re.M)]
+adds = [m.start() for m in re.finditer(r"^\[HKEY", flat, re.M)]
+print("deletes-first %s" % (len(dels) == 2 and max(dels) < min(adds)))
 # And that each one is a file that ships. A menu entry whose "Icon" names
 # a path that is not there gets no icon and no error - Explorer simply
 # draws nothing - so a renamed .ico would be found by a user and not here.
@@ -6762,16 +6778,20 @@ print("icons-present %s" % sorted(
     if not os.path.exists(os.path.join(root, "icons", i.split("\\")[-1]))))
 REGCHECK
 check "every registry value decodes back to the string it should be" \
-    "values 7 commands 3 icons 4" \
+    "values 17 commands 8 icons 9" \
     "$(sed -n '1,3p' "$WORK/regcheck.out" | tr '\n' ' ' | sed 's/ $//')"
 check "and %1 is the only bare percent left after the variables expand" \
     "lone-percent [1]" \
     "$(sed -n 4p "$WORK/regcheck.out")"
-check "and the two diff entries select a side each, either order" \
-    "all-cmd True sides ['/left', '/right'] all-icons-ico True" \
+check "and the four diff entries select a side each, either order" \
+    "all-cmd True sides ['/left', '/left', '/right', '/right'] all-icons-ico True" \
     "$(sed -n '5,7p' "$WORK/regcheck.out" | tr '\n' ' ' | sed 's/ $//')"
+check "and every entry has a gVim twin and a console one" \
+    "paired []" "$(sed -n 8p "$WORK/regcheck.out")"
+check "and the menu is replaced, not merged into" \
+    "deletes-first True" "$(sed -n 9p "$WORK/regcheck.out")"
 check "and every icon it names is a file the release ships" \
-    "icons-present []" "$(sed -n 8p "$WORK/regcheck.out")"
+    "icons-present []" "$(sed -n 10p "$WORK/regcheck.out")"
 
 # And that they are what the GENERATOR makes. The checks above read the
 # committed files and would pass just as well on a hand-edit, while

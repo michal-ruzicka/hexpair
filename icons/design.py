@@ -1,18 +1,27 @@
 #!/usr/bin/env python3
-"""hexpair's three Explorer context-menu icons.
+"""hexpair's four Explorer context-menu icons.
 
 A gVim-ish base mark - a white V on Vim's own green, original rather than
 extracted from a real gvim.exe (there is no Windows box handy to pull the
 real one off of) - plus two badges:
 
 - bottom-right, smaller: a "0x" chip in the blocky 5x7 font, marking these
-  as hexpair's own entries.
+  as hexpair's own entries. Its ABSENCE is what marks the odd one out:
+  hexpair-vim is the bare mark, for the menu's two plain-Vim entries, which
+  open the file the ordinary way and have nothing to do with hex. An icon
+  claiming "0x" over a normal edit would be the one outright lie in the
+  set.
 - bottom-left, bigger, only on the diff pair: two window panes side by
   side, echoing vimhexdiff's own actual `vsplit` - blue on the left,
   orange on the right, the side THIS icon represents shown at full colour
   and the other dimmed. Chosen over a top-right diff mark plus a top-left
   L/R letter (the first design) because at 16px neither text nor an arrow
   reads reliably - colour still does.
+
+An icon says which ACTION its entry performs, never which Vim opens it:
+every action is in the menu twice, once for console Vim and once for gVim,
+and the two share an icon. The caption is where that difference is legible;
+at 16px it would not be.
 """
 
 from rasticon import fill_rect, fill_round_rect, fill_triangle, draw_text
@@ -65,6 +74,7 @@ def compose(*layers):
 # name -> spec, name also used as the shipped .ico's basename
 ICONS = {
     "hexpair-open": compose(base_mark, hex_badge),
+    "hexpair-vim": compose(base_mark),
     "hexpair-pick": compose(base_mark, hex_badge, diff_split_badge("left")),
     "hexpair-with": compose(base_mark, hex_badge, diff_split_badge("right")),
 }
