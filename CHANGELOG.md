@@ -7,6 +7,264 @@ and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html); the
 `Version:` header in `plugin/hexpair.vim` is the single source of truth.
 
+## [v2.4.0] – 2026-09-09
+
+### Added
+- **A second, smaller release archive: `hexpair.vX.Y.Z.minimal.tar.bz2`.**
+  The same plugin, compressed, without `CLAUDE.md`, `CONTRIBUTING.md` and
+  this file: about 160 KiB against the complete tarball's 900 KiB. It exists
+  because [vim.org](https://www.vim.org/scripts/script.php?script_id=6194),
+  where hexpair is now listed as script #6194, refuses an upload somewhere
+  between 224 and 250 KiB. Nothing the plugin needs to run is missing from
+  it — what is gone is reading matter that is a click away on GitHub, and
+  the changelog is in vim.org's own per-version release notes there. It is
+  signed like the complete one, and CI compares the Linux and the Windows
+  build of both, so each is byte-identical whichever platform makes it.
+  `./pack-release` builds the pair.
+- **`:HexPairModified`, a key that turns the edit marking off.** The marking
+  of bytes you have changed and not yet written is the one part of a hex
+  page whose cost follows what you *did* rather than what is on screen: an
+  overwrite marks the bytes you typed, but an **insert or a delete moves
+  every byte after it**, so every one of them differs from what the page was
+  read as — the whole rest of the page is marked, correctly, and compared
+  again on every keystroke. `:HexPairModified` stops that and starts it
+  again, `:HexPairModified!` stops it the way `:HexPairFind!` and
+  `:HexPairDiff!` stop theirs, and `<Leader>M` in `hexpair.vimrc` is the
+  key. It flips `g:hexpair_show_modified` rather than being a second switch
+  beside it, and switching it off clears the marks in every window showing
+  the page. See `:help :HexPairModified`.
+- **`g:hexpair_scan_block`, how much of the file a scan reads at a time.**
+  `:HexPairFind` and the comparison behind `:HexPairDiffNext` read the file
+  in blocks, and the block was a fixed megabyte — which meant one `xxd`
+  process, and about 8 ms of starting it, for every megabyte of a file that
+  can be terabytes. It is a setting now, between 1 MiB and 1 GiB, and the
+  default is **8 MiB**: that is where the process cost has essentially gone
+  (a 256 MiB scan goes from 10.3 s to 8.4 s) and where the trade stops
+  paying — 64 MiB is seven times the memory for another half a percent of
+  the time, because what a scan really spends is `xxd` turning bytes into
+  hex and Vim matching two characters for every byte of the file. Nothing
+  to do with `g:hexpair_page_size`: a page is what you are shown, a block
+  is what a scan reads and never displays, and the block is the whole of
+  what a scan costs in memory whatever the size of the file — some eight
+  bytes of Vim per byte of block for a search, sixteen for a comparison,
+  which holds a block of each file at once. Read at the start of each
+  scan, so it takes effect on the next search rather than on the next
+  `:HexPairOpen`. The measurements are in the README under *What it costs*
+  and in `:help g:hexpair_scan_block`.
+- **`:HexPairModifiedShow`, what a byte was before you edited it.** The
+  marking of unwritten edits covers the **new** byte, so what the file still
+  has there is exactly what the screen no longer shows — and no marking can
+  show it. This says it: the byte under the cursor, or every byte of a
+  Visual selection, as the buffer holds it now beside what the page held
+  when it was read from disk, in the same two aligned rows
+  `:HexPairDiffShow` uses (`here` over `disk`). Bytes an *insert* has added
+  have nothing behind them at all, and come out as `--` with the heading
+  saying where the page as read stopped, rather than as a plausible `00`.
+  An untouched byte says so instead of refusing. It is `:HexPairDiffShow`
+  asked of this view's own file instead of another one, so it is
+  `<Leader>d` in `hexpair.vimrc` — the lowercase of that one's
+  `<Leader>D` — with a Normal-mode and a Visual-mode form. Both views
+  answer it, and both are exact: the live bytes are taken the way a write
+  takes them, so a NUL stays a NUL and the answer agrees with what `:w`
+  would put on disk. See `:help :HexPairModifiedShow`.
+
+### Changed
+- **A bound view says a page is not there instead of showing another one.**
+  `'scrollbind'` cannot follow a page turn, so hexpair moves every bound
+  window to the page holding the same byte — and a window whose own file did
+  not reach that far **stayed where it was**. Two windows then showed
+  different offsets side by side with nothing saying so, which in
+  `vimhexdiff` is exactly the confusion binding them is meant to prevent.
+  Such a window now goes to the page and says the page is not there: a
+  banner naming it, where the file really ends and on which page, and no
+  bytes at all — so nothing marks, jumps to or inspects anything on it, and
+  a `:w` of it is refused rather than quietly doing nothing. Only a page
+  *wholly* past the end is shown that way; a last partial page is a real
+  page and is shown as one. See `:help hexpair-absent-page`.
+- **Leaving hex mode lands where you were, not where you started.**
+  `:HexPairUnhex` re-opens the file as text and put the cursor back at the
+  line and column hex mode was *entered* from. It goes to **the byte the hex
+  view was on** now. Hex mode is where a file gets written — by this plugin
+  or by anything else while it was open — so a position taken before all
+  that can point anywhere, and where you are when you leave is where you
+  were looking. The entry position is still the fallback, for the two cases
+  where a byte offset cannot be worked out: a page whose dump no longer
+  reads as one (which `:HexPairUnhex!` is exactly the way out of), and a
+  file the plain view does not describe at all. It is worked out the way the
+  way *in* works it out: a line costs the file its characters where
+  `'fileencoding'` is single-byte — which is how Vim reads a **binary opened
+  with a plain `:edit`**, so 200 bytes of file are 293 of buffer and only a
+  character offset carries across — and its bytes otherwise, plus the ending
+  `'fileformat'` gives it, and **no ending on the last line when the file
+  has none**, which is most binaries. The total is checked against the size
+  on disk, so a file the model does not fit falls back rather than landing
+  somewhere invented.
+- **`'spell'` is off in the dump.** A speller reads a hex dump as prose —
+  `de ad be ef` is four misspelt words, and the ASCII column is worse, since
+  whatever the bytes happen to spell gets underlined. The bundled
+  `ftplugin/xxd.vim` turns it off, which means the **dump alone**: the
+  windowed text view is not that filetype, so it spells exactly as the
+  window always did, and a window that never had `'spell'` on is never given
+  it. Since `'spell'` is window-local, the undo carries the value the window
+  had rather than the `spell<` that would bring back the global one.
+  Override it the documented way, in `~/.vim/after/ftplugin/xxd.vim`.
+- **The text view marks what you edited exactly.** `HexPairModified` and the
+  jumps over it compared, in that view, in the view's *own spelling* — where
+  a NUL and a line break are the same character, because Vim holds a NUL
+  inside a line and hands it back as a line break. So swapping one for the
+  other was **not an edit at all**: the page said "nothing edited" while
+  `:w` would have written a different byte. Both views now derive their runs
+  from one comparison of real bytes, the one the hex view always used, so
+  the marking, the jumps and `:HexPairModifiedShow` can no longer disagree
+  with each other or with the write. Two more things fell out of it: an edit
+  that changes the page's length now reports the byte it really starts at
+  (it used to name the one after), and an insert is one edit rather than one
+  per line it happens to touch — the hex view's answer all along. The cost
+  is that the text view compares the whole page per edit, as the hex view
+  always has: about 30 ms at the default page size, where it used to compare
+  only the lines on screen. Nothing is recomputed between edits.
+  `:HexPairDiff`'s marking took the same wrong turn and is fixed the same
+  way, so two files differing in exactly that byte are no longer identical
+  in the text view — that one is nearly free, since both layers share the
+  page's bytes. With a comparison running as well the pair costs about
+  50 ms an edit at the default page size. What is left is the view's own
+  and not the comparison's: a changed byte that *is* a line break can be
+  jumped to but never painted, since a line break has no column. The three
+  functions that did the spelling comparison are gone with it. See
+  `:help hexpair-marking-views`.
+- **Searching and comparing a large file are 5.8× and 65× faster.** Both
+  read the file a block at a time, and both used to read every block as hex
+  through `xxd` and work on the text. Where Vim can read a byte range on its
+  own — `readblob()` with an offset and a size, which is 9.0.0795 with
+  `+num64`, the same patch a splice needs — they work on the raw bytes
+  instead. Over a 256 MiB file, `:HexPairFind` end to end went from **11.6 s
+  to 2.0 s** and `:HexPairDiffNext` from **16.2 s to 0.25 s**, with a
+  search's memory down from 97 MB to 23 MB. A comparison becomes two reads
+  and a `memcmp`; a search has more to do, since Vim has no "find these
+  bytes in a Blob", so it walks every occurrence of **one** byte of the
+  pattern and checks the rest by hand, in the plugin's one Vim9 `:def`
+  function (`autoload/hexpair.vim`) — five times faster at that loop than
+  legacy script. Which byte it walks is chosen by sampling the block,
+  because the walk costs a step per occurrence: `00 00 00 00 01` in 64 MiB
+  of zeros walks the `01` and takes 0.30 s where it took 13.2 s, and when
+  *every* byte of the pattern is common in a block that block goes through
+  `xxd` instead, so the bad case costs what it always did. `?` nibble
+  wildcards work either way.
+- **The `xxd` reader is still there, and is faster too.** A Vim without that
+  patch, or a hexpair whose `autoload/` was not copied, reads blocks as hex
+  as before — and **the answers are identical**: the test suite holds the
+  two readers against each other and requires them to agree, and CI runs the
+  whole suite against Vim 8.0.0000 built from source. That reader now asks
+  `xxd` for `-c 256`, the widest line it will portably give, which is a
+  ninth as many line breaks to strip and some 8% off a whole-file scan. Past
+  2 GiB on native Windows it is the only reader either way for a different
+  reason: `readblob()` shares `xxd`'s 32-bit limit there, and answers an
+  out-of-range read with an empty Blob *and* success, so past that mark the
+  bytes come out of the temp file PowerShell already writes — the fast
+  comparison and search still apply, only the read in front of them is the
+  slow one.
+- **`gvimhex` and `gvimhexdiff` are documented.** `hexpair.bashrc` has
+  defined them all along — `vimhex` and `vimhexdiff` with `VIMHEX_VIM`
+  defaulting to `gvim` — and said so only in its own comments: neither the
+  README nor `:help hexpair-vimhex` mentioned them, so the only way to find
+  out you had them was to read the file you had sourced. Both now list all
+  four, and `:help hexpair-vimhex-gui` is the section for the pair.
+- **A usage message names the command you typed.** `gvimhex` with no
+  arguments answered `usage: vimhex ...`, because the argument check lives
+  in the function it delegates to. It reads the caller now, so all four say
+  their own name; the grammar is still defined once.
+- **`README.md` has an outline.** A clickable list of its own sections, in
+  document order, between the quick start and the features — 1400 lines is
+  past the point where scrolling to find out what is even in a file is
+  reasonable. Held against the headings by a test, both directions and the
+  order, so a renamed or added section cannot leave it behind.
+- **The `$-N` jumps are in the README now.** `:HexPairPageGoto`,
+  `:HexPairGoOffset` and `:HexPairOpen`'s `[page]` have taken `$-N` — N back
+  from the end, the thing a bare `-N` cannot say — since v2.3.0, and every
+  place the README listed the forms stopped at `$`. Both prompts
+  (`<Leader>g`, `<Leader>b`) too, and `<Leader>b` had not been shown taking
+  `+N`/`-N` either.
+- **`README.md` opens with a *TL;DR: Quick Start*.** Install, source, run —
+  and then the complete key and command reference on one screen, which is
+  what the sixty-odd pages under it were not. The commands there are typed
+  in their short `:HP...` form, because the list is for using rather than
+  for reading. Complete is the point, so a test now holds the list against
+  `hexpair.vimrc` in both directions — a key the mappings file defines and
+  the quick start does not, or the other way round, fails the suite — and
+  asks a loaded Vim whether every short name it types is really a command.
+- **`hexpair.vimrc` moves `:HexPairUnhex` to `<Leader>u`, and gives
+  `<Leader>U` the bang.** The way back out of a paged view refuses over
+  unwritten edits to the page, and `:HexPairUnhex!` discards them — which
+  is exactly the relation `<Leader>j`/`<Leader>J`, `<Leader>g`/`<Leader>G`,
+  `<Leader>b`/`<Leader>B` and `<Leader>mg`/`<Leader>mG` already have in
+  that file, so it was the one force variant with no key and the one
+  lowercase key left unused. **If you have `<Leader>U` in your fingers,
+  it now discards.** The plugin itself is unchanged: it defines no
+  mappings, `:HexPairUnhex[!]` is what it always was, and a key you have
+  mapped yourself is still left alone.
+
+### Fixed
+- **`:HexPairFind` and `:HexPairDiffNext` searched the file and ignored what
+  you had typed.** Both walk the file a block at a time, and both read those
+  blocks from disk — so on the one page that can hold unwritten edits their
+  answers were wrong in both directions at once. Bytes typed into the page
+  were *"not found in this file"* while they were on the screen; bytes typed
+  **over** were still found, and the cursor jumped to an offset where they
+  were no longer to be seen. The page in view is now laid over each block as
+  it is read, so what is found is what is shown, and `:HexPairDiffShow`
+  reports the buffer's byte on this side — the one the marking beside it
+  compares and the one the cursor is on. The file being compared *against*
+  is still read as it is on disk: how what is here differs from that file is
+  the question these ask. An insert grows the page past its own end on disk
+  and those bytes have no offset to report or to jump to, so that many bytes
+  at the page's tail are searched once `:w` has given them one — the
+  boundary `:HexPairModifiedShow` already names. `:HexPairReplace` was never
+  affected: it has always decided on the buffer's bytes.
+- **The version gate was documented as two operations where it is three.**
+  `README.md`'s *Pages* section and `:help hexpair-paged` both said that
+  only shortening a file and `:w {file}` need Vim 9.0.0795, and then listed
+  inserts among the things that run on the 8.0 floor. An insert with more
+  than half the file after it goes through the splice, because moving that
+  much of a tail costs more than rewriting the file, and the splice is
+  exactly what `readblob()`'s offset is for — so that write is refused on
+  8.0 like the other two, and the refusal message has always said so. The
+  help even counted "the three operations above" two sentences after naming
+  two. `Requirements` had it right all along.
+- **`:HexPairDiffShow` asked from the windowed text view reported the wrong
+  byte.** It read the cursor as a position in a *dump* — three columns per
+  byte, a line of bytes per line — where the text view has one column per
+  byte, so the offset came out short by however much of the page was above
+  the cursor. It answered about a real byte of the file, plausibly and
+  confidently, from the wrong place. It now asks the same question the
+  markings and the jumps ask, which is right in either view.
+
+- **`hexpair.vimrc` was missing three options and a highlight group.** The
+  file a user is told to copy into their vimrc lists every option
+  commented out, so that setting one is a matter of uncommenting a line —
+  and `g:hexpair_insert_encoding`, `g:hexpair_show_inspect` and
+  `g:hexpair_verify_writes` had no line, nor did the `HexPairInspect`
+  highlight group, which was the only one of eight absent from the Colours
+  block. `g:hexpair_insert_encoding` was the worst of them: the same file
+  *mentions* it in prose a hundred lines above, so a reader learned the
+  option exists and then could not find it. All four are there now, and a
+  check holds the file to listing every option, every `<Plug>` target and
+  every highlight group the plugin defines.
+- **The picture at the top of `README.md` never appeared for anyone
+  reading it outside GitHub.** It is a relative link to
+  `demo/hexpair-demo.gif`, and that file is 5.7 MB and has never been in
+  the release tarball; the new minimal package leaves out three more of
+  the documents the README links to. The links stay relative in the
+  repository, where they are right — that is how the file reads on GitHub
+  and in a checkout — and `pack-release` now rewrites the ones an archive
+  cannot answer into GitHub URLs as it packs, per archive: `CHANGELOG.md`
+  stays a relative link in the complete tarball, which carries it, and
+  becomes a URL in the minimal one, which does not. Those URLs name the
+  **release tag**, so a link out of a package reaches the files that
+  package was built beside rather than whatever `main` has become since. A
+  check unpacks both archives and holds every relative link in them to
+  resolving inside the same archive, and every absolute one to naming the
+  tag the version will carry.
+
 ## [v2.3.0] – 2026-09-02
 
 ### Added
@@ -104,7 +362,7 @@ and this project adheres to
   actually cheaper there than anywhere else**: neither Vim nor `xxd` can
   shorten a file except by rewriting it, so a shrinking write copies the
   whole file on every other platform, while `.NET`'s `SetLength` truncates
-  in place. `README.md`'s *Windows and the 2 GiB limit* has the table of
+  in place. `README.md`'s *2 GiB Limit on Windows* has the table of
   what runs where. Every write past the limit reads back what it wrote
   before reporting success; `g:hexpair_verify_writes = 0` opts out.
 
@@ -154,7 +412,7 @@ and this project adheres to
   `long` is 64 bits. `xxd -r` and `xxd -o` share the limit, so the page you
   look at, the bytes a diff compares and the bytes a `:w` puts back were
   all affected. Everything past that limit now goes through PowerShell —
-  see **Windows and the 2 GiB limit** in `README.md`.
+  see **2 GiB Limit on Windows** in `README.md`.
 - **A nonsensical `g:hexpair_bytes_per_line` was accepted.** Zero passed
   the "page size must be a multiple of it" check, because Vim answers
   `512 % 0` with `0` rather than an error, and a negative one passed for
@@ -745,6 +1003,7 @@ in one place:
 - Vim help documentation (`:help hexpair`).
 
 
+[v2.4.0]: https://github.com/michal-ruzicka/hexpair/compare/v2.3.0...v2.4.0
 [v2.3.0]: https://github.com/michal-ruzicka/hexpair/compare/v2.2.0...v2.3.0
 [v2.2.0]: https://github.com/michal-ruzicka/hexpair/compare/v2.1.0...v2.2.0
 [v2.1.0]: https://github.com/michal-ruzicka/hexpair/compare/v2.0.0...v2.1.0

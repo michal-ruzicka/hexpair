@@ -64,8 +64,11 @@ call s:Map('n', '<Leader>h', '<Plug>(HexPairToggle)')
 " The way back out: a plain buffer of a whole file toggled to hex comes
 " back to its ordinary, unpaged, non-binary text view with the options it
 " had before. A view opened as hex (vimhex, :HexPairOpen) has no such text
-" view, so this refuses it and says why.
-call s:Map('n', '<Leader>U', '<Plug>(HexPairUnhex)')
+" view, so this refuses it and says why. The capital discards unwritten
+" edits to the page rather than refusing over them, which is what every
+" other capital here does.
+call s:Map('n', '<Leader>u', '<Plug>(HexPairUnhex)')
+call s:Map('n', '<Leader>U', ':HexPairUnhex!<CR>')
 
 " Move between the columns of a dump: to the hex one, to the ASCII one, or
 " to whichever one the cursor is not in - staying on the same byte.
@@ -159,6 +162,19 @@ call s:Map('n', '<Leader>c', '<Plug>(HexPairFindClear)')
 " than to what another file has.
 call s:Map('n', '<Leader>e', '<Plug>(HexPairModifiedNext)')
 call s:Map('n', '<Leader>E', '<Plug>(HexPairModifiedPrev)')
+" Stop marking them, and start again. The marking is the one thing on a
+" hex page whose cost follows what you DID rather than what is on screen:
+" insert or delete a byte and every byte after it differs from what the
+" page was read as, so the whole rest of the page is marked and compared
+" again on every keystroke. This is the way out of that.
+call s:Map('n', '<Leader>M', '<Plug>(HexPairModified)')
+" What the file on disk has here - the byte under the cursor, or a whole
+" Visual selection - beside what the buffer now holds. The marking says
+" which bytes you changed; the byte it covers is the new one, and this is
+" what the old one was. The lowercase of <Leader>D, which asks the same
+" question of another file.
+call s:Map('n', '<Leader>d', '<Plug>(HexPairModifiedShow)')
+call s:Map('x', '<Leader>d', '<Plug>(HexPairModifiedShow)')
 
 " --- Comparing with another file -----------------------------------------
 " Next and previous CHANGE against the file :HexPairDiff compares with - a
@@ -228,6 +244,13 @@ call s:Map('x', '<Leader>D', '<Plug>(HexPairDiffShow)')
 " Do NOT ask before a write that changes the page's length (default 1, ask).
 "let g:hexpair_page_confirm = 0
 "
+" How much of the FILE a file-wide scan reads at a time - :HexPairFind and
+" the comparison behind :HexPairDiffNext (default 8 MiB). Nothing to do
+" with a page: this is what a scan costs in memory, and it is the same for
+" any size of file. Between 1 MiB and 1 GiB, and past 8 MiB a bigger one
+" buys fewer xxd processes and little else.
+"let g:hexpair_scan_block = 64 * 1024 * 1024
+"
 " Leave the global 'paste' option alone (default 1: keep it on while the
 " cursor is in a hex buffer, and restore it when the cursor leaves).
 "let g:hexpair_paste = 0
@@ -242,10 +265,24 @@ call s:Map('x', '<Leader>D', '<Plug>(HexPairDiffShow)')
 " Do NOT underline the byte a mark stands on (default 1, underline it).
 "let g:hexpair_show_marks = 0
 "
+" Do NOT mark the bytes :HexPairInspect has just read (default 1, mark them
+" for as long as the cursor stays on the byte they were read from).
+"let g:hexpair_show_inspect = 0
+"
+" The encoding :HexPairInsertChar writes a character's bytes in (default
+" utf-8). Any encoding Vim can convert to; the prompt takes ++enc= to say
+" one for a single insert without changing this.
+"let g:hexpair_insert_encoding = 'latin1'
+"
 " Make a plain :split of a hex page an independent view of the same file,
 " with its own page and cursor (default 0: :split means what it means
 " everywhere else in Vim, two windows onto one buffer).
 "let g:hexpair_split_views = 1
+"
+" Do NOT read a PowerShell write back before reporting success (default 1,
+" read it back). Past 2 GiB on native Windows only - everywhere else the
+" writer is xxd and nothing reads anything back.
+"let g:hexpair_verify_writes = 0
 "
 " Do NOT pass a page turn on to the windows scroll-bound to this one
 " (default 1, pass it on - which is what keeps `vimhexdiff` showing the
@@ -284,6 +321,11 @@ call s:Map('x', '<Leader>D', '<Plug>(HexPairDiffShow)')
 " The byte a mark stands on (default: bold underline and no colour at all,
 " so that it coexists with the three above instead of competing with them):
 "highlight HexPairMark ctermbg=195 ctermfg=23 guibg=#d7ffff guifg=#005f5f
+"
+" The bytes :HexPairInspect has just read, marked for as long as the cursor
+" stays on the byte they were read from (g:hexpair_show_inspect turns this
+" off altogether):
+"highlight HexPairInspect ctermbg=189 ctermfg=54 guibg=#d7d7ff guifg=#5f0087
 
 let &cpoptions = s:save_cpo
 unlet s:save_cpo

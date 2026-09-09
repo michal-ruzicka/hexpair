@@ -1,8 +1,8 @@
 " hexpair.vim - Hex viewing with hex<->ASCII pair highlighting
 " Maintainer:  Michal Růžička <ruzicka.mich@gmail.com>
 " URL:         https://github.com/michal-ruzicka/hexpair
-" Version:     2.3.0
-" Date:        2026-09-02
+" Version:     2.4.0
+" Date:        2026-09-09
 " License:     Vim License - same terms as Vim itself (see LICENSE.md
 "              or :help license); SPDX-License-Identifier: Vim
 "
@@ -47,6 +47,9 @@
 "   g:hexpair_page_size        bytes per page (default 128 KiB)
 "   g:hexpair_page_confirm     set to 0 to skip the confirmation a
 "                              length-changing write asks for
+"   g:hexpair_scan_block       bytes a file-wide scan (:HexPairFind,
+"                              :HexPairDiffNext) reads at a time
+"                              (default 8 MiB)
 "   g:hexpair_ruler            set to 1 for a line numbering the byte
 "                              columns of the dump (default 0)
 "   g:hexpair_show_modified    set to 0 to stop marking the bytes edited
@@ -64,6 +67,9 @@
 "   g:hexpair_bind_pages       set to 0 to stop a page turn from taking
 "                              the scroll-bound windows with it
 "                              (default 1, take them)
+"   g:hexpair_verify_writes    set to 0 to stop a PowerShell write from
+"                              reading back what it wrote (past 2 GiB on
+"                              Windows only; default 1)
 "   g:hexpair_debug            set to 1 to echo position-mapping traces
 "                              (inspect with :messages)
 "   HexPairActive, HexPairMirror, HexPairPageBanner, HexPairModified,
@@ -117,6 +123,38 @@ endif
 " project's `vim -es -u NONE` harness.
 if !exists('g:hexpair_page_confirm')
   let g:hexpair_page_confirm = 1
+endif
+
+" How much of the file |:HexPairFind| and |:HexPairDiffNext| take in at a
+" time. Not a page and nothing to do with one: a scan reads the FILE, so
+" this is the only thing that decides what a scan costs in memory, and it
+" is the same for a 1 MiB file and a 1 TiB one.
+"
+" A block costs one xxd process, and then holds the block as hex - twice
+" the block, plus the copies substitute() makes taking the line breaks
+" out, which measured at some eight bytes of Vim per byte of block for a
+" search and sixteen for a comparison, which holds two blocks at once.
+"
+" So the setting trades processes against memory, and it is worth
+" understanding that the trade runs out. Measured over a 256 MiB file
+" scanned end to end, block against wall time and peak RSS:
+"
+"     1 MiB   10.3 s    19 MB       16 MiB   8.1 s   142 MB
+"     4 MiB    8.4 s    44 MB       64 MiB   7.9 s   536 MB
+"     8 MiB    8.4 s    77 MB      128 MiB   8.2 s  1036 MB
+"
+" A process costs about 8 ms to start, so raising the block from 1 MiB to
+" 8 MiB is where nearly all of that 8 ms x 256 goes away. Past it there
+" is nothing left to buy: what a scan spends is xxd turning bytes into
+" hex (some 64 MB/s) and Vim reading, stripping and matching two
+" characters for every byte, and none of that cares how the file is cut
+" up. 64 MiB is seven times the memory of 8 MiB for half a percent of the
+" time, and it is a legal setting rather than a recommended one.
+"
+" The default is therefore 8 MiB: the knee of that curve, and 77 MB of a
+" scan is still a number a plugin may spend without asking.
+if !exists('g:hexpair_scan_block')
+  let g:hexpair_scan_block = 8 * 1024 * 1024
 endif
 
 " A ruler line under the top banner, numbering the byte columns of the
@@ -312,6 +350,20 @@ endfunction
 " THIS function rather than restating the patch number keeps the answer and
 " the gate from ever disagreeing.
 function! HexPairPagedSpliceSupported() abort
+  return HexPairPagedBlobRangeSupported()
+endfunction
+
+" The same requirement under the name of the OTHER thing it makes
+" possible, which is reading a byte range of a file without running xxd.
+" One predicate because it is literally one patch; two names because a
+" caller should say which of the two it is about - a scan is not a splice
+" and a message about one would be nonsense in the other.
+"
+" What it buys a scan is not a detail: xxd converts at some 64 MB/s and
+" the answer has to come back through a pipe and have its line breaks
+" taken out, where readblob() is a read. Measured over an 8 MiB block,
+" 209 ms against 3 ms.
+function! HexPairPagedBlobRangeSupported() abort
   return has('patch-9.0.0795') && has('num64')
 endfunction
 
@@ -370,10 +422,52 @@ function! HexPairPagedSizeError(size, bytesperline) abort
   return ''
 endfunction
 
-" Blocks the file-wide comparison reads in. Smaller than the write's,
-" because two of them are held as hex at once - a megabyte of file is two
-" megabytes of hex on each side.
-let s:diffblock = 1024 * 1024
+" The range g:hexpair_scan_block is allowed. The floor is where a process
+" per block stops being noise - 8 ms of it against 20 ms of work, and it
+" only gets worse below that - and it is also comfortably longer than any
+" pattern that could be typed at a : prompt, which the scan needs (see
+" s:FindScan()). The ceiling is a memory limit and nothing else: a
+" comparison holds two blocks as hex, so 1 GiB of block is some 16 GiB of
+" Vim, which is past the point where naming a larger number could be
+" doing anyone a favour.
+"
+" Neither is a correctness boundary, unlike s:pagesizemax: a block is
+" handed to xxd's -l as a page is, and 1 GiB is well inside the 32-bit
+" number that takes.
+let s:scanblockmin = 1024 * 1024
+let s:scanblockmax = 1024 * 1024 * 1024
+
+" Same shape as HexPairPagedSizeError(): the value is taken as an argument
+" rather than read from g: here, so the suite can exercise the branches
+" without setting global state.
+function! HexPairPagedScanBlockError(block) abort
+  if a:block < s:scanblockmin || a:block > s:scanblockmax
+    return printf('hexpair: g:hexpair_scan_block (%d) must be between %d '
+          \ . 'and %d bytes (1 MiB to 1 GiB) - below that a scan spends '
+          \ . 'its time starting one xxd per block, and above it a '
+          \ . 'comparison holds two blocks of hex at sixteen bytes of '
+          \ . 'Vim per byte of block. The default is 8 MiB.',
+          \ a:block, s:scanblockmin, s:scanblockmax)
+  endif
+  return ''
+endfunction
+
+" The block every file-wide scan reads in, checked as it is read.
+"
+" Checked HERE rather than when the view is opened, which is where
+" g:hexpair_page_size is checked, because the two are not the same kind of
+" setting: a page size is baked into the buffer at :HexPairOpen and a scan
+" block is not baked into anything, so this one can be changed between two
+" presses of the same key and has to be believed when it is. Each scan
+" reads it once, into a local - so a value that changes mid-scan cannot
+" move a block seam under the loop that is walking them.
+function! s:ScanBlock() abort
+  let err = HexPairPagedScanBlockError(g:hexpair_scan_block)
+  if !empty(err)
+    throw err
+  endif
+  return g:hexpair_scan_block
+endfunction
 
 " How much of two runs of hex is compared at once when counting the bytes
 " that differ (HexPairPagedCountDifferences()). Measured over a 128 KiB
@@ -1132,8 +1226,17 @@ function! HexPairPagedModifiedPositions(first, last) abort
 endfunction
 
 function! s:ModifiedHighlight() abort
-  if !g:hexpair_show_modified || !get(b:, 'hexpair_page_active', 0)
+  if !get(b:, 'hexpair_page_active', 0)
         \ || get(b:, 'hexpair_page_hex', '') ==# ''
+    return
+  endif
+  " Switched off, this CLEARS rather than returning: the marks belong to
+  " the window, and every other window showing this page has to lose them
+  " too. It costs nothing once they are gone - the id list is empty and
+  " the loop does not run - and it is what lets |:HexPairModified| take
+  " effect everywhere instead of only where it was typed.
+  if !g:hexpair_show_modified
+    call s:ClearModifiedHighlight()
     return
   endif
   " Nothing to recompute while the page, the window's view of it and the
@@ -1384,10 +1487,21 @@ function! s:FollowPageTurn(offset) abort
     call s:Stayed('has unsaved changes')
     return 0
   endif
+  " A page this file does not reach. Staying put is what this used to do,
+  " and it is the one answer that cannot be right here: the two windows
+  " then show different offsets side by side with nothing saying so, which
+  " in a bound pair is exactly the confusion this function exists to
+  " prevent. So the view goes to that page and says it is not there.
   if page >= HexPairPagedTotalPages(b:hexpair_page_size,
         \ getfsize(b:hexpair_page_file))
-    call s:Stayed(printf('has no page %d', page + 1))
-    return 0
+    let bound = &l:scrollbind
+    setlocal noscrollbind
+    try
+      call s:LoadAbsent(page)
+    finally
+      let &l:scrollbind = bound
+    endtry
+    return 1
   endif
   let bound = &l:scrollbind
   setlocal noscrollbind
@@ -1457,12 +1571,20 @@ endfunction
 function! HexPairPagedMarkingPositions(layer, first, last) abort
   let hex = s:IsHexView()
   if a:layer ==# 'modified'
+    " Both views mark the runs s:ModifiedRuns() found, so the marking and
+    " the jumps over it (|:HexPairModifiedNext|) can never disagree about
+    " what was edited - the text view used to compare a second time, in
+    " its own spelling, and could paint nothing where the jump found an
+    " edit. What the text view still cannot show is a changed byte that
+    " IS a line break, because a line break has no column of its own; that
+    " is the view, not the comparison.
     return hex ? HexPairPagedModifiedPositions(a:first, a:last)
-          \ : s:TextComparePositions(a:first, a:last, 'page',
-          \                          get(b:, 'hexpair_page_hex', ''))
+          \ : HexPairPagedTextPositions(s:TextSpans(a:first, a:last),
+          \                             s:ModifiedRuns())
   elseif a:layer ==# 'diff'
     return hex ? s:DiffPositions(a:first, a:last)
-          \ : s:TextComparePositions(a:first, a:last, 'diff', s:DiffHex())
+          \ : HexPairPagedTextPositions(s:TextSpans(a:first, a:last),
+          \                             s:DiffRuns())
   elseif a:layer ==# 'find'
     return hex ? HexPairPagedFindPositions(a:first, a:last)
           \ : s:TextFindPositions(a:first, a:last)
@@ -1715,6 +1837,7 @@ function! s:LoadPage(pageidx) abort
           \ a:pageidx + 1, b:hexpair_page_file, len(dump), expect)
   endif
 
+  let b:hexpair_page_absent     = 0
   let b:hexpair_page_index      = a:pageidx
   let b:hexpair_page_base       = base
   let b:hexpair_page_len        = len
@@ -2147,6 +2270,18 @@ function! HexPairPagedSeekReadHexForTest(file, off, len) abort
   return s:SeekReadHex(a:file, a:off, a:len)
 endfunction
 
+" The Blob half of it, so that the reader a scan uses past 2 GiB is held
+" against the same range read the ordinary way. Same reason and same
+" shape: PowerShell only runs on Windows CI, and a small offset there
+" exercises the code a 120 GiB file would.
+function! HexPairPagedSeekReadBlobForTest(file, off, len) abort
+  return s:SeekReadBlob(a:file, a:off, a:len)
+endfunction
+
+function! HexPairPagedFileBlobForTest(file, off, len) abort
+  return s:FileBlob(a:file, a:off, a:len)
+endfunction
+
 " And the xxd side of the same comparison.
 function! HexPairPagedFileHexForTest(file, off, len) abort
   return s:FileHex(a:file, a:off, a:len)
@@ -2307,6 +2442,28 @@ function! s:SeekReadHex(file, off, len) abort
   endif
   try
     return s:HexFromFile(raw)
+  finally
+    call delete(raw)
+  endtry
+endfunction
+
+" ... and as raw bytes, which is the same temp file read straight in. The
+" mirror of s:SeekReadHex() one line down, and cheaper than it by exactly
+" the work it does not do: no xxd, no pipe carrying twice the bytes as
+" text, no line breaks to take back out.
+"
+" readblob() needs no offset here - the temp file holds the range and
+" nothing else - which is what makes this usable past the 2 GiB where
+" readblob() with an offset is the thing that cannot be trusted. A block
+" is at most g:hexpair_scan_block, so the temp file is nowhere near any
+" limit of its own.
+function! s:SeekReadBlob(file, off, len) abort
+  let raw = s:SeekReadRaw(a:file, a:off, a:len)
+  if raw ==# ''
+    return 0z
+  endif
+  try
+    return readblob(raw)
   finally
     call delete(raw)
   endtry
@@ -2535,8 +2692,17 @@ endfunction
 " The limit is a property of the platform's data model, not of the build:
 " Windows is LLP64, so a long stays 32 bits in a 64-bit Vim too, which is
 " why "am I on Windows" is the whole question.
+" Pure, and a function of an explicit boolean rather than of has('win32'),
+" for exactly the reason HexPairPagedGateMessage() is one: the branch that
+" matters is the branch this cannot be developed or tested on, so the only
+" way to check it anywhere is to pass it. Asked of the END of a range by
+" every caller, never the start - see HexPairPagedRangeIsXxdsForTest().
+function! HexPairPagedSeekableOffset(off, win32) abort
+  return !a:win32 || a:off <= s:xxdseekmax
+endfunction
+
 function! s:XxdCanSeek(off) abort
-  return a:off <= s:xxdseekmax || !has('win32')
+  return HexPairPagedSeekableOffset(a:off, has('win32'))
 endfunction
 
 " The rule every caller applies, exposed so the suite can pin it: a range is
@@ -2565,17 +2731,36 @@ function! HexPairPagedResizeIsInPlaceForTest(newlen, pagelen, base, total) abort
   return s:ResizeIsInPlace(a:newlen)
 endfunction
 
+" How wide the lines of flat hex are asked to be, in bytes. Every line
+" break xxd prints is one more character for the strip below to find and
+" take out, and -p wraps at 30 bytes by default - so the widest line xxd
+" will portably agree to is the cheapest to read. That is 256, its own
+" ceiling for -c (s:bytesperlinemax); newer versions accept more in -p
+" mode and -c 0 for no wrapping at all, and neither can be assumed.
+"
+" Measured over an 8 MiB block: the strip goes from 76 ms to 43 ms, some
+" 8% off a whole-file scan. Dropping the line breaks entirely would save
+" another 40 ms of that - which is why -c 0 is worth naming here and not
+" worth probing for, since the read it hangs off costs 170 ms either way.
+let s:flatcols = 256
+
 " The whole of a file as flat lowercase hex. Shared by both readers: xxd -p
 " over a file it does not have to seek in, which is the fast part of xxd and
 " the part that was never in question.
 function! s:HexFromFile(file) abort
-  let out = s:Run(printf('%s -p %s', s:Xxd(), shellescape(a:file)))
-  " xxd -p prints hex and line breaks and nothing else, so the line breaks
-  " are all there is to remove - the CR because a Windows xxd ends its lines
-  " with one. Two passes over a single character each, rather than one over
-  " a collection: measured on the 2 MB of hex a 1 MiB block comes to, 16 ms
-  " against 51 ms, and a scan of a large file is thousands of those.
-  return substitute(substitute(out, '\n', '', 'g'), '\r', '', 'g')
+  let out = s:Run(printf('%s -p -c %d %s', s:Xxd(), s:flatcols,
+        \ shellescape(a:file)))
+  return s:Flatten(out)
+endfunction
+
+" What xxd -p printed, as one run of hex digits. It prints hex and line
+" breaks and nothing else, so the line breaks are all there is to remove -
+" the CR because a Windows xxd ends its lines with one. Two passes over a
+" single character each, rather than one over a collection: measured on
+" the 2 MB of hex a 1 MiB block comes to, 16 ms against 51 ms, and a scan
+" of a large file is thousands of those.
+function! s:Flatten(out) abort
+  return substitute(substitute(a:out, '\n', '', 'g'), '\r', '', 'g')
 endfunction
 
 function! s:FileHex(file, off, len) abort
@@ -2594,9 +2779,9 @@ function! s:FileHex(file, off, len) abort
     return s:SeekReadHex(a:file, a:off, a:len)
   endif
   try
-    let out = s:Run(printf('%s -p -s %d -l %d %s', s:Xxd(), a:off, a:len,
-          \ shellescape(a:file)))
-    return substitute(substitute(out, '\n', '', 'g'), '\r', '', 'g')
+    let out = s:Run(printf('%s -p -c %d -s %d -l %d %s', s:Xxd(),
+          \ s:flatcols, a:off, a:len, shellescape(a:file)))
+    return s:Flatten(out)
   catch /^hexpair:/
     " A read that failed - a file that went away, an xxd that could not
     " open it - is an empty block, and the caller finds nothing in it.
@@ -2609,6 +2794,45 @@ function! s:FileHex(file, off, len) abort
     " be caught here and re-thrown either (E608 refuses an exception with
     " a 'Vim' prefix); the answer is not to catch what is not ours.
     return ''
+  endtry
+endfunction
+
+" The same range as raw bytes, for the readers that never need to see it
+" spelled: a scan compares and searches, and hex was only ever the form
+" xxd could hand a range over in.
+"
+" a:off + a:len, and the same s:XxdCanSeek() the hex reader asks, because
+" READBLOB() SHARES XXD'S CEILING AND SHARES IT SILENTLY: past 2 GiB on
+" Windows it returns an empty Blob and success (s:CopyRange() records the
+" same thing, which is why the copy goes through PowerShell there). An
+" empty block is indistinguishable from a block whose bytes are all gone,
+" so a scan that believed it would answer "no match" and "no change" for
+" everything past the 2 GiB mark of a large file - on files that size,
+" which is the whole reason this plugin exists. The check is named for
+" xxd and is really the platform's 32-bit file offset, which Vim's own
+" reader has too.
+"
+" A read past the END OF THE FILE is a different thing and is an empty
+" Blob rather than an error, which is what s:FileHex() answers there too
+" and what the callers already handle. A file that went away throws
+" E484/E485 from readblob() itself; caught here for the same reason the
+" hex reader catches its own failure - a scan reads many blocks and one
+" that cannot be read is an empty one, not the end of the world. Vim's
+" own errors carry the command that raised them ("Vim(let):E484: ..."),
+" which is what keeps CTRL-C ("Vim:Interrupt", no command) out of this
+" catch: swallowing THAT is how a scan of a large file became
+" uninterruptible once already.
+function! s:FileBlob(file, off, len) abort
+  if a:len <= 0
+    return 0z
+  endif
+  if !s:XxdCanSeek(a:off + a:len)
+    return s:SeekReadBlob(a:file, a:off, a:len)
+  endif
+  try
+    return readblob(a:file, a:off, a:len)
+  catch /^Vim(\a\+):E48[45]:/
+    return 0z
   endtry
 endfunction
 
@@ -3079,7 +3303,69 @@ endfunction
 " The file has no bytes left - a shrinking write emptied it - so there is
 " no page to show. Leave a lone banner saying so, rather than a dump of
 " bytes that are gone.
+" A page this file does not reach, shown because ANOTHER view is on it.
+"
+" Only ever reached through s:FollowPageTurn(), which is to say only in a
+" scroll-bound pair (|hexpair-vimhexdiff|): on its own, asking for a page
+" that is not there is an error and stays one. What it fixes is the pair,
+" where the window that could not follow used to stay on the page it had
+" - so the two showed different offsets, side by side, with nothing
+" saying so. A banner that says "not here" is the whole point; being on
+" no page at all is better than being on the wrong one quietly.
+"
+" It is s:LoadEmpty() with a different banner and a base, and that is
+" deliberate: a page with no bytes is a shape this plugin already has,
+" guarded in every place that counts bytes, so nothing new has to learn
+" about it. b:hexpair_page_len is 0 and b:hexpair_page_hex is empty, so
+" the markings, the jumps and the inspector all find nothing here, which
+" is the truth.
+"
+" The base is the one thing that is NOT zero: it is where this page would
+" begin, so the two views agree about which page they disagree about, and
+" a turn back to a real one is an ordinary turn from here.
+function! s:LoadAbsent(pageidx) abort
+  let total = s:FileSize(b:hexpair_page_file)
+  let totalpages = HexPairPagedTotalPages(b:hexpair_page_size, total)
+  let b:hexpair_page_absent     = 1
+  let b:hexpair_page_index      = a:pageidx
+  let b:hexpair_page_base       = a:pageidx * b:hexpair_page_size
+  let b:hexpair_page_len        = 0
+  let b:hexpair_page_total      = total
+  let b:hexpair_page_totalpages = totalpages
+  let b:hexpair_page_ftime      = getftime(b:hexpair_page_file)
+  let b:hexpair_page_digest     = ''
+  let b:hexpair_page_hex        = ''
+  let b:hexpair_n               = g:hexpair_bytes_per_line
+  let b:hexpair_page_hexstart   = s:HexStart(b:hexpair_page_base)
+  let b:hexpair_page_header     = 1
+  let b:hexpair_banner_top      = printf(
+        \ '" hexpair: page %d is not in %s - it ends at byte %d (0x%x), '
+        \ . 'on page %d of %d',
+        \ a:pageidx + 1, s:PageLabel(), total, total, totalpages, totalpages)
+  let b:hexpair_banner_bottom   =
+        \ '" hexpair: nothing here; this view is held level with the other one'
+
+  let save_ul = &l:undolevels
+  setlocal noreadonly modifiable
+  try
+    setlocal undolevels=-1
+    silent %delete _
+    call setline(1, [b:hexpair_banner_top, b:hexpair_banner_bottom])
+  finally
+    let &l:undolevels = save_ul
+  endtry
+  call cursor(1, 1)
+  let w:hexpair_own_view = 1
+  setlocal filetype=xxd
+  call s:ApplyBannerSyntax()
+  setlocal nomodified
+  let b:hexpair_page_active = 1
+  let b:hexpair_view = 'hex'
+  call s:PasteOn()
+endfunction
+
 function! s:LoadEmpty() abort
+  let b:hexpair_page_absent     = 0
   let b:hexpair_page_index      = 0
   let b:hexpair_page_base       = 0
   let b:hexpair_page_len        = 0
@@ -3252,6 +3538,15 @@ endfunction
 function! s:Write() abort
   if !get(b:, 'hexpair_page_active', 0)
     throw 'hexpair: not a paged hex buffer; nothing was written'
+  endif
+  " A page that is not in this file has no bytes to patch anything into.
+  " Nothing would be written even without this - the page is empty and so
+  " is what a write of it would move - but a command that silently does
+  " nothing is worse than one that says why.
+  if get(b:, 'hexpair_page_absent', 0)
+    throw printf('hexpair: page %d is not in this file - it is shown only '
+          \ . 'to keep this view level with the one beside it; there is '
+          \ . 'nothing here to write', b:hexpair_page_index + 1)
   endif
 
 
@@ -5256,7 +5551,11 @@ endfunction
 " where |/| and the eye can find them; everywhere else, the file is what
 " there is to search.
 
-let s:find = {'hex': '', 'bytes': 0, 'what': ''}
+" 'filter' is the pattern as two Blobs for the byte reader - see
+" autoload/hexpair.vim - and is empty on a Vim that has no such reader,
+" which is also what makes it the flag for which reader to use. No Blob
+" here: this is script level, and a Blob literal is Vim 8.1.0735.
+let s:find = {'hex': '', 'bytes': 0, 'what': '', 'filter': []}
 
 " A pattern is bytes, two hex digits each, and a '?' stands for any
 " nibble: "de ad be ef", "deadbeef" and "de ?? be ef" are all patterns,
@@ -5279,6 +5578,40 @@ function! HexPairPagedParseFindPattern(text) abort
   endif
   return {'hex': tolower(substitute(squashed, '?', '.', 'g')),
         \ 'bytes': strlen(squashed) / 2}
+endfunction
+
+" The same pattern as two Blobs, which is what the byte reader matches
+" with: byte k of the file matches when and(byte, mask[k]) == value[k].
+" A fully specified byte has mask 0xff, "d?" has 0xf0, "?d" has 0x0f and
+" "??" has 0x00 - so a wildcard costs the reader nothing to carry, and
+" the nibble-level ones survive, which they could not if a pattern were
+" a plain run of bytes.
+"
+" Takes the hex WITH ITS WILDCARDS ALREADY DOTS, as
+" HexPairPagedParseFindPattern() leaves them, so that the two forms of a
+" pattern are built from one string and cannot drift apart.
+function! HexPairPagedFindByteFilter(hex) abort
+  let mask = 0z
+  let value = 0z
+  let i = 0
+  while i < strlen(a:hex)
+    let hi = a:hex[i]
+    let lo = a:hex[i + 1]
+    let m = 0
+    let v = 0
+    if hi !=# '.'
+      let m += 0xf0
+      let v += str2nr(hi, 16) * 16
+    endif
+    if lo !=# '.'
+      let m += 0x0f
+      let v += str2nr(lo, 16)
+    endif
+    call add(mask, m)
+    call add(value, v)
+    let i += 2
+  endwhile
+  return [mask, value]
 endfunction
 
 " The bytes of a literal string, as hex - what |:HexPairFindText| searches
@@ -5326,24 +5659,81 @@ function! HexPairPagedFindInHex(hay, pat, from, forward) abort
   endwhile
 endfunction
 
+" A match inside ONE block, as a byte index into it, or -1.
+"
+" Two readers, and the fast one is allowed to decline. Searching raw
+" bytes means walking every occurrence of one byte of the pattern and
+" checking the rest by hand (autoload/hexpair.vim), which beats building
+" and matching hex for as long as that byte is rare in the block - and
+" when none of the pattern's bytes is rare there, "00" in a run of zeros
+" being the case that matters, hexpair#FindForward() answers -2 rather
+" than walking a million candidates, and the block goes through xxd
+" instead. So the choice is made per BLOCK, on that block's own bytes,
+" and not once for the file.
+"
+" a:limit is for the backward direction only: the match wanted is the
+" last one that STARTS before it, counted from the start of the block.
+function! s:FindInBlock(file, off, len, limit, forward) abort
+  " Unwritten edits live on one page; where a block meets that page, the
+  " page is what the block says (s:SearchPageHex()). Empty for a page
+  " nobody has touched, which is every block of most searches.
+  let page = s:SearchLivePage()
+  if !empty(s:find.filter)
+    let blob = s:FileBlob(a:file, a:off, a:len)
+    if !empty(page)
+      let blob = s:OverlayBlobFind(blob, a:off, a:len, page)
+    endif
+    let at = a:forward
+          \ ? hexpair#FindForward(blob, s:find.filter[0], s:find.filter[1])
+          \ : hexpair#FindBackward(blob, s:find.filter[0], s:find.filter[1],
+          \   a:limit)
+    if at != -2
+      return at
+    endif
+    " Declined: let the block's bytes go before the hex reader builds its
+    " own copy of them, which is twice their size again. The block is then
+    " read a second time, which past 2 GiB on Windows is a second
+    " PowerShell start - accepted rather than worked around, because it
+    " takes a pattern whose every byte is common in that block to get
+    " here, and spelling the hex from the Blob in hand would mean a temp
+    " file and a write on the path that is not rare.
+    unlet blob
+  endif
+  let hex = s:FileHex(a:file, a:off, a:len)
+  if !empty(page)
+    let hex = s:OverlayHexFind(hex, a:off, a:len, page)
+  endif
+  let idx = HexPairPagedFindInHex(hex, s:find.hex,
+        \ a:forward ? 0 : a:limit * 2, a:forward)
+  return idx < 0 ? -1 : idx / 2
+endfunction
+
 " The file, a block at a time, for the next (or previous) match. Blocks
 " overlap by the pattern's length less one byte, so a match lying across
 " a seam is still whole in one of them.
 function! s:FindScan(from, forward) abort
   let file = b:hexpair_page_file
   let total = b:hexpair_page_total
-  let pat = s:find.hex
   let span = s:find.bytes - 1
+  " The forward scan steps on by the block LESS the overlap, so a block
+  " that is not longer than the pattern would step by nothing and read the
+  " same bytes for ever. g:hexpair_scan_block cannot be set that small
+  " (s:scanblockmin is a megabyte) and no pattern typed at a : prompt comes
+  " near it - but the block is a setting now and the pattern is input, and
+  " a loop that cannot advance is not a thing to leave standing on the
+  " strength of both.
+  let block = s:ScanBlock()
+  let block = block > span ? block : span + 1
   if a:forward
     let off = a:from
     while off < total
       call s:Progress('searching', off, total)
-      let len = s:diffblock < total - off ? s:diffblock : total - off
-      let idx = HexPairPagedFindInHex(s:FileHex(file, off, len), pat, 0, 1)
-      if idx >= 0
-        return off + idx / 2
+      let len = block < total - off ? block : total - off
+      let at = s:FindInBlock(file, off, len, 0, 1)
+      if at >= 0
+        return off + at
       endif
-      if len < s:diffblock
+      if len < block
         return -1
       endif
       let off += len - span
@@ -5353,14 +5743,13 @@ function! s:FindScan(from, forward) abort
   let end = a:from
   while end > 0
     call s:Progress('searching back', total - end, total)
-    let start = end - s:diffblock
+    let start = end - block
     let start = start < 0 ? 0 : start
     " Read past the block's end by the pattern's span, so a match that
     " starts inside it and reaches beyond is found whole.
-    let hex = s:FileHex(file, start, end - start + span)
-    let idx = HexPairPagedFindInHex(hex, pat, (end - start) * 2, 0)
-    if idx >= 0
-      return start + idx / 2
+    let at = s:FindInBlock(file, start, end - start + span, end - start, 0)
+    if at >= 0
+      return start + at
     endif
     let end = start
   endwhile
@@ -5379,10 +5768,132 @@ endfunction
 " mark the forty matches that are on screen. What can be marked is what is
 " on screen, and there is a window's worth of it.
 "
-" The bytes are the page's as it was READ, which is what keeps the marking
-" about the FILE: an edit of yours shows up as a changed byte
-" (HexPairModified), not as a match appearing or vanishing under the
-" cursor.
+" The bytes are the page's AS THE BUFFER HOLDS THEM (s:SearchPageHex()),
+" so what is marked is what is on the screen - and what |:HexPairFindNext|
+" jumped to is marked where it landed.
+" The bytes of the page in view, as the SEARCH sees them.
+"
+" The buffer's, when anything has been typed over the dump and they are
+" still readable as bytes; the page as it was read otherwise. Searching
+" the file and ignoring the buffer made |:HexPairFind| disagree with the
+" screen in both directions at once: bytes just written INTO the page were
+" "not found in this file", and bytes just written OVER were still found -
+" at an offset the cursor then jumped to, where they were no longer to be
+" seen. |:HexPairReplace| has always decided on the buffer for that second
+" reason, and answered such a jump with "the cursor is not on a match".
+"
+" CLAMPED to the length the page was read with, which is what keeps every
+" offset reported a FILE offset. An insert grows the page past its own end
+" on disk, and those bytes have no offset yet to report or to jump to;
+" they are searched once |:w| has given them one. So a length-changing
+" edit leaves that many bytes at the page's tail out of the search until
+" it is written - the same boundary |:HexPairModifiedShow| names when it
+" says where the page as read ends.
+"
+" Only ever ONE page is in this state: turning a page needs an unmodified
+" buffer or a bang that discards (see s:ModifiedRuns()), so everywhere
+" else the file is still the whole truth.
+function! s:SearchPageHex() abort
+  let hex = get(b:, 'hexpair_page_hex', '')
+  if !&modified || !get(b:, 'hexpair_page_active', 0)
+    return hex
+  endif
+  " '' also means "cannot be read as bytes" - a dump caught mid-edit. The
+  " file's own bytes are then the best answer there is, and the same one
+  " this gave before there was a buffer in it.
+  let live = s:LiveHex()
+  return live ==# '' ? hex : strpart(live, 0, strlen(hex))
+endfunction
+
+" That page as the file-wide scan needs it: {'base', 'hex', 'blob'}, or {}
+" when the file's own bytes need nothing laid over them. Kept against
+" |b:changedtick|, because a scan is thousands of blocks and this is the
+" same page for every one of them.
+function! s:SearchLivePage() abort
+  if !&modified || !get(b:, 'hexpair_page_active', 0)
+    return {}
+  endif
+  if get(b:, 'hexpair_livepage_tick', -1) == b:changedtick
+    return b:hexpair_livepage
+  endif
+  let b:hexpair_livepage_tick = b:changedtick
+  let b:hexpair_livepage = {}
+  let hex = s:SearchPageHex()
+  if hex ==# '' || hex ==# get(b:, 'hexpair_page_hex', '')
+    return b:hexpair_livepage
+  endif
+  " NO 'blob' KEY, and no 0z anywhere a Vim 8.0 can reach: a Blob literal
+  " is 8.1.0735, and this line runs on every Vim the moment a search or a
+  " comparison meets a modified page. Its absence is also what says the
+  " Blob has not been built yet.
+  let b:hexpair_livepage = {'base': b:hexpair_page_base, 'hex': hex}
+  return b:hexpair_livepage
+endfunction
+
+" The same page as a Blob, for the readers that work in bytes.
+"
+" On first use rather than with the page: a scan that finds its answer
+" before it ever reaches the page needs no Blob at all, and this is 0.14 s
+" on a 128 KiB page. The dict is the cached one, so filling it here fills
+" it for the rest of the scan.
+"
+" list2blob() is 8.2.4763 and a reader in bytes needs readblob() with an
+" offset, which is 9.0.0795 - so it is there wherever this is reached.
+function! s:LivePageBlob(page) abort
+  if !has_key(a:page, 'blob')
+    let a:page.blob = list2blob(
+          \ map(split(a:page.hex, '..\zs'), 'str2nr(v:val, 16)'))
+  endif
+  return a:page.blob
+endfunction
+
+" Where a block and that page overlap, in file offsets, or [0, 0] for no
+" overlap. Global so the suite can put the seams to it directly: a block
+" ending inside the page, one starting inside it, one swallowing it whole
+" and one missing it are four pieces of arithmetic worth asking about
+" without a megabyte of file to reach them with.
+function! HexPairPagedOverlayRange(off, len, base, pagebytes) abort
+  let lo = a:off > a:base ? a:off : a:base
+  let end = a:base + a:pagebytes
+  let hi = a:off + a:len < end ? a:off + a:len : end
+  return lo >= hi ? [0, 0] : [lo, hi]
+endfunction
+
+function! s:OverlayRange(off, len, page) abort
+  return HexPairPagedOverlayRange(a:off, a:len, a:page.base,
+        \ strlen(a:page.hex) / 2)
+endfunction
+
+" The block a:off..a:off + a:len as it is ON DISK, with that page put back
+" over the part of it the page covers. The overlay is exactly as long as
+" what it replaces, so an index into the result is still an index into the
+" block: the scan's seams, overlaps and offsets are untouched.
+"
+" Two of these, because the readers want the block in their own form - a
+" Blob joins with + and a string with ., and one function taking either
+" would be a switch over that and nothing else.
+function! s:OverlayBlobFind(blob, off, len, page) abort
+  let [lo, hi] = s:OverlayRange(a:off, a:len, a:page)
+  if lo >= hi
+    return a:blob
+  endif
+  let out = lo > a:off ? a:blob[0 : (lo - a:off) - 1] : 0z
+  let out += s:LivePageBlob(a:page)[(lo - a:page.base) : (hi - a:page.base) - 1]
+  " A Blob slice starting past the end is an error rather than an empty
+  " Blob, so the tail is asked for only where a short read left one.
+  return hi - a:off < len(a:blob) ? out + a:blob[(hi - a:off) :] : out
+endfunction
+
+function! s:OverlayHexFind(hex, off, len, page) abort
+  let [lo, hi] = s:OverlayRange(a:off, a:len, a:page)
+  if lo >= hi
+    return a:hex
+  endif
+  return strpart(a:hex, 0, (lo - a:off) * 2)
+        \ . strpart(a:page.hex, (lo - a:page.base) * 2, (hi - lo) * 2)
+        \ . strpart(a:hex, (hi - a:off) * 2)
+endfunction
+
 " The page's bytes for searching, with up to a:span - 1 bytes of the pages
 " on either side. A match that straddles a page boundary belongs to both
 " pages it touches: without the margins it can be found in NEITHER, since
@@ -5395,14 +5906,15 @@ endfunction
 " which can be negative, meaning a match that began on the page before.
 " Kept against the page and the pattern's length: it costs two small reads.
 function! s:PageHexForSearch(span) abort
-  let hex = get(b:, 'hexpair_page_hex', '')
+  let hex = s:SearchPageHex()
   if hex ==# '' || a:span <= 1
     return [hex, 0]
   endif
   " The file too: a view can be pointed at another one, and page 1 of that
-  " is the same base and length as page 1 of this.
+  " is the same base and length as page 1 of this. And |b:changedtick|,
+  " since the page's own bytes are now the buffer's while it is modified.
   let key = [b:hexpair_page_file, b:hexpair_page_base, b:hexpair_page_len,
-        \ a:span]
+        \ a:span, b:changedtick]
   if get(b:, 'hexpair_searchhex_key', []) ==# key
     return b:hexpair_searchhex
   endif
@@ -5425,7 +5937,7 @@ function! HexPairPagedFindPositions(first, last) abort
   let out = []
   let n = b:hexpair_n
   let span = s:find.bytes
-  let hex = get(b:, 'hexpair_page_hex', '')
+  let hex = s:SearchPageHex()
   if span <= 0 || s:find.hex ==# '' || hex ==# ''
     return out
   endif
@@ -5551,6 +6063,13 @@ function! s:FindFrom(from, forward) abort
   catch /^Vim:Interrupt$/
     call s:Stopped()
     return
+  " A scan is where g:hexpair_scan_block is read, so it is also where a
+  " bad one is found - the same way |:HexPairDiffNext| reports it.
+  catch /^hexpair:/
+    echohl ErrorMsg
+    echomsg v:exception
+    echohl None
+    return
   endtry
   echohl ErrorMsg
   echomsg printf('hexpair: %s not found%s', s:find.what,
@@ -5558,10 +6077,59 @@ function! s:FindFrom(from, forward) abort
   echohl None
 endfunction
 
+" Whether a search can go through the byte reader: readblob() with an
+" offset AND the compiled :def that walks the block, which is a separate
+" file because :def only exists inside Vim9 script. Both are needed, and
+" the second one is the reason the first is worth having here: the walk
+" is a loop with a builtin call per candidate, the shape legacy script is
+" slowest at, and doing it in legacy buys some 20% where the compiled one
+" buys five times.
+"
+" Answered by ASKING IT, once per session, rather than by has() alone -
+" the same shape as s:HasOffsetOption() and for the same reason. A
+" hexpair whose autoload/ was not copied, or a Vim that will not load it,
+" has to end up on the hex reader rather than on E117 in the middle of a
+" search, and the only way to be sure is a call whose answer is known.
+"
+" Sourced by path rather than left to 'runtimepath', because the plugin
+" file is not always reached through one: the suite sources it directly,
+" and so does a vimrc that says `source .../plugin/hexpair.vim`. Vim
+" registers a Vim9 autoload script's exports under its own name either
+" way, so this only makes the reader available where it otherwise would
+" not be - a package install has already found it and reloads nothing.
+let s:blobfinder = expand('<sfile>:p:h:h') . '/autoload/hexpair.vim'
+
+" Global for the suite, which has to be able to ask this Vim whether the
+" fast reader is the one it just exercised - a check that passes because
+" the slow path answered the same is not the check it looks like.
+function! HexPairPagedBlobFindSupported() abort
+  if exists('s:blobfind')
+    return s:blobfind
+  endif
+  let s:blobfind = 0
+  if HexPairPagedBlobRangeSupported() && has('vim9script')
+    try
+      if !exists('*hexpair#FindForward') && filereadable(s:blobfinder)
+        execute 'source' fnameescape(s:blobfinder)
+      endif
+      " "BC" in "ABCD", anchored on a byte that is there once: a match at
+      " 1 says the file loaded, the walk ran and the offsets line up.
+      let s:blobfind = hexpair#FindForward(0z41424344, 0zffff, 0z4243) == 1
+    catch
+      let s:blobfind = 0
+    endtry
+  endif
+  return s:blobfind
+endfunction
+
 function! s:SetPattern(parsed, what) abort
   let s:find.hex = a:parsed.hex
   let s:find.bytes = a:parsed.bytes
   let s:find.what = a:what
+  " Built once per pattern rather than per block: a scan of a large file
+  " is thousands of blocks, and this is the same two Blobs every time.
+  let s:find.filter = HexPairPagedBlobFindSupported()
+        \ ? HexPairPagedFindByteFilter(a:parsed.hex) : []
   call s:ClearFindHighlight()
 endfunction
 
@@ -5572,6 +6140,7 @@ function! s:Find(text, clear) abort
   if a:clear
     let s:find.hex = ''
     let s:find.bytes = 0
+    let s:find.filter = []
     call s:ClearFindHighlight()
     echo 'hexpair: no pattern'
     return
@@ -5841,6 +6410,113 @@ function! HexPairPagedLastDifference(a, b) abort
   return lo
 endfunction
 
+" The same four questions asked of raw bytes instead of hex, for the Vim
+" that can read a range without xxd (|HexPairPagedBlobRangeSupported()|).
+"
+" They are separate functions rather than one pair made to take both
+" forms, because the two forms answer in different units - a hex index is
+" a nibble and half of them are the wrong half, which is the mistake this
+" whole area exists to keep making impossible. These count BYTES, which is
+" what every caller wanted in the first place.
+"
+" Comparing two Blobs is one memcmp, where comparing two runs of hex is a
+" string compare over twice the data that had to be built first: measured
+" over an 8 MiB block, 3 ms against 209 ms of reading and 53 ms of
+" comparing.
+
+" The first byte at which two blocks differ, or -1. Halved, never walked,
+" for the same reason the hex version is.
+function! HexPairPagedBlobFirstDifference(a, b) abort
+  if a:a ==# a:b
+    return -1
+  endif
+  let short = len(a:a) < len(a:b) ? len(a:a) : len(a:b)
+  " One being a prefix of the other IS a difference, where the shorter
+  " one ends - that is how a longer file compares.
+  if short == 0 || a:a[0 : short - 1] ==# a:b[0 : short - 1]
+    return short
+  endif
+  " Invariant: the two agree over [0, lo) and differ somewhere in [lo, hi).
+  let [lo, hi] = [0, short]
+  while hi - lo > 1
+    let mid = (lo + hi) / 2
+    if a:a[lo : mid - 1] ==# a:b[lo : mid - 1]
+      let lo = mid
+    else
+      let hi = mid
+    endif
+  endwhile
+  return lo
+endfunction
+
+" And from the other end: the LAST byte at which they differ, or -1.
+function! HexPairPagedBlobLastDifference(a, b) abort
+  if a:a ==# a:b
+    return -1
+  endif
+  if len(a:a) != len(a:b)
+    return (len(a:a) > len(a:b) ? len(a:a) : len(a:b)) - 1
+  endif
+  " Invariant: they differ somewhere in [lo, hi) and agree over [hi, end).
+  let [lo, hi] = [0, len(a:a)]
+  while hi - lo > 1
+    let mid = (lo + hi) / 2
+    if a:a[mid :] ==# a:b[mid :]
+      let hi = mid
+    else
+      let lo = mid
+    endif
+  endwhile
+  return lo
+endfunction
+
+" The first byte at which they AGREE, or -1. Agreement is not a prefix
+" property and so cannot be halved: a chunk that is identical agrees at
+" its first byte and costs one comparison, and only a chunk that is not
+" gets walked - which is the same bargain the hex version strikes, with
+" the walk over bytes rather than over pairs of characters.
+function! HexPairPagedBlobFirstAgreement(mine, theirs) abort
+  let common = len(a:theirs) < len(a:mine) ? len(a:theirs) : len(a:mine)
+  let at = 0
+  while at < common
+    let span = s:cmpblock < common - at ? s:cmpblock : common - at
+    if a:mine[at : at + span - 1] ==# a:theirs[at : at + span - 1]
+      return at
+    endif
+    let i = 0
+    while i < span
+      if a:mine[at + i] == a:theirs[at + i]
+        return at + i
+      endif
+      let i += 1
+    endwhile
+    let at += span
+  endwhile
+  return -1
+endfunction
+
+" The same from the other end: the LAST byte at which they agree, or -1.
+function! HexPairPagedBlobLastAgreement(mine, theirs) abort
+  let common = len(a:theirs) < len(a:mine) ? len(a:theirs) : len(a:mine)
+  let at = common
+  while at > 0
+    let span = s:cmpblock < at ? s:cmpblock : at
+    let from = at - span
+    if a:mine[from : at - 1] ==# a:theirs[from : at - 1]
+      return at - 1
+    endif
+    let i = span - 1
+    while i >= 0
+      if a:mine[from + i] == a:theirs[from + i]
+        return from + i
+      endif
+      let i -= 1
+    endwhile
+    let at = from
+  endwhile
+  return -1
+endfunction
+
 " Bytes of the other file for the page in view, and what the page's own
 " bytes are held against.
 function! s:DiffHex() abort
@@ -5865,12 +6541,44 @@ function! HexPairPagedDiffActive() abort
 endfunction
 
 function! s:LoadDiffHex() abort
+  " The runs held against it are stale the moment it moves, and no tick
+  " says so: a page turn and a second :HexPairDiff both change what is
+  " being compared without touching the buffer. This is the one place
+  " that sets it, so it is the one place that has to say so.
+  let b:hexpair_diffruns_tick = -1
   if get(b:, 'hexpair_diff_file', '') ==# ''
     let b:hexpair_diff_hex = ''
     return
   endif
   let b:hexpair_diff_hex = s:FileHex(b:hexpair_diff_file,
         \ b:hexpair_page_base, b:hexpair_page_len)
+endfunction
+
+" The bytes of this page that differ from the file being compared with,
+" as page-relative runs - the diff layer's half of what s:ModifiedRuns()
+" is for the edited one, and cached the same way, because the marking
+" asks for it again on every scroll.
+"
+" Real bytes on both sides, so the text view is exact here too: it used
+" to compare in its own spelling, where a NUL and a line break are one
+" character, and a NUL on one side against a line break on the other was
+" therefore not a difference at all.
+"
+" A page the other file does not reach needs no special case here, unlike
+" the comparison this replaces: HexPairPagedDifferingByteRuns() already
+" counts bytes the other run does not reach as differences of their own,
+" which is exactly what "every byte of this page differs because there is
+" nothing over there" means.
+function! s:DiffRuns() abort
+  if get(b:, 'hexpair_diffruns_tick', -1) == b:changedtick
+    return b:hexpair_diffruns
+  endif
+  let live = s:LiveHex()
+  let b:hexpair_diffruns_tick = b:changedtick
+  let b:hexpair_diffruns = live ==# '' ? []
+        \ : HexPairPagedJoinRuns(
+        \     HexPairPagedDifferingByteRuns(live, s:DiffHex()))
+  return b:hexpair_diffruns
 endfunction
 
 function! s:DiffPositions(first, last) abort
@@ -5921,10 +6629,10 @@ function! HexPairPagedDiffText(theirs, base, len, differing, first) abort
         \ a:differing, a:len, a:theirs, a:first + 1, a:first + 1)
 endfunction
 
-" How many bytes to spell out before :HexPairDiffShow stops listing them.
-" A Visual selection can cover a whole page, and a message of eight thousand
-" bytes is not a message.
-let s:diffshowmax = 32
+" How many bytes :HexPairDiffShow and :HexPairModifiedShow spell out before
+" they stop listing them. A Visual selection can cover a whole page, and a
+" message of eight thousand bytes is not a message.
+let s:showmax = 32
 
 " What |:HexPairDiffShow| says: the byte under the cursor, or the bytes
 " under a Visual selection, beside what the file being compared with holds
@@ -5964,7 +6672,7 @@ function! HexPairPagedDiffShowText(name, first, mine, theirs, othersize) abort
   " Two aligned rows, so the pairs line up under each other and a run that
   " the other file does not reach reads as a row of dashes rather than as
   " an absence to be inferred.
-  let shown = bytes > s:diffshowmax ? s:diffshowmax : bytes
+  let shown = bytes > s:showmax ? s:showmax : bytes
   let differ = 0
   let mrow = []
   let trow = []
@@ -6198,7 +6906,11 @@ function! s:DiffShow(...) abort
     endif
     let [first, last] = [sel.first, sel.last]
   else
-    let first = s:PagedByteOffset()
+    " s:Here(), not s:PagedByteOffset(): this runs in the windowed text
+    " view as well, where a column is a byte and reading the position as a
+    " dump line's gives an offset off by however much of the page is above
+    " it - a plausible-looking byte, from the wrong place.
+    let first = s:Here()
     let last = first
   endif
 
@@ -6206,7 +6918,11 @@ function! s:DiffShow(...) abort
   " NOT `count`: that is v:count and read-only, and a local of that name
   " aborts the function with E46. Same for errmsg, line and friends.
   let span = last - first + 1
-  let mine = strpart(get(b:, 'hexpair_page_hex', ''), at * 2, span * 2)
+  " The buffer's bytes, which is what the marking beside them compares
+  " and what the cursor is sitting on. This used to be the page as read,
+  " and then a byte the marking called different - because the buffer's
+  " digit differs from theirs - was reported here as agreeing.
+  let mine = strpart(s:LiveHex(), at * 2, span * 2)
   " Their bytes for the same offsets, which past the end of that file is
   " simply nothing - strpart() beyond the end gives '' and the text
   " function reads that as "not there" rather than as an error.
@@ -6282,21 +6998,82 @@ function! HexPairPagedLastAgreement(mine, theirs) abort
   return -1
 endfunction
 
+" One block of each file, in whichever form this Vim compares fastest -
+" raw bytes where readblob() can take an offset, hex out of xxd where it
+" cannot. Every walker below reads its pair through here and then asks
+" the four questions through the dispatchers under it, so which form is
+" in play is decided ONCE and no walker has to know.
+function! s:CmpPair(other, off, len) abort
+  " MY side is the page as the buffer holds it where the block meets the
+  " page in view (s:SearchPageHex()), for the reason |:HexPairFind| reads
+  " it that way: the marking on the screen has always compared the
+  " buffer's own digits against that file, so a walk that read my file
+  " from disk would send |:HexPairDiffNext| to bytes the screen shows as
+  " agreeing, and past the ones it shows as differing.
+  "
+  " THEIR side stays the file on disk. That asymmetry is the question the
+  " command asks - how what I have here differs from that file - and it is
+  " the one the marking has always answered, including in a bound pair of
+  " views where the other window has unwritten edits of its own.
+  let page = s:SearchLivePage()
+  if HexPairPagedBlobRangeSupported()
+    let mine = s:FileBlob(b:hexpair_page_file, a:off, a:len)
+    return [empty(page) ? mine : s:OverlayBlobFind(mine, a:off, a:len, page),
+          \ s:FileBlob(a:other, a:off, a:len)]
+  endif
+  let mine = s:FileHex(b:hexpair_page_file, a:off, a:len)
+  return [empty(page) ? mine : s:OverlayHexFind(mine, a:off, a:len, page),
+        \ s:FileHex(a:other, a:off, a:len)]
+endfunction
+
+" The four questions, each answered in BYTES whichever form the blocks
+" are in. The hex primitives count nibbles, so the halving lives here
+" rather than in every caller - which is where it used to live, and where
+" a -1 would have been divided into a 0.
+function! s:CmpFirstDifference(mine, theirs) abort
+  if HexPairPagedBlobRangeSupported()
+    return HexPairPagedBlobFirstDifference(a:mine, a:theirs)
+  endif
+  let at = HexPairPagedFirstDifference(a:mine, a:theirs)
+  return at < 0 ? -1 : at / 2
+endfunction
+
+function! s:CmpLastDifference(mine, theirs) abort
+  if HexPairPagedBlobRangeSupported()
+    return HexPairPagedBlobLastDifference(a:mine, a:theirs)
+  endif
+  let at = HexPairPagedLastDifference(a:mine, a:theirs)
+  return at < 0 ? -1 : at / 2
+endfunction
+
+" The agreements already count bytes in both forms, so these only choose.
+function! s:CmpFirstAgreement(mine, theirs) abort
+  return HexPairPagedBlobRangeSupported()
+        \ ? HexPairPagedBlobFirstAgreement(a:mine, a:theirs)
+        \ : HexPairPagedFirstAgreement(a:mine, a:theirs)
+endfunction
+
+function! s:CmpLastAgreement(mine, theirs) abort
+  return HexPairPagedBlobRangeSupported()
+        \ ? HexPairPagedBlobLastAgreement(a:mine, a:theirs)
+        \ : HexPairPagedLastAgreement(a:mine, a:theirs)
+endfunction
+
 " Where the change that covers a:from ends: the first byte at or after it
 " at which the two files agree. If they already agree at a:from - the
 " cursor is not in a change - that is a:from itself, and nothing is read
 " beyond the first block. If they never agree again, the end of the
 " longer file.
 function! s:AgreementAfter(other, from, total) abort
+  let block = s:ScanBlock()
   let off = a:from
   while off < a:total
-    let len = s:diffblock < a:total - off ? s:diffblock : a:total - off
-    let mine   = s:FileHex(b:hexpair_page_file, off, len)
-    let theirs = s:FileHex(a:other, off, len)
+    let len = block < a:total - off ? block : a:total - off
+    let [mine, theirs] = s:CmpPair(a:other, off, len)
     if mine ==# theirs
       return off
     endif
-    let at = HexPairPagedFirstAgreement(mine, theirs)
+    let at = s:CmpFirstAgreement(mine, theirs)
     if at >= 0
       return off + at
     endif
@@ -6309,16 +7086,16 @@ endfunction
 " And backwards: the last byte BEFORE a:before at which they agree, or -1
 " when the change reaches the start of the file.
 function! s:AgreementBefore(other, before, total) abort
+  let block = s:ScanBlock()
   let end = a:before
   while end > 0
-    let len = s:diffblock < end ? s:diffblock : end
+    let len = block < end ? block : end
     let start = end - len
-    let mine   = s:FileHex(b:hexpair_page_file, start, len)
-    let theirs = s:FileHex(a:other, start, len)
+    let [mine, theirs] = s:CmpPair(a:other, start, len)
     if mine ==# theirs
       return end - 1
     endif
-    let at = HexPairPagedLastAgreement(mine, theirs)
+    let at = s:CmpLastAgreement(mine, theirs)
     if at >= 0
       return start + at
     endif
@@ -6330,15 +7107,15 @@ endfunction
 
 " The next byte at or after a:from at which the two files differ, or -1.
 function! s:DifferenceAfter(other, from, total) abort
+  let block = s:ScanBlock()
   let off = a:from
   while off < a:total
     call s:Progress('comparing', off, a:total)
-    let len = s:diffblock < a:total - off ? s:diffblock : a:total - off
-    let idx = HexPairPagedFirstDifference(
-          \ s:FileHex(b:hexpair_page_file, off, len),
-          \ s:FileHex(a:other, off, len))
+    let len = block < a:total - off ? block : a:total - off
+    let [mine, theirs] = s:CmpPair(a:other, off, len)
+    let idx = s:CmpFirstDifference(mine, theirs)
     if idx >= 0
-      return off + idx / 2
+      return off + idx
     endif
     let off += len
   endwhile
@@ -6347,16 +7124,16 @@ endfunction
 
 " The last byte before a:before at which they differ, or -1.
 function! s:DifferenceBefore(other, before, total) abort
+  let block = s:ScanBlock()
   let off = a:before
   while off > 0
     call s:Progress('comparing back', a:total - off, a:total)
-    let len = s:diffblock < off ? s:diffblock : off
+    let len = block < off ? block : off
     let start = off - len
-    let idx = HexPairPagedLastDifference(
-          \ s:FileHex(b:hexpair_page_file, start, len),
-          \ s:FileHex(a:other, start, len))
+    let [mine, theirs] = s:CmpPair(a:other, start, len)
+    let idx = s:CmpLastDifference(mine, theirs)
     if idx >= 0
-      return start + idx / 2
+      return start + idx
     endif
     let off = start
   endwhile
@@ -6395,6 +7172,80 @@ function! s:DiffSearch(from, forward) abort
   return at < 0 ? -1 : s:AgreementBefore(other, at, total) + 1
 endfunction
 
+" The page as the BUFFER now holds it, as flat hex - the live side of
+" every comparison whose other side is b:hexpair_page_hex, the page as it
+" was READ from disk.
+"
+" Both views can say it, and neither can say it cheaply: the hex view has
+" to scan the whole page to know that its dump is still a dump, and the
+" text view has to walk its bytes one at a time to spell them. So it is
+" kept against b:changedtick, which is what makes pressing the key twice
+" free and lets more than one caller ask in the same redraw.
+"
+" An empty answer means "cannot be told", not "no bytes": a dump with a
+" stray character in it has no byte string, and a text view whose banner
+" was edited away has no body. Every caller has to read it that way -
+" a page that really holds no bytes is empty on both sides, and
+" b:hexpair_livehex_err says which of the two happened, so a caller that
+" has a message line can say why rather than shrugging.
+"
+" In the text view this inherits the one thing that view cannot spell: a
+" Vim string holds no NUL, so a NUL and a line break come back the same
+" (|hexpair-marking-views|). The hex view is exact.
+function! s:LiveHex() abort
+  if get(b:, 'hexpair_livehex_tick', -1) == b:changedtick
+    return b:hexpair_livehex
+  endif
+  let [hex, err] = ['', '']
+  if s:IsHexView()
+    let scan = s:PagedScan(0)
+    if empty(scan.err)
+      let hex = tolower(substitute(join(scan.lines, ''), '[^0-9a-fA-F]', '', 'g'))
+    else
+      let err = 'hexpair: ' . scan.err.msg
+    endif
+  else
+    " The text view's bytes, got the way s:PageBytes() gets them for a
+    " WRITE: writefile() in binary mode is the exact inverse of how Vim
+    " loaded the buffer, so a NUL - which getline() hands back as a line
+    " break - goes back to being a NUL. Then xxd spells the file, which
+    " is what it is for.
+    "
+    " This used to be HexPairPagedTextToHex(join(s:TextViewLines(), NL)),
+    " and that was wrong twice over.
+    "
+    " WRONG, because join() with a NL makes a NUL INSIDE a line and the
+    " break BETWEEN two lines into the same character, and the speller
+    " then spelled both 0a. The buffer had not lost the difference - only
+    " the join had - and since the WRITER has always used writefile(),
+    " the report disagreed with what :w would put on disk. On an
+    " untouched page holding a NUL, |:HexPairModifiedShow| said "0a here,
+    " 00 on disk" about a byte nobody had touched.
+    "
+    " AND SLOW, because it spelled the page a byte at a time in Vim
+    " script, which does not scale: 3.9 s for a 128 KiB page and 54 s for
+    " a 512 KiB one, against 21 ms for this. Four times the page was
+    " fourteen times the wait.
+    "
+    " The temp file is one page, written at offset 0 and read with no
+    " seeking, so nothing here meets the 2 GiB limit that decides how the
+    " FILE is read (|hexpair-windows-2gib|) - this is about the buffer.
+    let raw = tempname()
+    try
+      call writefile(s:TextViewLines(), raw, 'b')
+      let hex = s:HexFromFile(raw)
+    catch /^hexpair:/
+      let err = v:exception
+    finally
+      call delete(raw)
+    endtry
+  endif
+  let b:hexpair_livehex_tick = b:changedtick
+  let b:hexpair_livehex = hex
+  let b:hexpair_livehex_err = err
+  return hex
+endfunction
+
 " The edited bytes of THIS PAGE as [offset, length] runs, page-relative.
 "
 " Page-scoped is the whole truth rather than a limitation: turning a page
@@ -6412,28 +7263,26 @@ function! s:ModifiedRuns() abort
   if get(b:, 'hexpair_modruns_tick', -1) == b:changedtick
     return b:hexpair_modruns
   endif
-  let runs = []
-  if s:IsHexView()
-    let scan = s:PagedScan(0)
-    if empty(scan.err)
-      let flat = substitute(join(scan.lines, ''), '[^0-9a-fA-F]', '', 'g')
-      let runs = HexPairPagedDifferingByteRuns(tolower(flat), hex)
-    endif
-  else
-    " The text view compares in its own spelling, line by line, the way
-    " its markings do (|hexpair-marking-views|); an edit that spans a line
-    " break therefore arrives as two runs, and adjacent ones are put back
-    " together below.
-    let theirs = s:BytesAsText('page', hex)
-    if theirs !=# ''
-      for span in s:TextSpans(1, line('$'))
-        if span[2] > 0
-          call extend(runs, HexPairPagedTextRuns(getline(span[0]),
-                \ strpart(theirs, span[1], span[2]), span[1]))
-        endif
-      endfor
-    endif
-  endif
+  " ONE comparison for both views: the page's bytes as the buffer holds
+  " them now, against the page's bytes as they were read. Both sides are
+  " the real bytes - s:LiveHex() takes the text view's the way a write
+  " takes them - so the runs are exact in either view.
+  "
+  " The text view used to compare in its own SPELLING instead, line by
+  " line, and that was a trade made when the exact answer cost 3.9 s a
+  " page (see s:LiveHex()). It cost accuracy in two ways. A NUL and a
+  " line break read alike in that spelling, so replacing one with the
+  " other was not an edit at all - the page came back "nothing edited"
+  " while :w would have written a different byte. And a length-changing
+  " edit put the first differing byte one place late, because a line's
+  " span moved with the edit while the bytes it was held against did not.
+  "
+  " It also broke one edit into one run per line, since the line break
+  " between two of them is a byte no run covers. The hex view has always
+  " answered with the single run that an insert really makes, and now the
+  " two views agree.
+  let live = s:LiveHex()
+  let runs = live ==# '' ? [] : HexPairPagedDifferingByteRuns(live, hex)
   let b:hexpair_modruns_tick = b:changedtick
   let b:hexpair_modruns = HexPairPagedJoinRuns(runs)
   return b:hexpair_modruns
@@ -6496,6 +7345,174 @@ function! s:ModifiedJump(forward) abort
   call s:GotoOffset(string(abs + 1), 0)
   echo printf('hexpair: edit %d of %d on this page, at byte %d (0x%x)',
         \ nth, len(runs), abs + 1, abs + 1)
+endfunction
+
+" Turn the marking of edited bytes off and on again, or off for good with
+" a:off.
+"
+" It flips g:hexpair_show_modified, which is the option that already means
+" this, rather than keeping a second switch beside it: a key and a setting
+" that disagree about the same thing is one thing too many to remember.
+"
+" It exists because the marking is the one part of a hex page whose cost
+" follows what you did rather than what is on screen. An overwrite marks
+" the bytes you typed; an INSERT or a DELETE moves every byte after it, so
+" every one of them differs from what the page was read as and the whole
+" rest of the page is marked - correctly, and at the cost of comparing it
+" all on every edit. That is the moment the marking stops helping and
+" starts being in the way, and it is the moment this is for.
+"
+" The bang mirrors |:HexPairFind!| and |:HexPairDiff!|, the other two ways
+" to stop a marking; there is nothing to set here, since your edits are
+" your edits, so the bare command toggles instead of setting.
+function! s:ModifiedMarking(off) abort
+  let g:hexpair_show_modified = a:off ? 0 : !g:hexpair_show_modified
+  " This window at once; the others when they next redraw, which is what
+  " the clearing branch of s:ModifiedHighlight() is for.
+  call s:ClearModifiedHighlight()
+  call s:ModifiedHighlight()
+  echo g:hexpair_show_modified
+        \ ? 'hexpair: marking the bytes you have edited'
+        \ : 'hexpair: not marking edited bytes (g:hexpair_show_modified = 0)'
+endfunction
+
+" What |:HexPairModifiedShow| says: the bytes at the cursor - or under a
+" Visual selection - as the buffer holds them NOW, beside what the page
+" held when it was read from disk. The other way round from
+" |:HexPairDiffShow|, which reports the page as read against another file
+" and leaves unwritten edits out of it on purpose: this command is about
+" exactly those edits, so here the live buffer is the side that speaks
+" first and the file is what it is held against.
+"
+" a:mine and a:theirs are flat hex over the same offsets, a:theirs
+" possibly shorter when an insert has grown the page past what was read;
+" a:pageend is the last byte the page as read holds, 1-based, which is
+" what says how far "on disk" reaches. Offsets are 1-based and inclusive,
+" like every other message here, so they can be typed straight into
+" |:HexPairGoOffset|. Pure, so the wording is testable without a cursor or
+" a Visual selection.
+function! HexPairPagedModifiedShowText(first, mine, theirs, pageend) abort
+  let bytes = strlen(a:mine) / 2
+  if bytes <= 0
+    return ['hexpair: no bytes here to compare']
+  endif
+  let have = strlen(a:theirs) / 2
+  let ends = printf('the page as read ends at byte %d (0x%x)',
+        \ a:pageend, a:pageend)
+
+  if bytes == 1
+    let mine = strpart(a:mine, 0, 2)
+    if have < 1
+      return [printf('hexpair: byte %d (0x%x): %s here, inserted since the '
+            \ . 'page was read - %s', a:first + 1, a:first + 1, mine, ends)]
+    endif
+    let theirs = strpart(a:theirs, 0, 2)
+    if mine ==# theirs
+      return [printf('hexpair: byte %d (0x%x): %s here and on disk',
+            \ a:first + 1, a:first + 1, mine)]
+    endif
+    return [printf('hexpair: byte %d (0x%x): %s here, %s on disk',
+          \ a:first + 1, a:first + 1, mine, theirs)]
+  endif
+
+  " Two aligned rows, exactly as |:HexPairDiffShow| draws them, so that a
+  " run of bytes reads the same way whichever of the two put it there.
+  let shown = bytes > s:showmax ? s:showmax : bytes
+  let edited = 0
+  let mrow = []
+  let trow = []
+  let i = 0
+  while i < bytes
+    let mine = strpart(a:mine, i * 2, 2)
+    let theirs = i < have ? strpart(a:theirs, i * 2, 2) : ''
+    if mine !=# theirs
+      let edited += 1
+    endif
+    if i < shown
+      call add(mrow, mine)
+      call add(trow, theirs ==# '' ? '--' : theirs)
+    endif
+    let i += 1
+  endwhile
+
+  let out = [printf('hexpair: bytes %d-%d (0x%x-0x%x), %d of %d edited%s',
+        \ a:first + 1, a:first + bytes, a:first + 1, a:first + bytes,
+        \ edited, bytes, have < bytes ? printf(' - %s', ends) : '')]
+  call add(out, printf('  here  %s', join(mrow, ' ')))
+  call add(out, printf('  disk  %s', join(trow, ' ')))
+  if bytes > shown
+    call add(out, printf('  ... and %d more, not shown', bytes - shown))
+  endif
+  return out
+endfunction
+
+" :HexPairModifiedShow - what I changed here, and what was there before.
+"
+" The marking says WHICH bytes are edited and no more, and the byte it
+" covers is the NEW one: what the file has there is exactly what the
+" screen no longer shows. This is that byte - or a whole Visual selection,
+" since "what did I overwrite" is as reasonable a question about a run as
+" about one byte - beside the page as it was read from disk.
+"
+" |:HexPairDiffShow|'s shape throughout, down to the two rows and the
+" 32-byte cap, because it is the same question against a different file:
+" that one against |:HexPairDiff|'s, this one against the view's own.
+"
+" a:reselect mirrors s:Selection() and s:DiffShow(): asking from the
+" command line ends Visual mode, and losing the selection to look at it is
+" not a trade worth making, so the gv comes first and the message last.
+function! s:ModifiedShow(...) abort
+  if !s:RequirePaged()
+    return
+  endif
+  " The live bytes come first, and not only because the answer needs them:
+  " an empty result is "cannot be told" as well as "no bytes" - on a page
+  " that holds bytes it means the dump or the banner no longer reads as
+  " one - and finding the cursor's byte on a modified page COUNTS the
+  " bytes above it by scanning that same page. Asking here turns a page
+  " that does not scan into the message saying so, before anything tries
+  " to number a byte on it.
+  let live = s:LiveHex()
+  if live ==# '' && b:hexpair_page_len > 0
+    echohl ErrorMsg
+    echomsg get(b:, 'hexpair_livehex_err', '') !=# ''
+          \ ? b:hexpair_livehex_err
+          \ : 'hexpair: this page cannot be read as bytes'
+    echohl None
+    return
+  endif
+
+  let reselect = a:0 && a:1
+  if reselect
+    let sel = HexPairPagedSelectionBytes(getpos("'<"), getpos("'>"),
+          \ visualmode())
+    if empty(sel)
+      echo 'hexpair: the selection covers no bytes'
+      return
+    endif
+    let [first, last] = [sel.first, sel.last]
+  else
+    let first = s:Here()
+    let last = first
+  endif
+
+  let at = first - b:hexpair_page_base
+  let span = last - first + 1
+  let mine = strpart(live, at * 2, span * 2)
+  " The page as it was READ, which past an insert simply stops - strpart()
+  " beyond the end gives '' and the text function reads that as "not there
+  " yet" rather than as an error.
+  let theirs = strpart(get(b:, 'hexpair_page_hex', ''), at * 2, span * 2)
+  let lines = HexPairPagedModifiedShowText(first, mine, theirs,
+        \ b:hexpair_page_base + b:hexpair_page_len)
+
+  if reselect
+    normal! gv
+  endif
+  " More than one line gets Vim's hit-enter prompt, which is what keeps a
+  " multi-line report on the screen long enough to read - and after Visual
+  " mode, what stops "-- VISUAL --" painting over it.
+  echo join(lines, "\n") . (len(lines) > 1 || reselect ? "\n" : '')
 endfunction
 
 function! s:DiffJump(forward) abort
@@ -7217,6 +8234,78 @@ function! s:Unhex(force) abort
   endtry
 endfunction
 
+" Where byte a:byte of the FILE sits in the plain buffer just re-read, as
+" [lnum, col], or [] when this file's bytes and this buffer's are not the
+" same bytes at all.
+"
+" The exact inverse of s:PreReloadPos() / s:PostReloadOffset(), which map
+" a plain-view position INTO a file offset for the ++bin reload, and it
+" has to agree with them: a line costs the file its characters where
+" 'fileencoding' is single-byte (one file byte each, transcoded to more
+" than one in the buffer) and its bytes otherwise, plus whatever line
+" ending 'fileformat' gives it - and the last line costs no ending at all
+" when the file has none ('noeol').
+"
+" That last clause is the whole reason a first attempt at this did
+" nothing for anybody: a binary being hex-edited usually does not end in
+" 0x0a, Vim counts a final line ending anyway, and a plain comparison of
+" line2byte() against the file's size therefore never matched. The other
+" half was the transcode - Vim reads a binary as latin1, so a 200-byte
+" file is a 293-byte buffer and no BYTE offset carries across, though
+" every CHARACTER one does.
+"
+" The walk totals the file as it goes, and the total is the check: if it
+" is not the size on disk then this model does not describe this file -
+" a multi-byte 'fileencoding' that is not the internal one, say - and
+" the caller falls back rather than landing somewhere invented.
+function! s:PlainPosForByte(byte) abort
+  let fenc = &l:fileencoding !=# '' ? &l:fileencoding : &encoding
+  let singlebyte = fenc =~? '^\%(latin\|iso-8859\|cp[0-9]\|koi8\|8bit\)'
+  let eol = &l:fileformat ==# 'dos' ? 2 : 1
+  let last = line('$')
+  let want = a:byte - s:BomLen()
+  let at = []
+  let total = s:BomLen()
+  let lnum = 1
+  while lnum <= last
+    let line = getline(lnum)
+    let n = singlebyte ? strchars(line) : strlen(line)
+    let ending = (lnum < last || &l:endofline) ? eol : 0
+    if empty(at) && want >= 0 && want < n + ending
+      " Inside the line ending is still that line, at its end: those
+      " bytes have no column of their own, the same way the dump's do
+      " not (|hexpair-marking-views|).
+      let col = want >= n ? n : want
+      let at = [lnum, singlebyte ? byteidx(line, col) + 1 : col + 1]
+    endif
+    let want -= n + ending
+    let total += n + ending
+    let lnum += 1
+  endwhile
+  if total != getfsize(expand('%:p'))
+    call s:Debug('unhex: this buffer is %d file bytes, the file is %d - '
+          \ . 'no offset carries across', total, getfsize(expand('%:p')))
+    return []
+  endif
+  " Past the end - the file shrank while hex mode had it - is its last byte.
+  return !empty(at) ? at : [last, col([last, '$'])]
+endfunction
+
+" Put the cursor on a:byte of the re-opened file, or where the plain view
+" was left if that byte cannot be pointed at.
+function! s:UnhexCursor(byte, p) abort
+  if a:byte >= 0
+    let at = s:PlainPosForByte(a:byte)
+    if !empty(at)
+      call s:Debug('unhex: byte %d of the file is line %d, column %d',
+            \ a:byte, at[0], at[1])
+      call cursor(at[0], at[1])
+      return
+    endif
+  endif
+  call cursor(a:p.lnum > line('$') ? line('$') : a:p.lnum, a:p.col)
+endfunction
+
 function! s:UnhexPlain(force) abort
   if !exists('b:hexpair_plain')
     " No snapshot means one of two quite different things, and a single
@@ -7271,14 +8360,39 @@ function! s:UnhexPlain(force) abort
     throw 'hexpair: ' . name . ' cannot be read; the hex view is kept'
   endif
 
-  " The cursor goes back to where it was in the plain view, and the
-  " snapshot already holds that: p.lnum / p.col. It is not computed back
-  " from the byte the cursor is on now, for two reasons. Mapping a hex-view
-  " byte into plain-view coordinates is lossy exactly where 'fileencoding'
-  " or 'fileformat' convert (the same caveat s:PreReloadPos() documents),
-  " and on a modified page s:PagedByteOffset() runs s:PagedScan() to
-  " recount the bytes - a whole-page validation this does not need, since
-  " the page's content is about to be thrown away for the file.
+  " WHERE the cursor lands afterwards is decided here, while there is
+  " still a view to ask. The byte it is on NOW is the answer wanted, and
+  " the snapshot's p.lnum / p.col - where the plain view was left when hex
+  " mode was entered - is the fallback.
+  "
+  " That way round because the remembered position describes a file that
+  " may no longer exist: hex mode is where the file gets WRITTEN, by this
+  " plugin or by anything else while it was open, and a line and column
+  " taken before all that can point anywhere. Where the cursor is when it
+  " leaves is also, simply, where the user was looking.
+  "
+  " Asking costs a page scan on a modified page (s:PagedByteOffset()
+  " recounts the bytes), which is nothing beside the whole-file re-read
+  " below. It is guarded twice, and both guards have a case behind them.
+  "
+  " A buffer with NO PAGE has no byte to be on: s:AbandonSetup() leaves
+  " one holding the snapshot and no page state at all, and that buffer -
+  " re-read ++bin and never paged - is exactly the one this has to be
+  " able to rescue.
+  "
+  " And a page whose dump no longer READS as one cannot say which byte
+  " the cursor is over, since counting them means parsing them: a line of
+  " prose appended to a dump gets E716 out of s:PagedLineBase. That page
+  " is precisely what :HexPairUnhex! is for, so this is the last place
+  " that may fail on it.
+  let byte = -1
+  if get(b:, 'hexpair_page_active', 0)
+    try
+      let byte = s:Here()
+    catch
+      let byte = -1
+    endtry
+  endif
 
   " 'paste' is GLOBAL, and it is switched on while the cursor is in a hex
   " buffer (s:PasteOn()) - so it has to come off here, because the BufLeave
@@ -7385,11 +8499,7 @@ function! s:UnhexPlain(force) abort
     setlocal readonly
   endif
 
-  " The plain view's own coordinates, into the re-opened whole file. They
-  " were taken while the plain view was on screen (s:ToHex), so they name a
-  " real line and column of it; clamp the line to the file in case it has
-  " grown or shrunk since, and the column is left to cursor() to clamp.
-  call cursor(p.lnum > line('$') ? line('$') : p.lnum, p.col)
+  call s:UnhexCursor(byte, p)
   redraw!
   echomsg 'hexpair: ' . name . ' re-opened as text'
 endfunction
@@ -7550,111 +8660,14 @@ function! HexPairPagedTextPositions(spans, runs) abort
   return out
 endfunction
 
-" Where two strings of the same bytes part company, as [offset, length]
-" runs counted from a:base. Chunked, so an unedited line costs one
-" comparison per kilobyte rather than one per byte - a page with no 0x0a
-" in it is a single line as long as the page.
-function! HexPairPagedTextRuns(mine, theirs, base) abort
-  let out = []
-  if a:mine ==# a:theirs
-    return out
-  endif
-  let len = strlen(a:mine)
-  let at = 0
-  let from = -1
-  while at < len
-    let span = s:cmpblock < len - at ? s:cmpblock : len - at
-    if strpart(a:mine, at, span) ==# strpart(a:theirs, at, span)
-      if from >= 0
-        call add(out, [a:base + from, at - from])
-        let from = -1
-      endif
-      let at += span
-      continue
-    endif
-    let i = at
-    while i < at + span
-      if strpart(a:mine, i, 1) !=# strpart(a:theirs, i, 1)
-        if from < 0
-          let from = i
-        endif
-      elseif from >= 0
-        call add(out, [a:base + from, i - from])
-        let from = -1
-      endif
-      let i += 1
-    endwhile
-    let at += span
-  endwhile
-  if from >= 0
-    call add(out, [a:base + from, len - from])
-  endif
-  return out
-endfunction
-
-" A run of hex as the text view would hold it, with the line breaks back
-" in, so a piece of it can be taken by byte offset and compared against
-" what a line of the buffer holds. One xxd for it, kept against the hex it
-" was made from: the page as it was read and the file being compared with
-" are each converted once per page, not once per redraw.
-function! s:BytesAsText(label, hex) abort
-  let cache = get(b:, 'hexpair_text_bytes', {})
-  let hit = get(cache, a:label, ['', ''])
-  if hit[0] ==# a:hex
-    return hit[1]
-  endif
-  let text = ''
-  if a:hex !=# ''
-    let hexfile = tempname()
-    let raw = tempname()
-    try
-      call writefile([a:hex], hexfile)
-      call s:Run(printf('%s -r -p %s %s', s:Xxd(),
-            \ shellescape(hexfile), shellescape(raw)))
-      let text = join(readfile(raw, 'b'), "\n")
-    catch
-      let text = ''
-    finally
-      call delete(hexfile)
-      call delete(raw)
-    endtry
-  endif
-  let cache[a:label] = [a:hex, text]
-  let b:hexpair_text_bytes = cache
-  return text
-endfunction
-
-" What the buffer holds against a:hex, over the visible lines only.
-function! s:TextComparePositions(first, last, label, hex) abort
-  " An empty a:hex means "no bytes over there", which for the 'diff' layer
-  " is a real answer - past the end of the other file every byte differs -
-  " and NOT a reason to mark nothing; see HexPairPagedDiffActive(). Only
-  " the 'page' layer, which holds unwritten edits against the page as it
-  " was read, can take it as nothing to compare, and with a non-empty page
-  " it does not arise there either: both sides are then empty and the run
-  " builders return nothing of their own accord.
-  if a:label ==# 'page' && a:hex ==# ''
-    return []
-  endif
-  let theirs = s:BytesAsText(a:label, a:hex)
-  let spans = s:TextSpans(a:first, a:last)
-  let runs = []
-  for span in spans
-    if span[2] <= 0
-      continue
-    endif
-    call extend(runs, HexPairPagedTextRuns(getline(span[0]),
-          \ strpart(theirs, span[1], span[2]), span[1]))
-  endfor
-  return HexPairPagedTextPositions(spans, runs)
-endfunction
 
 " The matches of the current pattern, and the marks, over the visible
-" lines. Both are about the FILE - the page as it was read - so neither
-" looks at the buffer at all; see HexPairPagedFindPositions() for why the
-" search is a slice of the page and not the whole of it.
+" lines. The marks are about the FILE; the matches are about the page as
+" the buffer holds it (s:SearchPageHex()), the same bytes |:HexPairFind|
+" scans. See HexPairPagedFindPositions() for why the search is a slice of
+" the page and not the whole of it.
 function! s:TextFindPositions(first, last) abort
-  let hex = get(b:, 'hexpair_page_hex', '')
+  let hex = s:SearchPageHex()
   let span = s:find.bytes
   if span <= 0 || s:find.hex ==# '' || hex ==# ''
     return []
@@ -7918,8 +8931,10 @@ command! -bar -nargs=+ HexPairReplace call s:Replace(<q-args>)
 command! -bar -nargs=+ HexPairReplaceAllInPage call s:ReplaceAll(<q-args>)
 command! -bar HexPairDiffNext call s:DiffJump(1)
 command! -bar HexPairDiffPrev call s:DiffJump(0)
+command! -bar -bang HexPairModified call s:ModifiedMarking('<bang>' ==# '!')
 command! -bar HexPairModifiedNext call s:ModifiedJump(1)
 command! -bar HexPairModifiedPrev call s:ModifiedJump(0)
+command! -bar HexPairModifiedShow call s:ModifiedShow()
 command! -bar -nargs=? HexPairSplit  call s:SplitView(0, <f-args>)
 command! -bar -nargs=? HexPairVSplit call s:SplitView(1, <f-args>)
 
@@ -7961,10 +8976,12 @@ if g:hexpair_short_commands
         \ ['-bar', 'HPMarks', 'HexPairMarks'],
         \ ['-bar -bang -nargs=? -complete=file', 'HPDiff', 'HexPairDiff'],
         \ ['-bar', 'HPDiffShow', 'HexPairDiffShow'],
+        \ ['-bar -bang', 'HPModified', 'HexPairModified'],
         \ ['-bar', 'HPDiffNext', 'HexPairDiffNext'],
         \ ['-bar', 'HPDiffPrev', 'HexPairDiffPrev'],
         \ ['-bar', 'HPModifiedNext', 'HexPairModifiedNext'],
         \ ['-bar', 'HPModifiedPrev', 'HexPairModifiedPrev'],
+        \ ['-bar', 'HPModifiedShow', 'HexPairModifiedShow'],
         \ ['-bar -bang -nargs=*', 'HPFind', 'HexPairFind'],
         \ ['-bar -nargs=+', 'HPFindText', 'HexPairFindText'],
         \ ['-bar', 'HPFindNext', 'HexPairFindNext'],
@@ -8027,6 +9044,7 @@ nnoremap <silent> <Plug>(HexPairDiffNext) :<C-U>HexPairDiffNext<CR>
 nnoremap <silent> <Plug>(HexPairDiffPrev) :<C-U>HexPairDiffPrev<CR>
 nnoremap <silent> <Plug>(HexPairModifiedNext) :<C-U>HexPairModifiedNext<CR>
 nnoremap <silent> <Plug>(HexPairModifiedPrev) :<C-U>HexPairModifiedPrev<CR>
+nnoremap <silent> <Plug>(HexPairModified) :<C-U>HexPairModified<CR>
 " Turning the markings off is what the bang on either command does, and
 " both are worth a key: they are how a page stops being covered in
 " matches once the thing has been found.
@@ -8037,6 +9055,10 @@ nnoremap <silent> <Plug>(HexPairDiffClear) :<C-U>HexPairDiff!<CR>
 " has, and for the same reason.
 nnoremap <silent> <Plug>(HexPairDiffShow) :<C-U>HexPairDiffShow<CR>
 xnoremap <silent> <Plug>(HexPairDiffShow) :<C-U>call <SID>DiffShow(1)<CR>
+" The same pair, asked of this view's own file rather than another one:
+" what the bytes here were before they were edited.
+nnoremap <silent> <Plug>(HexPairModifiedShow) :<C-U>HexPairModifiedShow<CR>
+xnoremap <silent> <Plug>(HexPairModifiedShow) :<C-U>call <SID>ModifiedShow(1)<CR>
 
 " No default key mappings are defined; map the <Plug> mappings (or the
 " commands directly) in your vimrc, e.g.:

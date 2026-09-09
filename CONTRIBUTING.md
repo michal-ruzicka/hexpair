@@ -23,6 +23,7 @@ reports and patches are welcome via the project's
 | `.github/` | GitHub Actions CI workflow (`workflows/build.yml`) |
 | `dist/` | Packaged release tarballs (gitignored) |
 | `plugin/hexpair.vim` | The whole plugin, one script scope — hex mode is always paged, and `plugin/hexpair_paged.vim` was folded back into this file. Its header carries `Version:` and `Date:` — the single source of truth parsed by the packaging scripts |
+| `autoload/hexpair.vim` | The one Vim9 script file: the compiled walk that searches a block of raw bytes for a byte pattern. Loaded on the first search, and only where `readblob()` takes an offset and `has('vim9script')`; a Vim without either — or a copy of hexpair without this file — falls back to reading the block as hex through `xxd`, which is what the rest of the plugin does anyway. Nothing here may become load-bearing: `plugin/hexpair.vim` has to keep working on Vim 8.0 with this file deleted |
 | `ftplugin/xxd.vim` | Dump-editing defaults for `filetype=xxd`, bundled with the plugin |
 | `doc/hexpair.txt` | Vim help documentation (`:help hexpair`) |
 | `demo/` | The animation at the top of `README.md` and what records it (see *The README demo*); not part of a release tarball |
@@ -56,6 +57,39 @@ the cursor-position mapping and the write path:
 ```sh
 test/run-tests.sh
 ```
+
+### Running it against the oldest Vim
+
+CI builds Vim 8.0.0000 and runs the whole suite against it, and that job
+catches things nothing else does — a headless window there has usable
+geometry where a current Vim's has none, so code that draws behaves
+differently. Worth having locally rather than spending CI cycles guessing:
+
+```sh
+git clone --depth 1 --branch v8.0.0000 https://github.com/vim/vim.git /tmp/vim80
+cd /tmp/vim80
+git rev-parse HEAD   # must be bb76f24af2010943387ce696a7092175b4ecccf2
+CFLAGS="-O2 -Wno-implicit-function-declaration -Wno-implicit-int \
+        -Wno-int-conversion -Wno-return-mismatch" \
+    ./configure --with-features=huge --with-tlib=ncurses
+make -C src -j"$(nproc)" \
+    CFLAGS="-O2 -fpermissive -Wno-implicit-function-declaration \
+            -Wno-implicit-int -Wno-int-conversion -Wno-return-mismatch \
+            -Wno-incompatible-pointer-types" vim
+```
+
+The flags are not optional and are nothing to do with Vim: a 2016 source
+tree meets a compiler that has since made implicit declarations, implicit
+`int` and incompatible function-pointer arguments **errors** rather than
+warnings. Then, from this repository:
+
+```sh
+HEXPAIR_VIM=/tmp/vim80/src/vim VIMRUNTIME=/tmp/vim80/runtime test/run-tests.sh
+```
+
+`xxd` comes from the distribution, not from that tree: Vim 8.0's own
+`xxd.c` has K&R prototypes no current GCC compiles, and a user on such a
+Vim would have the distribution's `xxd` too.
 
 Every behavioural change must come with a test that fails before the
 change and passes after it. The suite is intentionally dependency-free
@@ -219,6 +253,35 @@ library only), which reads `Version:` and `Date:` from the header of
 `dist/hexpair.v<version>.tar` containing a `hexpair/` directory
 ready to be extracted into `~/.vim/pack/plugins/start/`. Bump the
 version *and* the date in the plugin header before tagging a release.
+
+### Links that leave the archive
+
+The Markdown files are packed with one transformation: a **relative link
+the archive cannot answer becomes a GitHub URL**. `README.md` points at
+`demo/hexpair-demo.gif`, which is 5.7 MB and ships in nothing, and at
+`CHANGELOG.md`, `CLAUDE.md` and `CONTRIBUTING.md`, which the minimal
+package leaves out — inside a tarball those are dead ends, and the reader
+has no way to guess what they pointed at.
+
+Keep them **relative in the repository**. That is the right form for the
+file as GitHub renders it and as a checkout holds it, and the rewriting is
+per archive: `CHANGELOG.md` stays a relative link in the complete tarball,
+which carries it, and becomes a URL only in the minimal one. Images get
+`raw.githubusercontent.com`, everything else the `blob` viewer.
+
+Both point at the **release tag**, not at a branch: a package is a fixed
+set of bytes, and a link out of it should reach the files those bytes were
+built beside rather than whatever `main` has become since. The tag is
+derived from the version in the plugin header with `-devel` removed, so
+`2.4.0-devel` packs links to `v2.4.0` — a package built mid-cycle
+therefore carries links that do not resolve until the tag is pushed in
+step 3 of the *Release Process*. That is the intended trade: the packages
+that reach users are release packages, and theirs are right. Any other
+suffix is left alone, so a `2.4.0-rc1` would link to `v2.4.0-rc1`.
+
+The suite unpacks both archives and fails if any relative link in them
+does not resolve inside the same archive, so neither the omission list nor
+this rewriting can drift away from the other.
 
 ### Reproducible Builds
 
@@ -388,18 +451,215 @@ developer's machine.
    git tag -s vX.Y.Z -m "Release vX.Y.Z"
    git push origin vX.Y.Z
    ```
-4. Run `./pack-release` locally to produce `dist/hexpair.vX.Y.Z.tar`.
+4. Run `./pack-release` locally. It produces two files, and **both are
+   release artifacts**: `dist/hexpair.vX.Y.Z.tar`, the complete and
+   canonical one, and `dist/hexpair.vX.Y.Z.minimal.tar.bz2`, which leaves
+   out `CLAUDE.md`, this file and `CHANGELOG.md`, and is the one vim.org
+   will accept (see *Publishing*). CI compares both across Linux and
+   Windows, so the
+   minimal package's reproducibility is checked and not merely hoped for;
+   `pack-release` also prints the hash of its uncompressed tar, which is
+   what stays the same if a compressor ever does not.
 5. GPG-sign the tarball:
    ```
    gpg --detach-sign --armor dist/hexpair.vX.Y.Z.tar
    ```
-   This creates `dist/hexpair.vX.Y.Z.tar.asc`.
+   This creates `dist/hexpair.vX.Y.Z.tar.asc`. Sign the vim.org package
+   too if it is to be uploaded, since vim.org hosts its own copy and
+   nothing else vouches for it:
+   ```
+   gpg --detach-sign --armor dist/hexpair.vX.Y.Z.minimal.tar.bz2
+   ```
 6. On the GitHub repository page, go to **Releases → Draft a new release**,
    select the `vX.Y.Z` tag, paste the CHANGELOG entry as the description,
-   and attach both files (`.tar` and `.tar.asc`).
+   and attach **all four** files — both packages and a signature for each:
+   `hexpair.vX.Y.Z.tar`, `hexpair.vX.Y.Z.tar.asc`,
+   `hexpair.vX.Y.Z.minimal.tar.bz2` and
+   `hexpair.vX.Y.Z.minimal.tar.bz2.asc`. The README sends readers to the
+   smaller one when the complete tarball is more than they want, so a
+   release that carries only the `.tar` leaves that pointing at nothing.
 
 The CI workflow also produces the tarball as a downloadable Actions
 artifact, but that copy is unsigned and is intended for testing PRs only.
+
+## The Explorer Context Menu
+
+`vimhex-contex-entry.add.reg` and its `remove` counterpart are **generated**
+by `make-context-entry-reg.py` and carry a "do not edit by hand" banner.
+`README.md` says how to use them; this is why they look the way they do.
+
+**Why generated rather than written.** The `Icon` and `command` values are
+`REG_EXPAND_SZ`, the one registry string type whose `%USERPROFILE%` the
+shell expands when it reads the value — a plain `REG_SZ` would send Explorer
+looking for a folder literally named `%USERPROFILE%`. The `.reg` text format
+can only write that type as `hex(2):` followed by the string's UTF-16LE
+bytes, which no one is going to edit correctly by hand. What the first entry
+decodes to:
+
+```
+[HKEY_CURRENT_USER\Software\Classes\*\shell\vimhex]
+"MUIVerb"="vimhex"
+"Icon"    = %USERPROFILE%\...\hexpair\icons\hexpair-open.ico
+"ExtendedSubCommandsKey"="hexpair.ContextMenu"
+
+[HKEY_CURRENT_USER\Software\Classes\hexpair.ContextMenu\shell\10-open]
+"MUIVerb"="gvimhex this"
+"Icon"    = %USERPROFILE%\...\hexpair\icons\hexpair-open.ico
+(command) = cmd.exe /c ""%USERPROFILE%\...\hexpair\gvimhex.cmd" "%1""
+```
+
+**The expansion order is what makes it safe.** The shell expands the
+environment variables when it reads the value, and only then substitutes
+`%1`. Once every `%VAR%` has been consumed as a pair, the single remaining
+`%` is the one in `%1`, so it cannot be mis-paired into a bogus variable
+name. The suite decodes the file and checks exactly that: every value
+round-trips to the intended string, and after the pairs are consumed
+precisely one bare `%` is left in each command. Re-run that check whenever a
+command grows another variable.
+
+**Why `ExtendedSubCommandsKey`.** The folder is a verb carrying that value
+and no `\command` of its own; the key it names holds the children under its
+own `\shell`. That indirection is what keeps everything inside
+`HKEY_CURRENT_USER` and therefore free of administrator rights — the older
+`SubCommands` scheme resolves its verbs against `HKLM`'s CommandStore, which
+is not. Children appear in alphabetical order of their *key* name, hence the
+`10-`/`20-`/`30-` prefixes, and the horizontal rule is
+`"CommandFlags"=dword:00000020` (`ECF_SEPARATORBEFORE`) on the item below it.
+
+**Why the console window is allowed to flash.** Hiding it needs either the
+Windows Script Host — whose "run this command with a hidden window" pattern
+is one of the shapes antivirus heuristics look for, and which Microsoft is
+removing from Windows — or an unsigned stub `.exe`, which is usually worse
+for antivirus rather than better. The trade was weighed and the flash won.
+
+**Why the diff opens maximized.** Two hex views side by side want the full
+width, and a narrow window was also what made Vim stop for a hit-enter
+prompt on each file it opened: a long path plus the file size makes that
+message longer than one line, which is what triggers the prompt.
+`vimhexdiff` therefore sets `shortmess+=F`, which drops the message
+outright, and maximizes with the Win32 GUI's own `:simalt ~x`, guarded by
+`has('gui_running')` so console Vim is unaffected.
+
+## Publishing
+
+Where the plugin is listed, and what each place wants. None of it is
+metadata in the repository — there is no manifest a Vim plugin registry
+reads — so this section is the record of what has to be typed where.
+
+### vim.org
+
+hexpair is script #6194:
+<https://www.vim.org/scripts/script.php?script_id=6194>
+
+The script registry at [vim.org/scripts](https://www.vim.org/scripts/) is
+still live and still browsed, and it is one of the sources
+[VimAwesome](https://vimawesome.com/) indexes. Registration is a web form
+under a vim.org account; there is nothing to add to the repository for it.
+
+**Upload the minimal package**, not the canonical tarball:
+`dist/hexpair.vX.Y.Z.minimal.tar.bz2`. vim.org refuses a POST body
+somewhere between 224 and 250 KiB — the limit is documented nowhere and
+arrives as a bare `413` from the web server, or, just under it, as an
+internal error — and the plain tarball is 900 KiB. That package is
+compressed and leaves out `CLAUDE.md`, this file and `CHANGELOG.md` — the
+last of those because vim.org carries the release notes for each version
+in a field of its own, so shipping the whole changelog inside the package
+is 61 KiB spent twice. `pack-release.py` carries the ladder of further
+omissions if a future one is refused again; the sizes there are rounded,
+because an exact one is wrong as soon as any document changes.
+
+On the compressor, since it is the sort of thing that gets changed on a
+hunch: bzip2 was chosen by measuring, and 7-Zip's `-mx=9` "ultra" is not
+the best answer. It is LZMA2, and it LOSES here — `xz -9e`, the same
+algorithm at the same setting, comes out about 2% *larger* than bzip2 on
+the same content. What does win is 7-Zip's **PPMd**, by about 14%, and it
+is not used: a `.7z` needs 7-Zip or p7zip
+to open, which a stock Linux, a stock macOS and Windows before 11 do not
+have, and the package already uploads. `tar` and `bzip2` are wherever Vim
+is.
+
+The one-time fields, which should stay SHORT — everything that changes
+lives in the README and in `:help hexpair`, and a second full copy of
+either would drift:
+
+| Field | Value |
+|---|---|
+| Script name | `hexpair` (check it is free — the form refuses a duplicate) |
+| Script type | `utility` |
+| Summary | Hex viewing and editing with live hex↔ASCII pair highlighting; paged, so file size does not matter |
+| Description | Two or three paragraphs: what it does, that it is paged and therefore works on files that do not fit in memory, that it needs Vim 8.0 and `xxd`, and the GitHub URL for the rest |
+| Install details | The native-package steps from `README.md`'s *Installation* |
+
+Then one upload per release, which is the recurring part:
+
+| Field | Value |
+|---|---|
+| Package | `dist/hexpair.vX.Y.Z.tar` — the same tarball the release attaches |
+| Script version | `X.Y.Z`, matching `Version:` in `plugin/hexpair.vim` |
+| Vim version | `8.0` — the floor CI builds and tests against |
+| Release notes | The `CHANGELOG.md` entry for that version |
+
+### GitHub
+
+Discovery there is the repository description, the homepage and the
+topics. **None of the three can live in a file in this repository**: they
+are repository settings, held by GitHub and not by git, and there is no
+native manifest for them. Set them once, by whichever of these suits.
+
+**In the web interface** — the shortest route, and the one that needs
+nothing installed. On the repository's main page, the gear next to
+*About* in the right-hand column opens a dialog with all three fields.
+Topics: at most 20, at most 50 characters each, lowercase letters, digits
+and hyphens (GitHub lowercases them anyway).
+
+**With the REST API**, which needs only curl and a token with repository
+write:
+
+```sh
+curl -X PATCH -H "Authorization: Bearer $GITHUB_TOKEN" \
+     -H "Accept: application/vnd.github+json" \
+     https://api.github.com/repos/michal-ruzicka/hexpair \
+     -d '{"description":"A Vim plugin for hex viewing and editing: live hex<->ASCII pair highlighting, paged for files of any size","homepage":"https://github.com/michal-ruzicka/hexpair#readme"}'
+
+curl -X PUT -H "Authorization: Bearer $GITHUB_TOKEN" \
+     -H "Accept: application/vnd.github+json" \
+     https://api.github.com/repos/michal-ruzicka/hexpair/topics \
+     -d '{"names":["vim","vim-plugin","hex-editor","hexdump","xxd","binary-editor","vimscript","vim9script"]}'
+```
+
+Note that the topics call REPLACES the whole list rather than adding to
+it, so it always carries every topic the repository is to have.
+
+**With the `gh` CLI**, if it is installed:
+
+```sh
+gh repo edit michal-ruzicka/hexpair \
+    --description "A Vim plugin for hex viewing and editing: live hex<->ASCII pair highlighting, paged for files of any size" \
+    --homepage "https://github.com/michal-ruzicka/hexpair#readme" \
+    --add-topic vim --add-topic vim-plugin --add-topic hex-editor \
+    --add-topic hexdump --add-topic xxd --add-topic binary-editor \
+    --add-topic vimscript --add-topic vim9script
+```
+
+`vim` and `vim-plugin` are the two that matter: they are what the plugin
+lists and the aggregators filter on.
+
+There IS a way to keep these in a file — the third-party *Settings*
+GitHub App reads `.github/settings.yml` and syncs it — and it is not worth
+it here. Installing it hands admin-equivalent power to anyone who can push,
+since pushing to that file is how settings are changed; the app's own
+README says so and recommends CODEOWNERS to contain it. That is a large
+standing risk to take on for three fields that are set once and then never
+touched.
+
+### Elsewhere
+
+- [awesome-vim](https://github.com/akrawchyk/awesome-vim) takes pull
+  requests, and is a list people actually read.
+- `r/vim` and the `vim_use` mailing list expect a release announcement to
+  say what the thing does before it says it is new.
+- VimAwesome needs nothing: it indexes vim.org, GitHub, and the plugin
+  managers' references in public dotfiles.
 
 ## License
 

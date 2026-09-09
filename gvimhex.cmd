@@ -24,7 +24,7 @@ REM
 REM Delegates to vimhex.cmd, in this SAME directory, rather than duplicating
 REM its argument parsing - the argument grammar keeps ONE source of truth.
 REM Keep the two files together: copy both, or neither, wherever this goes.
-REM See README.md, "Windows: vimhex and vimhexdiff outside Vim".
+REM See README.md, "vimhex and vimhexdiff on Windows".
 REM ===========================================================================
 
 setlocal

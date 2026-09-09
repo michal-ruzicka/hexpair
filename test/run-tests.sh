@@ -258,6 +258,84 @@ _fd[700:705] = b'hello'
 open(os.path.join(w, 'find1.bin'), 'wb').write(bytes(_fd))
 open(os.path.join(w, 'rep1.bin'), 'wb').write(bytes(_fd))
 open(os.path.join(w, 'rep2.bin'), 'wb').write(bytes(_fd))
+# fixtures whose second occurrence of a pattern STRADDLES a SCAN BLOCK
+# boundary, which is a different seam from a page's.
+#
+# WHERE that seam falls is the whole subtlety, and getting it wrong made
+# this fixture prove nothing for a while: a scan starts at the byte after
+# the cursor, not at the start of the file, so the seam is at
+# `from + block` and MOVES with wherever the search began. Putting the
+# needle a megabyte in left it comfortably inside the first block of the
+# search that was meant to straddle it, and the test passed with the
+# overlap taken out.
+#
+# So the offsets here are computed from the search that meets them. The
+# early needle is at offset 1000; a search from just past it starts at
+# offset 1001, and with the smallest block the setting allows (1 MiB) its
+# first seam is therefore at offset 1001 + 1048576 = 1049577. The second
+# needle straddles exactly that. The ramp filler cannot contain the
+# needle, since consecutive bytes of it always rise by one.
+_seam = 1001 + 1024 * 1024
+_sm = bytearray(bytes(i % 256 for i in range(1024 * 1024 + 2048)))
+_sm[1000:1004] = b'\xde\xad\xbe\xef'
+_sm[_seam - 2:_seam + 2] = b'\xde\xad\xbe\xef'
+open(os.path.join(w, 'seam1.bin'), 'wb').write(bytes(_sm))
+# and the same file with ONE byte changed just past the seam, so a
+# comparison has to cross it to find the change
+_sm2 = bytearray(_sm)
+_sm2[1024 * 1024 + 5] ^= 0xff
+open(os.path.join(w, 'seam2.bin'), 'wb').write(bytes(_sm2))
+# A fixture holding both bytes the text view spells the same way: a NUL
+# (which Vim hands back from getline() as a line break) and a real 0a
+# (which IS a line break). "AB<NUL>CD<NL>EF".
+open(os.path.join(w, 'nul.bin'), 'wb').write(b'AB\x00CD\x0aEF')
+# text fixtures for where the cursor lands on the way out of hex mode:
+# five short lines, so byte 30 is the start of the fourth
+open(os.path.join(w, 'unpos.txt'), 'wb').write(b'line one\nline two\nline three\nline four\nline five\n')
+# and the same idea in latin1, where three bytes above 0x7f make the utf-8
+# buffer longer than the file and no byte offset carries across
+open(os.path.join(w, 'unpos-latin1.txt'), 'wb').write(b'prvni radek\ndruhy \xe1\xe9\xed radek\ntreti radek\n')
+# the same five lines with no trailing newline, which is most binaries
+open(os.path.join(w, 'unpos-noeol.txt'), 'wb').write(b'line one\nline two\nline three\nline four\nline five')
+# and an actual binary, which a plain :edit reads as latin1
+open(os.path.join(w, 'unpos.dat'), 'wb').write(bytes((i * 7) % 256 for i in range(200)))
+# and one no byte count describes at all: utf-16 with a BOM, where a
+# character is two file bytes and one or two buffer bytes, so neither the
+# byte walk nor the character walk adds up and the fallback is the answer
+open(os.path.join(w, 'unpos-utf16.txt'), 'wb').write(
+    '\ufeffprvni radek\ndruhy radek\ntreti radek\n'.encode('utf-16-le'))
+# and the same eight bytes with the NUL swapped for a real 0a, so the two
+# differ in exactly the byte the text view used to spell the same way
+open(os.path.join(w, 'nul2.bin'), 'wb').write(b'AB\x0aCD\x0aEF')
+# A fixture in which every byte is one of two values, so that a pattern
+# made of those two is DENSE: the byte reader walks one byte value and
+# checks the rest by hand, which is only worth doing while that value is
+# rare, so on this fixture it declines and the block goes through xxd.
+# "42 42" occurs exactly once, at byte 2000 (1-based); the alternation
+# cannot produce it anywhere else.
+_dn = bytearray(b'\x41\x42' * 2048)
+_dn[2000] = 0x42
+open(os.path.join(w, 'dense.bin'), 'wb').write(bytes(_dn))
+# A fixture that alternates two bytes and nothing else: "42 42" and "43"
+# both occur NOWHERE in it, so a search that finds either has found what
+# the buffer holds. "42 42" is also too dense for the byte reader to walk,
+# and 43 is rare enough that it does - one fixture asks both readers.
+open(os.path.join(w, 'dirtydense.bin'), 'wb').write(b'\x41\x42' * 1024)
+# A fixture for searching a page that has been typed over and not written.
+# Filler no needle can hide in, then four needles at known offsets: one on
+# an earlier page, one on the page that gets edited, one at the very END of
+# that page (which a length-changing edit pushes past where the page ends
+# on disk), and one on a later page.
+_dy = bytearray(b'.' * 2048)
+_dy[100:105] = b'EARLY'
+_dy[600:606] = b'TARGET'
+_dy[1020:1024] = b'TAIL'
+_dy[1600:1604] = b'LATE'
+open(os.path.join(w, 'dirty.bin'), 'wb').write(bytes(_dy))
+# and the same file differing in one byte of that page, to compare against
+_dy2 = bytearray(_dy)
+_dy2[600] = ord('X')
+open(os.path.join(w, 'dirty2.bin'), 'wb').write(bytes(_dy2))
 # a fixture whose only occurrence of a pattern STRADDLES a page boundary:
 # with the 512-byte pages the suite uses, "64 20" sits at the last byte of
 # page 1 and the first of page 2
@@ -458,6 +536,168 @@ EOF
 check "ftplugin + paste active in the hex view"  "[10, 3, 1, 1]"   "$(sed -n 1p "$WORK/t5.out")"
 check "ftplugin reverted in the text view"       "[8, 8, 0, 1, 0]" "$(sed -n 2p "$WORK/t5.out")"
 check "ftplugin re-applied back in the hex view" "[10, 1, 1]"      "$(sed -n 3p "$WORK/t5.out")"
+
+# --- Test 5b: 'spell' is off in the dump and untouched anywhere else -------
+# A speller reads a dump as prose: "de ad be ef" is four misspelt words and
+# the ASCII column is whatever the bytes happen to spell. So the hex view
+# turns it off - and ONLY the hex view. The windowed text view is not this
+# filetype, so it spells exactly as the window always did, and a window
+# that had it off never has it turned on.
+#
+# 'spell' is window-local, so the undo carries the value rather than a
+# `spell<` that would bring back the global one; both directions are walked
+# here because only that catches the difference.
+cat > "$WORK/t5b.vim" <<EOF
+let &runtimepath = '$ROOT,' . \$VIMRUNTIME
+filetype plugin on
+$(printf "$HEX")
+let out = []
+" A real file, because :HexPairUnhex below is the way back to a buffer
+" that was toggled - an unnamed one has nothing to go back to.
+edit $WORK/pos.bin
+setlocal spell
+call add(out, 'on: plain ' . &l:spell)
+HexPairToggle
+call add(out, 'on: hex ' . &l:spell . ' ft ' . &l:filetype)
+HexPairToggle
+call add(out, 'on: text ' . &l:spell . ' ft ' . &l:filetype)
+HexPairToggle
+call add(out, 'on: hex again ' . &l:spell)
+HexPairUnhex
+call add(out, 'on: after unhex ' . &l:spell)
+" And a window that had it off: nothing here may turn it on.
+setlocal nospell
+HexPairToggle
+call add(out, 'off: hex ' . &l:spell)
+HexPairToggle
+call add(out, 'off: text ' . &l:spell)
+call writefile(out, '$WORK/t5b.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/t5b.vim" < /dev/null
+check "'spell' is on before the dump is" "on: plain 1" "$(sed -n 1p "$WORK/t5b.out")"
+check "the hex view turns it off" "on: hex 0 ft xxd" "$(sed -n 2p "$WORK/t5b.out")"
+check "the windowed text view spells as the window always did" "on: text 1 ft " \
+    "$(sed -n 3p "$WORK/t5b.out")"
+check "and going back to the dump turns it off again" "on: hex again 0" \
+    "$(sed -n 4p "$WORK/t5b.out")"
+check "leaving hex mode altogether puts it back" "on: after unhex 1" \
+    "$(sed -n 5p "$WORK/t5b.out")"
+check "a window that had it off keeps it off in the dump" "off: hex 0" \
+    "$(sed -n 6p "$WORK/t5b.out")"
+check "and is not given it in the text view either" "off: text 0" \
+    "$(sed -n 7p "$WORK/t5b.out")"
+
+# --- Test 5c: leaving hex mode lands on the byte you were looking at -------
+# :HexPairUnhex re-opens the file as text, and the cursor goes to the BYTE
+# the hex view was on rather than to the line and column hex mode was
+# entered from. The remembered position is still there and is still the
+# fallback, but it describes a file that may no longer exist: hex mode is
+# where the file gets written, and a position taken before all that can
+# point anywhere.
+#
+# Which position that is has to be worked out the way s:PreReloadPos()
+# works out the other direction: a line costs the FILE its characters
+# where 'fileencoding' is single-byte and its bytes otherwise, plus the
+# ending 'fileformat' gives it - and NO ending on the last line when the
+# file has none. The fixtures below are the three that a first attempt at
+# this got wrong, and each of them is what hexpair is for:
+#
+#  - a file with no trailing newline, which is most binaries, where Vim
+#    counts a final line ending the file does not have;
+#  - a binary opened with a plain :edit, which Vim reads as latin1 and
+#    transcodes, so 200 bytes of file are 293 bytes of buffer and no BYTE
+#    offset carries across though every CHARACTER one does;
+#  - a latin1 text file, the same thing in miniature.
+#
+# The walk totals the file as it goes and that total is the check: where
+# it does not match the size on disk, the model does not describe this
+# file and the remembered position is used instead.
+cat > "$WORK/tunpos.vim" <<EOF
+$(printf "$HEX")
+let out = []
+edit $WORK/unpos.txt
+call cursor(1, 1)
+HexPairToggle
+HexPairGoOffset 30
+call add(out, 'hex ' . matchstr(HexPairStatus(), '(\\zs\\d\\+'))
+HexPairUnhex
+call add(out, 'text line ' . line('.') . ' col ' . col('.') . ' ' . string(getline('.')))
+call add(out, 'byte there ' . (line2byte(line('.')) + col('.') - 1))
+" A page whose dump no longer reads as one cannot say which byte the
+" cursor is over, and :HexPairUnhex! is the way out of exactly that page -
+" so it falls back rather than failing. Entered from line 2 this time.
+call cursor(2, 1)
+HexPairToggle
+HexPairGoOffset 30
+call append(line('.'), 'this is not a dump line')
+silent! HexPairUnhex!
+call add(out, 'after a broken dump: line ' . line('.'))
+" A transcoded file: the buffer is longer than the file, so no byte
+" offset carries across - but every character one does.
+set fileencodings=utf-8,latin1
+edit $WORK/unpos-latin1.txt
+call cursor(1, 1)
+call add(out, 'latin1 file ' . getfsize('$WORK/unpos-latin1.txt') . ' buffer ' . (line2byte(line('\$') + 1) - 1))
+HexPairToggle
+HexPairGoOffset 30
+HexPairUnhex
+call add(out, 'converted: line ' . line('.') . ' col ' . col('.'))
+" No trailing newline, which is most binaries: Vim counts a final line
+" ending that the file has not got.
+edit $WORK/unpos-noeol.txt
+call cursor(1, 1)
+call add(out, 'noeol eol=' . &l:endofline . ' file ' . getfsize('$WORK/unpos-noeol.txt') . ' buffer ' . (line2byte(line('\$') + 1) - 1))
+HexPairToggle
+HexPairGoOffset 33
+HexPairUnhex
+call add(out, 'noeol: line ' . line('.') . ' col ' . col('.'))
+" And the case that started this: a binary opened with a plain :edit.
+edit $WORK/unpos.dat
+call cursor(1, 1)
+HexPairToggle
+HexPairGoOffset 33
+HexPairUnhex
+call add(out, 'binary: line ' . line('.') . ' col ' . col('.') . ' fenc ' . &l:fileencoding)
+" And one the model does not describe: the walk totals the file as it
+" goes, and where that total is not the size on disk the remembered
+" position is used rather than a place worked out from a wrong sum.
+" ucs-bom back in front, which the latin1 case above took out.
+set fileencodings=ucs-bom,utf-8,latin1
+edit $WORK/unpos-utf16.txt
+call cursor(2, 1)
+HexPairToggle
+HexPairGoOffset 30
+HexPairUnhex
+call add(out, 'utf16: line ' . line('.') . ' fenc ' . &l:fileencoding . ' (entered from 2)')
+call writefile(out, '$WORK/tunpos.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tunpos.vim" < /dev/null
+check "the hex view is on byte 30" "hex 30" "$(sed -n 1p "$WORK/tunpos.out")"
+check "and leaving lands on the line that byte is in" \
+    "text line 4 col 1 'line four'" "$(sed -n 2p "$WORK/tunpos.out")"
+check "which is that byte, not the one hex mode was entered at" "byte there 30" \
+    "$(sed -n 3p "$WORK/tunpos.out")"
+check "a dump that cannot be read falls back to where it was entered" \
+    "after a broken dump: line 2" "$(sed -n 4p "$WORK/tunpos.out")"
+check "a transcoded file's bytes are not the buffer's" \
+    "latin1 file 40 buffer 43" "$(sed -n 5p "$WORK/tunpos.out")"
+check "and a transcoded file lands by characters, not bytes" \
+    "converted: line 3 col 2" "$(sed -n 6p "$WORK/tunpos.out")"
+check "a file with no final newline is measured without one" \
+    "noeol eol=0 file 48 buffer 49" "$(sed -n 7p "$WORK/tunpos.out")"
+check "and lands where the byte is all the same" "noeol: line 4 col 4" \
+    "$(sed -n 8p "$WORK/tunpos.out")"
+# The one that started this: a binary read as latin1 by a plain :edit, so
+# the buffer is half again as long as the file and the byte column is not
+# the character the cursor was on.
+check "a binary opened as text lands on its byte too" \
+    "binary: line 1 col 46 fenc latin1" "$(sed -n 9p "$WORK/tunpos.out")"
+# The self-check: two file bytes a character and one or two buffer bytes,
+# so neither walk adds up and the entry position is used after all.
+check "a file the model does not describe falls back" \
+    "utf16: line 2 fenc utf-16le (entered from 2)" "$(sed -n 10p "$WORK/tunpos.out")"
 
 # --- Test 6: a user ftplugin with b:did_ftplugin suppresses the bundled one -
 mkdir -p "$WORK/user-rtp/ftplugin"
@@ -881,6 +1121,37 @@ check "xxd's own 256-column ceiling is allowed" "''" \
 check "and one column past it is not" \
     "hexpair: g:hexpair_bytes_per_line (257) must be between 1 and 256 - xxd's own limit for -c. Any value in that range works and it need not divide anything, but g:hexpair_page_size must be a multiple of it." \
     "$(sed -n 9p "$WORK/t26.out")"
+
+# --- Test 26b: g:hexpair_scan_block validation -----------------------------
+# The other size setting, and the other kind of boundary: this one is a
+# cost limit at both ends rather than a correctness one, so both ends are
+# checked exactly - the value itself and the one next to it.
+cat > "$WORK/t26b.vim" <<EOF
+source $PLUGIN
+let out = []
+call add(out, string(HexPairPagedScanBlockError(8 * 1024 * 1024)))
+call add(out, string(HexPairPagedScanBlockError(1024 * 1024)))
+call add(out, HexPairPagedScanBlockError(1024 * 1024 - 1))
+call add(out, string(HexPairPagedScanBlockError(1024 * 1024 * 1024)))
+call add(out, HexPairPagedScanBlockError(1024 * 1024 * 1024 + 1))
+call add(out, HexPairPagedScanBlockError(0))
+call writefile(out, '$WORK/t26b.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/t26b.vim" < /dev/null
+check "the default scan block passes" "''" "$(sed -n 1p "$WORK/t26b.out")"
+check "so does the smallest one allowed" "''" "$(sed -n 2p "$WORK/t26b.out")"
+scanblockmsg="must be between 1048576 and 1073741824 bytes (1 MiB to 1 GiB) - below that a scan spends its time starting one xxd per block, and above it a comparison holds two blocks of hex at sixteen bytes of Vim per byte of block. The default is 8 MiB."
+check "one byte under it is not" \
+    "hexpair: g:hexpair_scan_block (1048575) $scanblockmsg" \
+    "$(sed -n 3p "$WORK/t26b.out")"
+check "the largest one allowed passes" "''" "$(sed -n 4p "$WORK/t26b.out")"
+check "and one byte over it does not" \
+    "hexpair: g:hexpair_scan_block (1073741825) $scanblockmsg" \
+    "$(sed -n 5p "$WORK/t26b.out")"
+check "nor does a zero" \
+    "hexpair: g:hexpair_scan_block (0) $scanblockmsg" \
+    "$(sed -n 6p "$WORK/t26b.out")"
 
 # --- Test 27: hex-digit width boundary clamping (fabricated total, no real -
 # multi-GiB fixture needed - the bounds/page-count functions are pure) -----
@@ -1905,6 +2176,13 @@ check "helptags found the plugin's tags" "1" \
 # Resolved against the tags of the Vim under test, so this says what that
 # Vim would actually do, and skipped where those tags are not built (a
 # runtime installed without them).
+#
+# Which means the answer DEPENDS ON THE VIM, and the one that matters is
+# the floor: |readblob()| resolves on a modern Vim and is a dead end on
+# 8.0, where that function does not exist. Four of them went in and only
+# the vim80 CI job saw it. A tag Vim gained after 8.0 is not a tag this
+# help may point at - name it in plain text, the way the paged section
+# already names readblob() when it says which patch added it.
 cat > "$WORK/trt.vim" <<EOF
 call writefile([\$VIMRUNTIME], '$WORK/trt.out')
 qa!
@@ -3721,6 +3999,185 @@ check "and again to the one before that" "hex 1/10 @0x2 (2)" \
 check "forwards from inside it skips to the next" "hex 10/10 @0x1388 (5000)" \
     "$(sed -n 9p "$WORK/trun.out")"
 
+# --- The two comparison readers answer alike -------------------------------
+# A comparison reads its blocks as raw bytes where readblob() takes an
+# offset and a size, and as hex out of xxd where it does not. Which of the
+# two a Vim uses is decided by a has(), so the property that has to hold is
+# that it CANNOT MATTER: both readers answer the same four questions, and a
+# jump has to land on the same byte either way.
+#
+# Behind the predicate, and not only because the Blob functions would have
+# nothing to read without it: a Blob literal is Vim 8.1.0735 and CI runs
+# this suite against 8.0.0000, where these lines have to be skipped rather
+# than parsed. A legacy :if that is false does not evaluate what is inside
+# it, which is what makes that work.
+cat > "$WORK/tblobcmp.vim" <<EOF
+source $PLUGIN
+source $WORK/tblobcmp-lib.vim
+let out = []
+if HexPairPagedBlobRangeSupported()
+  call add(out, string([HexPairPagedBlobFirstAgreement(0z001122, 0z001122), HexPairPagedBlobFirstAgreement(0zff1122, 0z001122), HexPairPagedBlobFirstAgreement(0zffee22, 0z0011dd), HexPairPagedBlobFirstAgreement(0z001122, 0z0011)]))
+  call add(out, string([HexPairPagedBlobLastAgreement(0z001122, 0z001122), HexPairPagedBlobLastAgreement(0z0011ff, 0z001100), HexPairPagedBlobLastAgreement(0zffee22, 0z0011dd), HexPairPagedBlobLastAgreement(0z001122, 0z0011)]))
+  call add(out, string([HexPairPagedBlobFirstDifference(0zabcdef, 0zabcdef), HexPairPagedBlobFirstDifference(0zabcdef, 0zab99ef), HexPairPagedBlobFirstDifference(0zabcd, 0zabcdef), HexPairPagedBlobFirstDifference(0z, 0z)]))
+  call add(out, string([HexPairPagedBlobLastDifference(0zabcdef, 0zabcdef), HexPairPagedBlobLastDifference(0zabcdef, 0z99cdef), HexPairPagedBlobLastDifference(0zabcd, 0zabcdef), HexPairPagedBlobLastDifference(0z, 0z)]))
+  call add(out, Compare())
+else
+  for i in range(5)
+    call add(out, 'no Blob reader here')
+  endfor
+endif
+call writefile(out, '$WORK/tblobcmp.out')
+qa!
+EOF
+# The property check itself, in functions so that nothing in it runs on a
+# Vim that has no Blobs: a function body is stored as text and only parsed
+# when it is called.
+#
+# No backslash continuation lines anywhere in here. This suite runs Vim
+# without -N, so 'compatible' is on and 'cpoptions' carries C, which turns
+# a leading backslash back into an ordinary character - the plugin gets
+# away with continuations because it sets cpo&vim on the way in and puts
+# it back on the way out, and a file sourced after it does not.
+cat > "$WORK/tblobcmp-lib.vim" <<'VIMEOF'
+" 4096 bytes nobody chose by hand, from a seeded generator so the same
+" bytes are compared on every machine.
+function! Bytes() abort
+  let seed = 12345
+  let out = []
+  for i in range(4096)
+    let seed = (seed * 1103515245 + 12345) % 2147483648
+    call add(out, seed / 65536 % 256)
+  endfor
+  return out
+endfunction
+
+function! Hexof(l) abort
+  return join(map(copy(a:l), 'printf("%02x", v:val)'), '')
+endfunction
+
+function! Blobof(l) abort
+  let b = 0z
+  for v in a:l
+    call add(b, v)
+  endfor
+  return b
+endfunction
+
+" The hex differences count nibbles, which their callers halve; everything
+" else already counts bytes.
+function! Halve(n) abort
+  return a:n < 0 ? -1 : a:n / 2
+endfunction
+
+" The same bytes spoiled four ways - not at all, in the middle, at the very
+" front and at the very end - each also truncated, so a shorter side is
+" covered too.
+function! Compare() abort
+  let mine = Bytes()
+  let mh = Hexof(mine)
+  let mb = Blobof(mine)
+  let bad = []
+  for spoil in [[], [[100, 0xff]], [[0, 0x01], [1, 0x02], [2, 0x03]], [[4095, 0x00]]]
+    for cut in [4096, 4000, 1]
+      let other = copy(mine)[0 : cut - 1]
+      for pair in spoil
+        if pair[0] < len(other)
+          let other[pair[0]] = pair[1]
+        endif
+      endfor
+      let th = Hexof(other)
+      let tb = Blobof(other)
+      let hexans = [Halve(HexPairPagedFirstDifference(mh, th)), Halve(HexPairPagedLastDifference(mh, th)), HexPairPagedFirstAgreement(mh, th), HexPairPagedLastAgreement(mh, th)]
+      let blobans = [HexPairPagedBlobFirstDifference(mb, tb), HexPairPagedBlobLastDifference(mb, tb), HexPairPagedBlobFirstAgreement(mb, tb), HexPairPagedBlobLastAgreement(mb, tb)]
+      if hexans != blobans
+        call add(bad, printf('spoil %s cut %d: hex %s blob %s', string(spoil), cut, string(hexans), string(blobans)))
+      endif
+    endfor
+  endfor
+  return empty(bad) ? 'the two agree' : join(bad, ' ;; ')
+endfunction
+VIMEOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tblobcmp.vim" < /dev/null
+check_splice "the Blob reader agrees about the first agreement" "[0, 1, -1, 0]" \
+    "$(sed -n 1p "$WORK/tblobcmp.out")"
+check_splice "and about the last" "[2, 1, -1, 1]" \
+    "$(sed -n 2p "$WORK/tblobcmp.out")"
+check_splice "the first difference comes back in bytes, not nibbles" "[-1, 1, 2, -1]" \
+    "$(sed -n 3p "$WORK/tblobcmp.out")"
+check_splice "and so does the last" "[-1, 0, 2, -1]" \
+    "$(sed -n 4p "$WORK/tblobcmp.out")"
+check_splice "hex and Blob answer alike over bytes nobody chose" "the two agree" \
+    "$(sed -n 5p "$WORK/tblobcmp.out")"
+
+# --- A bound view says so rather than showing another page ------------------
+# 'scrollbind' cannot follow a page turn, so hexpair moves every bound view
+# to the page holding the same byte. A view whose file does not reach that
+# far used to STAY where it was - and two windows then showed different
+# offsets side by side with nothing saying so, which in a diff is the
+# confusion the binding exists to prevent.
+#
+# It goes to that page now and says the page is not there: a banner, no
+# bytes, and a write refused. The last PARTIAL page is untouched - it is a
+# real page and is shown as one - so only a page wholly past the end is
+# affected.
+cat > "$WORK/tabsent.vim" <<EOF
+$(printf "$HEX")
+let out = []
+HexPairOpen $WORK/diffa.bin 1
+vsplit
+HexPairOpen $WORK/diffshort.bin 1
+setlocal scrollbind
+wincmd p
+setlocal scrollbind
+" diffa.bin is 5000 bytes (10 pages of 512), diffshort.bin its first 1000
+" (2 pages, the second partial). Page 2 exists in both; page 3 does not.
+HexPairPageNext
+wincmd p
+call add(out, 'page 2: ' . HexPairStatus() . ' | ' . (getline(1) =~# 'is not in' ? 'absent' : 'real'))
+wincmd p
+HexPairPageNext
+wincmd p
+call add(out, 'page 3: ' . HexPairStatus() . ' | ' . (getline(1) =~# 'is not in' ? 'absent' : 'real'))
+call add(out, 'lines ' . line('\$') . ', bytes ' . b:hexpair_page_len . ', base ' . b:hexpair_page_base)
+redir => a
+silent! w
+redir END
+call add(out, matchstr(substitute(a, "\\n", ' ', 'g'), 'hexpair:[^|]*'))
+call add(out, 'still ' . getfsize('$WORK/diffshort.bin') . ' bytes on disk')
+" And back to a real page, from the absent one.
+HexPairPageGoto 1
+call add(out, 'back: ' . HexPairStatus() . ' | ' . (getline(1) =~# 'is not in' ? 'absent' : 'real'))
+" And the refusal goes with the page: a real page is writable again. The
+" flag that marks an absent one is cleared by loading a real one, and
+" nothing else says so - without that, coming back leaves a view that
+" cannot be written and gives the absent page's reason for it.
+redir => b
+silent! w
+redir END
+call add(out, 'write back on page 1: ' . (b =~# 'is not in this file' ? 'STILL REFUSED' : 'allowed'))
+call writefile(out, '$WORK/tabsent.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tabsent.vim" < /dev/null
+check "the last partial page is a real page and stays one" \
+    "page 2: hex 2/2 @0x201 (513) | real" "$(sed -n 1p "$WORK/tabsent.out")"
+check "a page wholly past the end says it is not there" "page 3: hex 3/2 | absent" \
+    "$(sed -n 2p "$WORK/tabsent.out")"
+# Two banner lines and no bytes: the shape of an empty page, which every
+# byte-counting guard in the plugin already knows. The base is where the
+# page WOULD start, so the two views agree about which page they differ on.
+check "which is a banner and no bytes, based where the page would be" \
+    "lines 2, bytes 0, base 1024" "$(sed -n 3p "$WORK/tabsent.out")"
+check "and a write of it is refused, not quietly done" \
+    "hexpair: page 3 is not in this file - it is shown only to keep this view level with the one beside it; there is nothing here to write" \
+    "$(sed -n 4p "$WORK/tabsent.out")"
+check "with the file untouched" "still 1000 bytes on disk" \
+    "$(sed -n 5p "$WORK/tabsent.out")"
+check "and a real page is reachable again from it" "back: hex 1/2 @0x1 (1) | real" \
+    "$(sed -n 6p "$WORK/tabsent.out")"
+check "which is writable again, the refusal having gone with the page" \
+    "write back on page 1: allowed" "$(sed -n 7p "$WORK/tabsent.out")"
+
 # --- A file that is longer differs from where it grows --------------------
 cat > "$WORK/tdf2.vim" <<EOF
 $(printf "$HEX")
@@ -3893,10 +4350,27 @@ if has('win32')
   call add(out, xxd ==# alt ? 'agree' : 'DIFFER: ' . xxd . ' vs ' . alt)
   call add(out, strlen(alt) . ' ' . (alt =~# '^[0-9a-f]*\$' ? 'lowercase-hex' : 'NOT-HEX'))
   call add(out, string(HexPairPagedSeekReadHexForTest('$WORK/diffa.bin', 99999, 64)))
+  " The same for the reader a scan uses past 2 GiB: raw bytes out of the
+  " same temp file, which must be the bytes readblob() gives where BOTH
+  " can reach - the range past the end being empty on both, too.
+  if HexPairPagedBlobRangeSupported()
+    let blob = HexPairPagedFileBlobForTest('$WORK/diffa.bin', 1000, 64)
+    let balt = HexPairPagedSeekReadBlobForTest('$WORK/diffa.bin', 1000, 64)
+    call add(out, blob ==# balt ? 'agree' : 'DIFFER: ' . string(blob) . ' vs ' . string(balt))
+    call add(out, len(balt) . ' bytes, hex ' . (HexPairPagedFileHexForTest('$WORK/diffa.bin', 1000, 64) ==# tolower(substitute(string(balt), '^0z\|[.]', '', 'g')) ? 'matches' : 'DIFFERS'))
+    call add(out, len(HexPairPagedSeekReadBlobForTest('$WORK/diffa.bin', 99999, 64)) . ' past the end')
+  else
+    call add(out, 'agree')
+    call add(out, '64 bytes, hex matches')
+    call add(out, '0 past the end')
+  endif
 else
   call add(out, 'agree')
   call add(out, '128 lowercase-hex')
   call add(out, "''")
+  call add(out, 'agree')
+  call add(out, '64 bytes, hex matches')
+  call add(out, '0 past the end')
 endif
 call writefile(out, '$WORK/tblob.out')
 qa!
@@ -3908,6 +4382,16 @@ check "and comes back as flat lowercase hex" \
     "128 lowercase-hex" "$(sed -n 2p "$WORK/tblob.out")"
 check "and past the end it is nothing, not something" "''" \
     "$(sed -n 3p "$WORK/tblob.out")"
+# The reader a SCAN uses past 2 GiB. readblob() with an offset cannot go
+# there on Windows - it answers with an empty Blob and success, which a
+# scan would read as "nothing here" - so past that mark the bytes come out
+# of the same PowerShell temp file the hex reader uses, read straight in.
+check "the byte reader past 2 GiB matches the ordinary one" "agree" \
+    "$(sed -n 4p "$WORK/tblob.out")"
+check "and holds the bytes xxd spells for the same range" \
+    "64 bytes, hex matches" "$(sed -n 5p "$WORK/tblob.out")"
+check "and past the end of the file it is empty, not short" "0 past the end" \
+    "$(sed -n 6p "$WORK/tblob.out")"
 
 # COLD, with no page ever opened. The block above opens one first and says
 # why - "s:xxd is resolved when one is opened" - which is a workaround for a
@@ -4063,6 +4547,14 @@ call add(out, HexPairPagedRangeIsXxdsForTest(lim - 1024, 512) . '')
 " starts below, ends above: the straddle
 call add(out, HexPairPagedRangeIsXxdsForTest(lim - 100, 4096) . '')
 call add(out, HexPairPagedRangeIsXxdsForTest(lim + 1, 4096) . '')
+" The same four ranges, asked of the rule directly with the platform
+" passed in, so both columns are asserted on whichever platform runs this.
+let ends = [1024, lim - 512, lim, lim + 1, lim + 3996, lim + 4097]
+let cols = []
+for w in [0, 1]
+  call add(cols, (w ? 'windows: ' : 'not windows: ') . join(map(copy(ends), 'HexPairPagedSeekableOffset(v:val, ' . w . ') ? 1 : 0'), ' '))
+endfor
+call add(out, join(cols, ' | '))
 call writefile(out, '$WORK/tbound.out')
 qa!
 EOF
@@ -4080,6 +4572,15 @@ check "a range that STRADDLES the limit is not, on Windows" "$want_straddle" \
     "$(sed -n 3p "$WORK/tbound.out")"
 check "and one wholly past it never is" "$want_high" \
     "$(sed -n 4p "$WORK/tbound.out")"
+# The four above can only assert what THIS platform does, and on anything
+# but Windows that is "everything is xxd's" - which would still be true if
+# the limit had been deleted. The decision itself takes the platform as an
+# argument for that reason, so both of its branches are checked wherever
+# the suite runs: the Windows column below is the one no Linux or macOS CI
+# can otherwise reach, and it is where the 2 GiB rule actually lives.
+check "the seek rule, asked of both platforms at once" \
+    "not windows: 1 1 1 1 1 1 | windows: 1 1 1 0 0 0" \
+    "$(sed -n 5p "$WORK/tbound.out")"
 
 # getfsize() has two answers that are not sizes: -1 when it cannot see the
 # file, and -2 when the size does not fit in a Number - which on a Vim
@@ -4311,6 +4812,34 @@ check "and refuses when nothing is being compared" \
     "hexpair: not comparing with anything - :HexPairDiff {file} first" \
     "$(sed -n 2p "$WORK/tdfshow2.out")"
 
+# And the same question asked from the WINDOWED TEXT VIEW, where a column
+# is a byte: reading the cursor as a dump line's position gives an offset
+# short by however much of the page is above it - a plausible byte, from
+# the wrong place, which is worse than an error.
+cat > "$WORK/tdfshow3.vim" <<EOF
+$(printf "$HEX")
+let out = []
+HexPairOpen $WORK/diffa.bin 3
+silent HexPairDiff $WORK/diffb.bin
+HexPairGoOffset 1501
+silent HexPairToggle
+call add(out, b:hexpair_view)
+redir => a
+silent HexPairDiffShow
+redir END
+call add(out, substitute(a, '^[\r\n]*', '', ''))
+call add(out, fnamemodify('$WORK/diffb.bin', ':~:.'))
+call writefile(out, '$WORK/tdfshow3.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tdfshow3.vim" < /dev/null
+diffbd=$(sed -n 3p "$WORK/tdfshow3.out")
+check "the text view is where it says it is" "text" \
+    "$(sed -n 1p "$WORK/tdfshow3.out")"
+check_path "and asked there, it answers about the byte under the cursor" \
+    "hexpair: byte 1501 (0x5dd): dc here, ee in $diffbd" \
+    "$(sed -n 2p "$WORK/tdfshow3.out")"
+
 # ===========================================================================
 # Finding bytes, and replacing them
 # ===========================================================================
@@ -4481,7 +5010,6 @@ check "and a replacement cannot have wildcards in it" \
 cat > "$WORK/ttmark.vim" <<EOF
 $(printf "$HEX")
 let out = []
-call add(out, string([HexPairPagedTextRuns('abcdef', 'abXdef', 100), HexPairPagedTextRuns('abcdef', 'abcdef', 0), HexPairPagedTextRuns('abcdef', 'abc', 0), HexPairPagedTextRuns('abc', 'abcdef', 0)]))
 call add(out, string(HexPairPagedTextPositions([[2, 0, 10], [3, 11, 10]], [[5, 3]])))
 call add(out, string(HexPairPagedTextPositions([[2, 0, 10], [3, 11, 10]], [[8, 6]])))
 HexPairOpen $WORK/tmark1.bin 1
@@ -4502,27 +5030,25 @@ EOF
 "$HEXPAIR_VIM" -es -u NONE -S "$WORK/ttmark.vim" < /dev/null
 # The two pure halves first: where two strings of bytes part company, and
 # where a run of bytes lands on the lines that hold it.
-check "runs are where two lines of bytes differ" \
-    "[[[102, 1]], [], [[3, 3]], []]" "$(sed -n 1p "$WORK/ttmark.out")"
 check "a run inside one line is one position" "[[2, 6, 3]]" \
-    "$(sed -n 2p "$WORK/ttmark.out")"
+    "$(sed -n 1p "$WORK/ttmark.out")"
 # Bytes 8-13 with a line break at 10: two pieces, and the break itself is
 # not marked because it has no column.
 check "and one across a line break is two" "[[2, 9, 2], [3, 1, 3]]" \
-    "$(sed -n 3p "$WORK/ttmark.out")"
+    "$(sed -n 2p "$WORK/ttmark.out")"
 check "the text view holds the bytes between the breaks" \
-    "['ABCDEFGHIJ', 'KLMNOPQRST', 'UVWXYZ0123']" "$(sed -n 4p "$WORK/ttmark.out")"
+    "['ABCDEFGHIJ', 'KLMNOPQRST', 'UVWXYZ0123']" "$(sed -n 3p "$WORK/ttmark.out")"
 check "what differs from the other file is marked where it is" \
-    "[[2, 3, 2], [4, 4, 1]]" "$(sed -n 5p "$WORK/ttmark.out")"
+    "[[2, 3, 2], [4, 4, 1]]" "$(sed -n 4p "$WORK/ttmark.out")"
 check "so is the byte a mark stands on" "[[2, 6, 1]]" \
-    "$(sed -n 6p "$WORK/ttmark.out")"
+    "$(sed -n 5p "$WORK/ttmark.out")"
 check "and the bytes a search found" "[[3, 1, 2]]" \
-    "$(sed -n 7p "$WORK/ttmark.out")"
+    "$(sed -n 6p "$WORK/ttmark.out")"
 # The edited bytes are the one layer that is about the BUFFER, and in this
 # view that means comparing what the lines hold against the page as it was
 # read - string against string, in the text view's own spelling.
 check "and the bytes edited and not yet written" "[1, [[4, 7, 4]]]" \
-    "$(sed -n 8p "$WORK/ttmark.out")"
+    "$(sed -n 7p "$WORK/ttmark.out")"
 
 # --- The same, on the bytes a real file is made of -------------------------
 # CRLF line endings and multi-byte characters are where a byte offset and
@@ -4585,6 +5111,506 @@ check "and the text view lands on the character it belongs to" \
 # Two bytes of a character replaced by two ASCII ones: the same two bytes.
 check "an edit is marked byte for byte, not character for character" \
     "[[2, 19, 2]]" "$(sed -n 8p "$WORK/tmb.out")"
+
+# --- The byte reader finds what the hex reader finds ------------------------
+# A search reads each block as raw bytes and walks it with a compiled
+# function where Vim can (autoload/hexpair.vim), and as hex through xxd
+# where it cannot. As with the comparison, which of the two is used must
+# not be visible in any answer - but here there is a third case as well:
+# the byte reader may DECLINE a block, because it walks every occurrence of
+# one byte of the pattern and that is only worth doing while the byte is
+# rare in the block. So all three have to land on the same byte.
+# No backslash continuations in the generated file: this suite runs Vim
+# without -N, so 'cpoptions' carries C by the time the plugin has put it
+# back the way it found it.
+cat > "$WORK/tbfind.vim" <<EOF
+source $PLUGIN
+let g:hexpair_page_size = 512
+let out = []
+call add(out, 'blob reader here: ' . HexPairPagedBlobFindSupported())
+if HexPairPagedBlobFindSupported()
+  call add(out, string(HexPairPagedFindByteFilter('deadbeef')))
+  call add(out, string(HexPairPagedFindByteFilter('de..be')))
+  call add(out, string(HexPairPagedFindByteFilter('d..f')))
+  " "BC" in "ABCD", then the last "BC" before byte 8 of "ABCDBCCD".
+  call add(out, hexpair#FindForward(0z41424344, 0zffff, 0z4243) . ' ' . hexpair#FindBackward(0z4142434442434344, 0zffff, 0z4243, 8) . ' ' . hexpair#FindForward(0z41424344, 0z0fff, 0z0243))
+  " -1 is "not in this block"; -2 is "not searched, use the other reader",
+  " which is what a pattern of nothing but wildcards gets, and what a
+  " pattern whose every byte is half the block gets.
+  call add(out, hexpair#FindForward(0z41424344, 0zffff, 0z9999) . ' ' . hexpair#FindForward(0z41424344, 0z0000, 0z0000) . ' ' . hexpair#FindForward(repeat(0z4142, 2048), 0zffff, 0z4242))
+else
+  " Five, the same number the branch above adds, so the checks that read
+  " this file by line number keep their places on either Vim.
+  for i in range(5)
+    call add(out, 'no blob reader here')
+  endfor
+endif
+HexPairOpen $WORK/dense.bin 1
+redir => m1
+silent HexPairFind 42 42
+redir END
+call add(out, matchstr(substitute(m1, "\\n", ' ', 'g'), 'hexpair: bytes[^ ]* .*'))
+HexPairOpen $WORK/find1.bin 1
+redir => m2
+silent HexPairFind de ?? be ef
+redir END
+call add(out, matchstr(substitute(m2, "\\n", ' ', 'g'), 'hexpair: bytes[^ ]* .*'))
+redir => m3
+silent HexPairFindPrev
+redir END
+call add(out, matchstr(substitute(m3, "\\n", ' ', 'g'), 'hexpair: bytes[^ ]* .*'))
+call writefile(out, '$WORK/tbfind.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tbfind.vim" < /dev/null
+# Not check_splice: this is the line that says WHICH reader the checks
+# below exercised, and it has to be readable either way.
+check "the suite says which search reader it is testing" \
+    "blob reader here: $HAS_SPLICE" "$(sed -n 1p "$WORK/tbfind.out")"
+check_splice "a pattern becomes a mask and a value" \
+    "[0zFFFFFFFF, 0zDEADBEEF]" "$(sed -n 2p "$WORK/tbfind.out")"
+check_splice "a wildcard byte constrains nothing" "[0zFF00FF, 0zDE00BE]" \
+    "$(sed -n 3p "$WORK/tbfind.out")"
+check_splice "and a wildcard NIBBLE constrains the other half" \
+    "[0zF00F, 0zD00F]" "$(sed -n 4p "$WORK/tbfind.out")"
+check_splice "the walk finds a match forwards, backwards and through a nibble" \
+    "1 4 1" "$(sed -n 5p "$WORK/tbfind.out")"
+check_splice "and says -1 for absent, -2 for what it will not walk" \
+    "-1 -2 -2" "$(sed -n 6p "$WORK/tbfind.out")"
+# Every byte of dense.bin is 41 or 42, so "42 42" is a pattern the byte
+# reader hands back and the hex reader answers - the same answer.
+check "a pattern too dense to walk is found by the other reader" \
+    "hexpair: bytes 42 42 at byte 2000 (0x7d0)" \
+    "$(sed -n 7p "$WORK/tbfind.out")"
+check "a nibble wildcard finds the same byte on either reader" \
+    "hexpair: bytes de ?? be ef at byte 301 (0x12d)" \
+    "$(sed -n 8p "$WORK/tbfind.out")"
+check "and so does the backward scan" \
+    "hexpair: bytes de ?? be ef at byte 4997 (0x1385) (wrapped)" \
+    "$(sed -n 9p "$WORK/tbfind.out")"
+
+# ===========================================================================
+# Searching and comparing a page that has been typed over
+# ===========================================================================
+# A scan reads the FILE, and unwritten edits are in the BUFFER. Where the
+# two meet - the one page in view, which is the only one that can be
+# modified - the buffer is what the block says, so that what is found is
+# what is on the screen. Without that the answers were wrong in both
+# directions at once: bytes typed INTO the page were "not found in this
+# file", and bytes typed OVER were still found, at an offset the cursor
+# then jumped to and where they were no longer to be seen.
+#
+# The arithmetic of the overlap is asked separately, below: through a real
+# scan the smallest block the setting allows is a megabyte, so a fixture
+# that reached every seam would have to be one.
+cat > "$WORK/tdirty.vim" <<EOF
+source $PLUGIN
+let g:hexpair_page_size = 512
+function! Msg(m) abort
+  let lines = filter(split(a:m, "\n"), 'v:val =~# "hexpair:"')
+  return empty(lines) ? '' : matchstr(lines[-1], 'hexpair:.*')
+endfunction
+function! Find(cmd) abort
+  redir => m
+  execute 'silent! ' . a:cmd
+  redir END
+  return Msg(m)
+endfunction
+let out = []
+" Page 2 is bytes 513-1024, which is where TARGET and TAIL are.
+HexPairOpen $WORK/dirty.bin 2
+" Type over TARGET, making it MARKER: same length, so the page is the
+" length it was read with and every offset is still a file offset.
+silent! %s/54 41 52 47 45 54/4d 41 52 4b 45 52/
+call add(out, 'modified: ' . &modified)
+call add(out, Find('HexPairFindText MARKER'))
+call add(out, Find('HexPairFindText TARGET'))
+call add(out, Find('HexPairFindText EARLY'))
+call add(out, Find('HexPairFindText LATE'))
+call add(out, Find('HexPairFindText TAIL'))
+" The backward scan reads the same page through the same overlay.
+HexPairGoOffset 1024
+call add(out, Find('HexPairFindText MARKER'))
+call add(out, Find('HexPairFindPrev'))
+" Undone, the file is the file again.
+silent undo
+call add(out, 'modified: ' . &modified)
+call add(out, Find('HexPairFindText TARGET'))
+call add(out, Find('HexPairFindText MARKER'))
+call writefile(out, '$WORK/tdirty.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tdirty.vim" < /dev/null
+check "the buffer is modified once the dump is typed over" "modified: 1" \
+    "$(sed -n 1p "$WORK/tdirty.out")"
+check "bytes typed into the page are found where they are shown" \
+    "hexpair: text 'MARKER' at byte 601 (0x259)" \
+    "$(sed -n 2p "$WORK/tdirty.out")"
+check "and the bytes they were typed over are not found any more" \
+    "hexpair: text 'TARGET' not found in this file" \
+    "$(sed -n 3p "$WORK/tdirty.out")"
+check "a page before the edited one still answers from the file" \
+    "hexpair: text 'EARLY' at byte 101 (0x65) (wrapped)" \
+    "$(sed -n 4p "$WORK/tdirty.out")"
+check "and so does a page after it" "hexpair: text 'LATE' at byte 1601 (0x641)" \
+    "$(sed -n 5p "$WORK/tdirty.out")"
+check "and the untouched tail of the edited page itself" \
+    "hexpair: text 'TAIL' at byte 1021 (0x3fd)" \
+    "$(sed -n 6p "$WORK/tdirty.out")"
+check "a scan that wraps past the end sees the same page" \
+    "hexpair: text 'MARKER' at byte 601 (0x259) (wrapped)" \
+    "$(sed -n 7p "$WORK/tdirty.out")"
+check "and so does the backward one, which reads its blocks differently" \
+    "hexpair: text 'MARKER' at byte 601 (0x259) (wrapped)" \
+    "$(sed -n 8p "$WORK/tdirty.out")"
+check "an undo puts the buffer back" "modified: 0" \
+    "$(sed -n 9p "$WORK/tdirty.out")"
+check "and the file's own bytes are found again" \
+    "hexpair: text 'TARGET' at byte 601 (0x259)" \
+    "$(sed -n 10p "$WORK/tdirty.out")"
+check "and what was only ever in the buffer is not" \
+    "hexpair: text 'MARKER' not found in this file" \
+    "$(sed -n 11p "$WORK/tdirty.out")"
+
+# The overlap itself, put to the arithmetic directly. A block that ends
+# inside the page, one that starts inside it, one that swallows it whole,
+# one that is exactly it and two that miss it are the cases the scan can
+# produce, and through a real scan the smallest block the setting allows
+# is a megabyte - so they are asked here rather than with a fixture large
+# enough to reach them.
+cat > "$WORK/tovl.vim" <<EOF
+source $PLUGIN
+let out = []
+" A four-byte page at file offset 4.
+for c in [[0, 4, 'block ends where the page begins'], [0, 6, 'block ends inside it'], [6, 4, 'block begins inside it'], [0, 12, 'block swallows it'], [4, 4, 'block is exactly it'], [8, 4, 'block begins past it'], [0, 3, 'block ends before it']]
+  call add(out, c[2] . ': ' . string(HexPairPagedOverlayRange(c[0], c[1], 4, 4)))
+endfor
+call writefile(out, '$WORK/tovl.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tovl.vim" < /dev/null
+check "a block ending where the page begins overlaps nothing" \
+    "block ends where the page begins: [0, 0]" "$(sed -n 1p "$WORK/tovl.out")"
+check "a block ending inside the page overlaps its front" \
+    "block ends inside it: [4, 6]" "$(sed -n 2p "$WORK/tovl.out")"
+check "a block beginning inside it overlaps its back" \
+    "block begins inside it: [6, 8]" "$(sed -n 3p "$WORK/tovl.out")"
+check "a block swallowing it overlaps all of it" \
+    "block swallows it: [4, 8]" "$(sed -n 4p "$WORK/tovl.out")"
+check "a block that is the page overlaps all of it too" \
+    "block is exactly it: [4, 8]" "$(sed -n 5p "$WORK/tovl.out")"
+check "a block past it overlaps nothing" \
+    "block begins past it: [0, 0]" "$(sed -n 6p "$WORK/tovl.out")"
+check "and neither does one before it" \
+    "block ends before it: [0, 0]" "$(sed -n 7p "$WORK/tovl.out")"
+
+# The two readers over an edited page. Which one runs is not the question -
+# that a search answers the same either way is. A dense pattern is handed
+# BACK by the byte reader and goes through the hex one; a rare byte it
+# walks itself. Neither is anywhere in the fixture, so both are found only
+# if the buffer is what was searched.
+#
+# The edits are made through the cursor, the way one is made by hand:
+# |:HexPairGoOffset| to the byte, |:HexPairGoHex| to its digits, and two
+# characters typed over them.
+cat > "$WORK/tdread.vim" <<EOF
+source $PLUGIN
+let g:hexpair_page_size = 512
+function! Find(cmd) abort
+  redir => m
+  execute 'silent! ' . a:cmd
+  redir END
+  let lines = filter(split(m, "\n"), 'v:val =~# "hexpair:"')
+  return empty(lines) ? '' : matchstr(lines[-1], 'hexpair:.*')
+endfunction
+let out = []
+" Page 2 is bytes 513-1024.
+HexPairOpen $WORK/dirtydense.bin 2
+call add(out, Find('HexPairFind 42 42'))
+call add(out, Find('HexPairFind 43'))
+" Byte 601 is a 41 with a 42 in front of it: make it a 42 and there is a
+" "42 42" at byte 600, which is dense and goes through the hex reader.
+HexPairGoOffset 601
+HexPairGoHex
+execute "normal! R42\<Esc>"
+" And byte 701 into the file's only 43, which the byte reader walks.
+HexPairGoOffset 701
+HexPairGoHex
+execute "normal! R43\<Esc>"
+call add(out, 'modified: ' . &modified)
+call add(out, Find('HexPairFind 42 42'))
+call add(out, Find('HexPairFind 43'))
+call writefile(out, '$WORK/tdread.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tdread.vim" < /dev/null
+check "neither pattern is in the file to begin with" \
+    "hexpair: bytes 42 42 not found in this file" \
+    "$(sed -n 1p "$WORK/tdread.out")"
+check "nor the other one" "hexpair: bytes 43 not found in this file" \
+    "$(sed -n 2p "$WORK/tdread.out")"
+check "typing two bytes over the dump modifies it" "modified: 1" \
+    "$(sed -n 3p "$WORK/tdread.out")"
+check "a pattern the byte reader hands back finds what was typed" \
+    "hexpair: bytes 42 42 at byte 600 (0x258) (wrapped)" \
+    "$(sed -n 4p "$WORK/tdread.out")"
+check "and so does one it walks itself" \
+    "hexpair: bytes 43 at byte 701 (0x2bd)" \
+    "$(sed -n 5p "$WORK/tdread.out")"
+
+# The windowed text view holds text, not a dump, and its bytes are got a
+# different way (writefile() and xxd, see s:LiveHex()). The question is
+# the same one, so the answer has to be.
+cat > "$WORK/tdtext.vim" <<EOF
+source $PLUGIN
+let g:hexpair_page_size = 512
+function! Find(cmd) abort
+  redir => m
+  execute 'silent! ' . a:cmd
+  redir END
+  let lines = filter(split(m, "\n"), 'v:val =~# "hexpair:"')
+  return empty(lines) ? '' : matchstr(lines[-1], 'hexpair:.*')
+endfunction
+let out = []
+HexPairOpen $WORK/dirty.bin 2
+" Out of the dump and into the text view, where TARGET is text.
+HexPairToggle
+" The needle is TEXT here, not a pair of digits: that is what says this
+" is the text view and not the dump.
+call add(out, 'shows: ' . matchstr(join(getline(1, '$'), ''), 'TARGET'))
+silent! %s/TARGET/MARKER/
+call add(out, 'modified: ' . &modified)
+call add(out, Find('HexPairFindText MARKER'))
+call add(out, Find('HexPairFindText TARGET'))
+call add(out, Find('HexPairFindText LATE'))
+call writefile(out, '$WORK/tdtext.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tdtext.vim" < /dev/null
+check "the text view shows the bytes as text" "shows: TARGET" \
+    "$(sed -n 1p "$WORK/tdtext.out")"
+check "and typing in it modifies the buffer" "modified: 1" \
+    "$(sed -n 2p "$WORK/tdtext.out")"
+check "text typed into the text view is found where it is shown" \
+    "hexpair: text 'MARKER' at byte 601 (0x259)" \
+    "$(sed -n 3p "$WORK/tdtext.out")"
+check "and the text it replaced is not found any more" \
+    "hexpair: text 'TARGET' not found in this file" \
+    "$(sed -n 4p "$WORK/tdtext.out")"
+check "while the rest of the file answers from the file" \
+    "hexpair: text 'LATE' at byte 1601 (0x641)" \
+    "$(sed -n 5p "$WORK/tdtext.out")"
+
+# An insert grows the page past its own end on disk, and those bytes have
+# no file offset yet - not to report and not to jump to. They are searched
+# once :w has given them one, and until then the page is searched up to
+# where it ended when it was read. This pins that boundary, which is the
+# one |:HexPairModifiedShow| names.
+cat > "$WORK/tdgrow.vim" <<EOF
+source $PLUGIN
+let g:hexpair_page_size = 512
+function! Find(cmd) abort
+  redir => m
+  execute 'silent! ' . a:cmd
+  redir END
+  let lines = filter(split(m, "\n"), 'v:val =~# "hexpair:"')
+  return empty(lines) ? '' : matchstr(lines[-1], 'hexpair:.*')
+endfunction
+let out = []
+HexPairOpen $WORK/dirty.bin 2
+" Two bytes MORE than were there: the page is now 514 bytes long, and
+" everything on it has moved along by two.
+HexPairGoOffset 513
+HexPairGoHex
+execute "normal! i5a 5a \<Esc>"
+call add(out, 'modified: ' . &modified)
+" TARGET has moved along with the rest of the page, and is found there.
+call add(out, Find('HexPairFindText TARGET'))
+" TAIL was the last four bytes of the page; two of them are now past
+" where the page ends on disk, so it is no longer whole inside what has
+" an offset. Written, it would be found again.
+call add(out, Find('HexPairFindText TAIL'))
+" And the pages either side are untouched by any of it.
+call add(out, Find('HexPairFindText LATE'))
+call add(out, Find('HexPairFindText EARLY'))
+call writefile(out, '$WORK/tdgrow.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tdgrow.vim" < /dev/null
+check "inserting bytes into the dump modifies it" "modified: 1" \
+    "$(sed -n 1p "$WORK/tdgrow.out")"
+check "an insert moves what follows it on the page, and it is found there" \
+    "hexpair: text 'TARGET' at byte 603 (0x25b)" \
+    "$(sed -n 2p "$WORK/tdgrow.out")"
+check "what an insert pushed past the page's end on disk waits for a write" \
+    "hexpair: text 'TAIL' not found in this file" \
+    "$(sed -n 3p "$WORK/tdgrow.out")"
+check "the page after it is untouched by the insert" \
+    "hexpair: text 'LATE' at byte 1601 (0x641)" \
+    "$(sed -n 4p "$WORK/tdgrow.out")"
+check "and so is the page before it" \
+    "hexpair: text 'EARLY' at byte 101 (0x65) (wrapped)" \
+    "$(sed -n 5p "$WORK/tdgrow.out")"
+
+# Comparing follows the buffer for the same reason searching does: the
+# marking on the screen has always compared the buffer's own digits
+# against the other file, so a walk that read this file from disk sent
+# |:HexPairDiffNext| to bytes the screen showed as agreeing.
+cat > "$WORK/tddiff.vim" <<EOF
+source $PLUGIN
+let g:hexpair_page_size = 512
+function! Say(cmd) abort
+  redir => m
+  execute 'silent! ' . a:cmd
+  redir END
+  let lines = filter(split(m, "\n"), 'v:val =~# "hexpair:"')
+  return empty(lines) ? '' : matchstr(lines[-1], 'hexpair:.*')
+endfunction
+let out = []
+HexPairOpen $WORK/dirty.bin 2
+HexPairDiff $WORK/dirty2.bin
+" They differ in byte 601 alone: 54 here, 58 there.
+call add(out, Say('HexPairDiffNext'))
+HexPairGoOffset 601
+call add(out, Say('HexPairDiffShow'))
+" Type their byte into my page: the screen now agrees with them.
+HexPairGoHex
+execute "normal! R58\<Esc>"
+call add(out, 'modified: ' . &modified)
+HexPairGoOffset 601
+call add(out, Say('HexPairDiffShow'))
+" Back to the page's first byte: the walk looks after the cursor, and a
+" page turn is refused while the buffer is modified.
+HexPairGoOffset 513
+call add(out, Say('HexPairDiffNext'))
+" And put a difference somewhere they agreed.
+HexPairGoOffset 605
+HexPairGoHex
+execute "normal! R58\<Esc>"
+HexPairGoOffset 513
+call add(out, Say('HexPairDiffNext'))
+" What THIS Vim calls that file: a native Windows one spells it with
+" backslashes and shortens the home directory away, so the name is asked
+" for rather than assumed.
+call add(out, fnamemodify('$WORK/dirty2.bin', ':~:.'))
+call writefile(out, '$WORK/tddiff.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tddiff.vim" < /dev/null
+check_path "the walk finds the one byte the two files differ in" \
+    "hexpair: next change at byte 601 (0x259) against $(sed -n 7p "$WORK/tddiff.out")" \
+    "$(sed -n 1p "$WORK/tddiff.out")"
+check_path "and it is reported where it landed" \
+    "hexpair: byte 601 (0x259): 54 here, 58 in $(sed -n 7p "$WORK/tddiff.out")" \
+    "$(sed -n 2p "$WORK/tddiff.out")"
+check "typing their byte into my page modifies it" "modified: 1" \
+    "$(sed -n 3p "$WORK/tddiff.out")"
+check_path "the byte now agrees, and is reported as agreeing" \
+    "hexpair: byte 601 (0x259): 58 here and in $(sed -n 7p "$WORK/tddiff.out")" \
+    "$(sed -n 4p "$WORK/tddiff.out")"
+check "and the walk no longer sends the cursor to it" \
+    "hexpair: no change after byte 513" "$(sed -n 5p "$WORK/tddiff.out")"
+check_path "while a difference typed in is one the walk finds" \
+    "hexpair: next change at byte 605 (0x25d) against $(sed -n 7p "$WORK/tddiff.out")" \
+    "$(sed -n 6p "$WORK/tddiff.out")"
+
+# ===========================================================================
+# A scan crosses its own block seams
+# ===========================================================================
+# A file-wide scan reads g:hexpair_scan_block bytes at a time, and a match
+# or a change that lies ACROSS one of those seams belongs to no single
+# block. Blocks are made to overlap for exactly that reason, and the
+# overlap is the part of the loop no smaller fixture can reach: with the
+# smallest block the setting allows, the seam is a megabyte in.
+#
+# Both block sizes are asked the same questions: the minimum, where the
+# needle straddles the first seam, and the default, where the whole file
+# is one block and there is no seam at all. The two must answer alike -
+# that is what says the seam is handled rather than merely survived.
+for scanblock in "1024 * 1024" "8 * 1024 * 1024"; do
+    cat > "$WORK/tseam.vim" <<EOF
+source $PLUGIN
+let g:hexpair_page_size = 4096
+let g:hexpair_scan_block = $scanblock
+function! Msg(m) abort
+  let lines = filter(split(a:m, "\n"), 'v:val =~# "hexpair:"')
+  return empty(lines) ? '' : matchstr(lines[-1], 'hexpair:.*')
+endfunction
+let out = []
+HexPairOpen $WORK/seam1.bin
+redir => m1
+silent HexPairFind de ad be ef
+redir END
+call add(out, Msg(m1))
+" Said rather than inherited: the block a scan reads first begins at the
+" byte AFTER the cursor, so where the seam falls is decided here. The
+" fixture's second needle straddles offset 1001 + 1024 * 1024, which is
+" this search's first seam at the smallest block.
+HexPairGoOffset 1001
+redir => m2
+silent HexPairFindNext
+redir END
+call add(out, Msg(m2))
+" Backwards over the seam: from the straddling match, the previous one is
+" the early copy, and the one before THAT wraps round to the straddler.
+redir => m3
+silent HexPairFindPrev
+redir END
+call add(out, Msg(m3))
+redir => m4
+silent HexPairFindPrev
+redir END
+call add(out, Msg(m4))
+" Back to the start, so the comparison's first block begins at the file's
+" own beginning and the change six bytes past the megabyte mark is in its
+" SECOND block - the searches above have left the cursor past it.
+HexPairGoOffset 1
+HexPairDiff $WORK/seam2.bin
+redir => m5
+silent HexPairDiffNext
+redir END
+call add(out, Msg(m5))
+call add(out, fnamemodify('$WORK/seam2.bin', ':~:.'))
+" The backward scan's own overlap, which is a different line of code from
+" the forward one: it reads PAST the end of its block by the pattern's
+" span, so a match that starts inside the block and reaches beyond it is
+" whole in the read. The cursor goes one byte into the early needle, so
+" that needle starts before where the scan begins - which is what makes it
+" the answer - and ends after it.
+HexPairGoOffset 1002
+redir => m6
+silent HexPairFindPrev
+redir END
+call add(out, Msg(m6))
+call writefile(out, '$WORK/tseam.out')
+qa!
+EOF
+    "$HEXPAIR_VIM" -es -u NONE -S "$WORK/tseam.vim" < /dev/null
+    check "a match early in the file is found (block $scanblock)" \
+        "hexpair: bytes de ad be ef at byte 1001 (0x3e9)" \
+        "$(sed -n 1p "$WORK/tseam.out")"
+    # Two of the needle's four bytes are in the first block the search
+    # reads and two are in the next, so only the overlap between them can
+    # find it whole. Take that overlap out and this is the check that
+    # fails - which is how it was found not to be, once.
+    check "and one lying across a block seam is found whole (block $scanblock)" \
+        "hexpair: bytes de ad be ef at byte 1049576 (0x1003e8)" \
+        "$(sed -n 2p "$WORK/tseam.out")"
+    check "the backward scan crosses the seam too (block $scanblock)" \
+        "hexpair: bytes de ad be ef at byte 1001 (0x3e9)" \
+        "$(sed -n 3p "$WORK/tseam.out")"
+    check "and wraps to the straddling one (block $scanblock)" \
+        "hexpair: bytes de ad be ef at byte 1049576 (0x1003e8) (wrapped)" \
+        "$(sed -n 4p "$WORK/tseam.out")"
+    # The change is six bytes past the seam, so the comparison has to read
+    # a second block to reach it - the shape a whole-file diff has.
+    check "a match reaching past where the backward scan begins is found (block $scanblock)" \
+        "hexpair: bytes de ad be ef at byte 1001 (0x3e9)" \
+        "$(sed -n 7p "$WORK/tseam.out")"
+    check_path "a comparison reaches a change past the first block (block $scanblock)" \
+        "hexpair: next change at byte 1048582 (0x100006) against $(sed -n 6p "$WORK/tseam.out")" \
+        "$(sed -n 5p "$WORK/tseam.out")"
+done
 
 # ===========================================================================
 # Property: any shape of dump writes the bytes it spells
@@ -4805,7 +5831,7 @@ check "refreshing the other windows leaves this one current" "[1, 1, 2, 5]" \
     "$(cat "$WORK/twin.out")"
 
 # --- What a scan says while it runs ---------------------------------------
-# A scan of a big file reads it a megabyte at a time and can take minutes,
+# A scan of a big file reads it a block at a time and can take minutes,
 # which is indistinguishable from a hang, so it says where it has got to.
 # The message is the part that can be wrong in a way anyone would notice,
 # so it is a pure function and is checked as one.
@@ -4973,6 +5999,373 @@ check "and stops at the last of them" \
     "hexpair: no edit after byte 29 on this page | txt 1/1+ @0x1d (29)" \
     "$(sed -n 3p "$WORK/tmodjump2.out")"
 
+# --- :HexPairModifiedShow - what I changed here, and what was there -------
+# The other side of :HexPairDiffShow: the buffer as it stands now against
+# the page as it was READ from disk. The marking says which bytes are
+# edited and covers the NEW byte, so what the file has there is exactly
+# what the screen no longer shows. The text is a pure function, so every
+# shape of it is checked without a cursor or Visual mode.
+cat > "$WORK/tmodshow.vim" <<EOF
+$(printf "$HEX")
+let out = []
+call extend(out, HexPairPagedModifiedShowText(100, 'ff', '63', 5000))
+call extend(out, HexPairPagedModifiedShowText(100, '63', '63', 5000))
+call extend(out, HexPairPagedModifiedShowText(5000, '41', '', 5000))
+call extend(out, HexPairPagedModifiedShowText(100, '00ff020304', '0001020304', 5000))
+call extend(out, HexPairPagedModifiedShowText(4998, '00010203', '0001', 5000))
+call extend(out, HexPairPagedModifiedShowText(0, '', '', 5000))
+call writefile(out, '$WORK/tmodshow.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tmodshow.vim" < /dev/null
+check "one byte, edited since the page was read" \
+    "hexpair: byte 101 (0x65): ff here, 63 on disk" \
+    "$(sed -n 1p "$WORK/tmodshow.out")"
+check "one byte, untouched" \
+    "hexpair: byte 101 (0x65): 63 here and on disk" \
+    "$(sed -n 2p "$WORK/tmodshow.out")"
+# An insert grows the page past what was read, so the last bytes of it are
+# in no file yet - the case the marking cannot express, since it marks them
+# as edited like any other.
+check "one byte that was inserted, not overwritten" \
+    "hexpair: byte 5001 (0x1389): 41 here, inserted since the page was read - the page as read ends at byte 5000 (0x1388)" \
+    "$(sed -n 3p "$WORK/tmodshow.out")"
+check "a run, in two rows that line up" \
+    "hexpair: bytes 101-105 (0x65-0x69), 1 of 5 edited" \
+    "$(sed -n 4p "$WORK/tmodshow.out")"
+check "the bytes here" "  here  00 ff 02 03 04" "$(sed -n 5p "$WORK/tmodshow.out")"
+check "and the disk's beneath them" "  disk  00 01 02 03 04" \
+    "$(sed -n 6p "$WORK/tmodshow.out")"
+check "a run that runs off the end of the page as read says so" \
+    "hexpair: bytes 4999-5002 (0x1387-0x138a), 2 of 4 edited - the page as read ends at byte 5000 (0x1388)" \
+    "$(sed -n 7p "$WORK/tmodshow.out")"
+# Dashes, not blanks: a byte that was not there has to look different from
+# a byte that happened to be 00.
+check "and every byte with nothing behind it is a dash" "  disk  00 01 -- --" \
+    "$(sed -n 9p "$WORK/tmodshow.out")"
+check "and no bytes at all is not a crash" "hexpair: no bytes here to compare" \
+    "$(sed -n 10p "$WORK/tmodshow.out")"
+
+# End to end through the command, in the hex view: two bytes typed over,
+# then the same question on a byte nobody touched.
+cat > "$WORK/tmodshow2.vim" <<EOF
+$(printf "$HEX")
+let out = []
+HexPairOpen $WORK/short1.bin 1
+call setline(3, substitute(getline(3), '^\\(00000010: \\)\\S\\S \\S\\S', '\\1ff ee', ''))
+HexPairGoOffset 17
+redir => a
+silent HexPairModifiedShow
+redir END
+call add(out, substitute(a, '^[\\r\\n]*', '', ''))
+HexPairGoOffset 19
+redir => b
+silent HexPairModifiedShow
+redir END
+call add(out, substitute(b, '^[\\r\\n]*', '', ''))
+" A dump with a non-hex character in it has no bytes to report, and the
+" byte under the cursor cannot be numbered either - the count of the bytes
+" above it is that same scan. Say which character, not E716.
+call setline(4, substitute(getline(4), '^\\(00000020: \\)\\S\\S', '\\1zz', ''))
+redir => c
+silent! HexPairModifiedShow
+redir END
+call add(out, substitute(c, '^[\\r\\n]*', '', ''))
+call writefile(out, '$WORK/tmodshow2.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tmodshow2.vim" < /dev/null
+check "the command says what the byte under the cursor was" \
+    "hexpair: byte 17 (0x11): ff here, 10 on disk" \
+    "$(sed -n 1p "$WORK/tmodshow2.out")"
+check "and on an untouched byte, that it is untouched" \
+    "hexpair: byte 19 (0x13): 12 here and on disk" \
+    "$(sed -n 2p "$WORK/tmodshow2.out")"
+check "a page that no longer scans is refused by name" \
+    "hexpair: invalid character 'z' in the hex area (line 4, column 11)" \
+    "$(sed -n 3p "$WORK/tmodshow2.out")"
+
+# And from the windowed text view, where a column is a byte and the live
+# side is the buffer's own string rather than a dump's hex.
+cat > "$WORK/tmodshow3.vim" <<EOF
+$(printf "$HEX")
+let out = []
+HexPairOpen $WORK/tmark1.bin 1
+HexPairToggle
+call setline(2, 'ABxyEFGHIJ')
+HexPairGoOffset 3
+redir => a
+silent HexPairModifiedShow
+redir END
+call add(out, b:hexpair_view . ' | ' . substitute(a, '^[\\r\\n]*', '', ''))
+call writefile(out, '$WORK/tmodshow3.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tmodshow3.vim" < /dev/null
+check "the text view answers about its own column" \
+    "text | hexpair: byte 3 (0x3): 78 here, 43 on disk" \
+    "$(sed -n 1p "$WORK/tmodshow3.out")"
+
+# A NUL is not a line break, however alike the text view spells them.
+#
+# Vim stores a NUL in a line and getline() returns it as a line break, so
+# the two are the same CHARACTER once a page is joined into one string -
+# which is how the live side of this question used to be spelled, and it
+# reported a phantom edit: "0a here, 00 on disk" on a page nobody had
+# touched. The buffer had not lost the difference, only that join had, and
+# the WRITER never made it - s:PageBytes() has always used
+# writefile(..., 'b'), which is the exact inverse of how Vim loaded the
+# buffer. So the report used to disagree with what :w would put on disk.
+#
+# Both views are asked, because they must agree with each other and with
+# the file, and the buffer is left untouched so that "here" and "on disk"
+# have to come out the same.
+cat > "$WORK/tmodnul.vim" <<EOF
+$(printf "$HEX")
+let out = []
+HexPairOpen $WORK/nul.bin 1
+HexPairGoOffset 3
+redir => a
+silent HexPairModifiedShow
+redir END
+call add(out, b:hexpair_view . ' | ' . substitute(a, '^[\\r\\n]*', '', ''))
+HexPairToggle
+HexPairGoOffset 3
+redir => b
+silent HexPairModifiedShow
+redir END
+call add(out, b:hexpair_view . ' | ' . substitute(b, '^[\\r\\n]*', '', ''))
+call add(out, 'modified ' . &modified)
+" And the byte that really IS a line break. Asked in the hex view, which
+" is the one that reaches every byte: the text view can only put the
+" cursor on a character, so byte 6 there lands on the 44 in front of it
+" (|hexpair-marking-views|) - which is checked too, because it is the
+" behaviour that makes the hex view the right place to ask.
+HexPairGoOffset 6
+redir => c
+silent HexPairModifiedShow
+redir END
+call add(out, b:hexpair_view . ' | ' . substitute(c, '^[\\r\\n]*', '', ''))
+HexPairToggle
+HexPairGoOffset 6
+redir => d
+silent HexPairModifiedShow
+redir END
+call add(out, b:hexpair_view . ' | ' . substitute(d, '^[\\r\\n]*', '', ''))
+call writefile(out, '$WORK/tmodnul.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tmodnul.vim" < /dev/null
+check "the hex view says what the NUL is" \
+    "hex | hexpair: byte 3 (0x3): 00 here and on disk" \
+    "$(sed -n 1p "$WORK/tmodnul.out")"
+check "and the text view says the same, not 0a" \
+    "text | hexpair: byte 3 (0x3): 00 here and on disk" \
+    "$(sed -n 2p "$WORK/tmodnul.out")"
+check "on a page nobody edited" "modified 0" "$(sed -n 3p "$WORK/tmodnul.out")"
+check "and a real line break is still a line break" \
+    "text | hexpair: byte 5 (0x5): 44 here and on disk" \
+    "$(sed -n 4p "$WORK/tmodnul.out")"
+check "which the hex view reaches and the text view does not" \
+    "hex | hexpair: byte 6 (0x6): 0a here and on disk" \
+    "$(sed -n 5p "$WORK/tmodnul.out")"
+
+# A NUL swapped for a line break IS an edit, and is marked as one.
+#
+# The text view used to compare in its own spelling, where a NUL and a
+# line break are the same character, so this edit was no edit at all: the
+# page came back "nothing edited" while :w would have written a different
+# byte. Both views now derive their runs from the same comparison of real
+# bytes, so the marking and the jumps cannot disagree.
+#
+# The two directions are not symmetrical, and that asymmetry is the view's
+# rather than the comparison's: a NUL has a column of its own (^@) and can
+# be painted, a line break has none and can only be jumped to.
+#
+# No backslash continuations in the generated file - this suite runs Vim
+# without -N, where 'cpoptions' carries C.
+cat > "$WORK/tmodmark.vim" <<EOF
+$(printf "$HEX")
+let out = []
+function! Case(edit) abort
+  silent! bwipeout!
+  HexPairOpen $WORK/nul.bin
+  HexPairToggle
+  execute a:edit
+  redir => a
+  silent! HexPairModifiedNext
+  redir END
+  return matchstr(substitute(a, "\\n", ' ', 'g'), 'hexpair:[^|]*') . ' | ' . string(HexPairPagedMarkingPositions('modified', 1, line('\$')))
+endfunction
+call add(out, Case("call setline(2, 'AB') | call append(2, 'CD')"))
+call add(out, Case("call setline(2, 'AB' . nr2char(10) . 'CD' . nr2char(10) . 'EF') | 3delete _"))
+call add(out, Case("call setline(2, 'AZ' . nr2char(10) . 'CD')"))
+call writefile(out, '$WORK/tmodmark.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tmodmark.vim" < /dev/null
+check "a NUL turned into a line break is an edit" \
+    "hexpair: edit 1 of 1 on this page, at byte 3 (0x3) | []" \
+    "$(sed -n 1p "$WORK/tmodmark.out")"
+check "a line break turned into a NUL is one too, and is painted" \
+    "hexpair: edit 1 of 1 on this page, at byte 6 (0x6) | [[2, 6, 1]]" \
+    "$(sed -n 2p "$WORK/tmodmark.out")"
+check "and an ordinary edit marks the byte it always did" \
+    "hexpair: edit 1 of 1 on this page, at byte 2 (0x2) | [[2, 2, 1]]" \
+    "$(sed -n 3p "$WORK/tmodmark.out")"
+
+# The comparison against ANOTHER FILE is exact in the text view too.
+#
+# Same fault as the marking above and the same fix: it compared in the
+# text view's own spelling, where a NUL and a line break are one
+# character, so two files differing in exactly that byte looked identical
+# there while the hex view marked them. Both views now hold real bytes
+# against real bytes.
+#
+# The page-past-the-end case that this must not break has its own block
+# (see "a page past the other file's end differs in every byte"), and it
+# needs no special case here: HexPairPagedDifferingByteRuns() counts bytes
+# the other run does not reach as differences of their own.
+cat > "$WORK/tdfnul.vim" <<EOF
+$(printf "$HEX")
+let out = []
+HexPairOpen $WORK/nul.bin 1
+HexPairDiff $WORK/nul2.bin
+call add(out, 'hex ' . string(HexPairPagedMarkingPositions('diff', 2, 2)))
+HexPairToggle
+call add(out, 'text ' . string(HexPairPagedMarkingPositions('diff', 2, 2)))
+HexPairGoOffset 3
+redir => a
+silent! HexPairDiffShow
+redir END
+call add(out, matchstr(substitute(a, "\\n", ' ', 'g'), 'hexpair:[^|]*'))
+call add(out, fnamemodify('$WORK/nul2.bin', ':~:.'))
+call writefile(out, '$WORK/tdfnul.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tdfnul.vim" < /dev/null
+check "the hex view marks a NUL against a line break" "hex [[2, 17, 2], [2, 62, 1]]" \
+    "$(sed -n 1p "$WORK/tdfnul.out")"
+check "and so does the text view now" "text [[2, 3, 1]]" \
+    "$(sed -n 2p "$WORK/tdfnul.out")"
+check_path "and both say which two bytes they are" \
+    "hexpair: byte 3 (0x3): 00 here, 0a in $(sed -n 4p "$WORK/tdfnul.out")" \
+    "$(sed -n 3p "$WORK/tdfnul.out")"
+
+# --- :HexPairModified turns the marking off and on --------------------------
+# The marking is the one thing on a hex page whose cost follows what was
+# DONE rather than what is on screen: an insert moves every byte after it,
+# so every one of them differs from what the page was read as and the whole
+# rest of the page is marked - correctly, and at the cost of comparing it
+# all again on each keystroke. This is the way out, and it flips the option
+# that already means this rather than keeping a second switch beside it.
+#
+# The drawing itself cannot be checked headlessly - a vim -es window has no
+# geometry, so line('w$') comes out above line('w0') - which is why this
+# checks the option, the message and that the computation behind the marks
+# is untouched, the same testable half the diff marking settles for.
+cat > "$WORK/tmodtog.vim" <<EOF
+$(printf "$HEX")
+let out = []
+HexPairOpen $WORK/short1.bin 1
+call setline(4, substitute(getline(4), '^\(00000020: \)\S\S', '\1ff', ''))
+let marks = string(HexPairPagedMarkingPositions('modified', 1, line('\$')))
+call add(out, g:hexpair_show_modified . ' ' . marks)
+redir => a
+HexPairModified
+redir END
+call add(out, g:hexpair_show_modified . ' ' . matchstr(substitute(a, "\\n", ' ', 'g'), 'hexpair:.*'))
+redir => b
+HexPairModified
+redir END
+call add(out, g:hexpair_show_modified . ' ' . matchstr(substitute(b, "\\n", ' ', 'g'), 'hexpair:.*'))
+" Back on, the marks are the ones it had: the switch is about drawing them,
+" not about what is compared.
+call add(out, (string(HexPairPagedMarkingPositions('modified', 1, line('\$'))) ==# marks) . ' same marks')
+HexPairModified!
+call add(out, g:hexpair_show_modified . ' after the bang')
+HexPairModified!
+call add(out, g:hexpair_show_modified . ' and the bang again')
+call add(out, exists(':HPModified') . ' short name')
+" Switching it off has to reach the marks in EVERY window showing the
+" page, not only the one the command was typed in - so s:ModifiedHighlight()
+" clears when the option is off instead of returning early, and every other
+" window loses them on its next redraw. That branch is testable headlessly
+" even though the drawing is not: stand in for the marks such a window
+" would have, then let a redraw run with the marking off.
+"
+" The ORDER here is what makes it a test of that branch and not of the
+" command. Off first, so the command's own clearing is spent and cannot
+" account for the result; then the marks; then only a redraw. And it
+" starts from a window with none of its own, because whether a headless
+" Vim has drawn any depends on the Vim: 8.0 gives line('w0')/line('w\$')
+" a usable answer in -es and draws, where a current one does not, and the
+" first version of this counted the difference and failed on 8.0 alone.
+HexPairModified!
+let w:hexpair_mod_ids = [matchaddpos('HexPairModified', [[4, 11, 2]])]
+let w:hexpair_mod_state = [b:changedtick, 1, line('\$'), 1]
+call add(out, len(filter(getmatches(), 'v:val.group ==# "HexPairModified"')) . ' standing')
+doautocmd TextChanged
+call add(out, len(filter(getmatches(), 'v:val.group ==# "HexPairModified"')) . ' after a redraw with it off')
+call writefile(out, '$WORK/tmodtog.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tmodtog.vim" < /dev/null
+check "the marking starts on, and marks the edited byte" "1 [[4, 11, 2], [4, 60, 1]]" \
+    "$(sed -n 1p "$WORK/tmodtog.out")"
+check "the toggle turns it off and says so" \
+    "0 hexpair: not marking edited bytes (g:hexpair_show_modified = 0)" \
+    "$(sed -n 2p "$WORK/tmodtog.out")"
+check "and on again" "1 hexpair: marking the bytes you have edited" \
+    "$(sed -n 3p "$WORK/tmodtog.out")"
+check "with the same bytes to mark as before" "1 same marks" \
+    "$(sed -n 4p "$WORK/tmodtog.out")"
+# The bang is the shape :HexPairFind! and :HexPairDiff! already have: off,
+# and off again is still off rather than back on.
+check "the bang turns it off rather than toggling" "0 after the bang" \
+    "$(sed -n 5p "$WORK/tmodtog.out")"
+check "and twice leaves it off" "0 and the bang again" \
+    "$(sed -n 6p "$WORK/tmodtog.out")"
+check "the short name is defined too" "2 short name" \
+    "$(sed -n 7p "$WORK/tmodtog.out")"
+check "a window's marks stand where they were drawn" "1 standing" \
+    "$(sed -n 8p "$WORK/tmodtog.out")"
+check "and a redraw with the marking off takes them away" \
+    "0 after a redraw with it off" "$(sed -n 9p "$WORK/tmodtog.out")"
+
+# The Visual-mode form, through the <Plug> target a key would reach it by:
+# a run of bytes rather than one, and the selection put back afterwards.
+# ('compatible', which -u NONE starts in, puts '<' in 'cpoptions' and turns
+# <Plug> into six literal characters - see the mappings-file block below.)
+cat > "$WORK/tmodshow4.vim" <<EOF
+$(printf "$HEX")
+set cpoptions-=<
+xmap gz <Plug>(HexPairModifiedShow)
+let out = []
+HexPairOpen $WORK/short1.bin 1
+call setline(3, substitute(getline(3), '^\\(00000010: \\)\\S\\S \\S\\S', '\\1ff ee', ''))
+HexPairGoOffset 17
+call feedkeys('v3l', 'x')
+redir => a
+silent call feedkeys('gz', 'x')
+redir END
+call extend(out, filter(split(a, "\n"), 'v:val !=# ""'))
+" The selection is put back rather than spent on the question.
+call add(out, string([getpos("'<")[1 : 2], getpos("'>")[1 : 2]]))
+call writefile(out, '$WORK/tmodshow4.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tmodshow4.vim" < /dev/null
+check "a Visual selection is reported as a run" \
+    "hexpair: bytes 17-18 (0x11-0x12), 2 of 2 edited" \
+    "$(sed -n 1p "$WORK/tmodshow4.out")"
+check "with the buffer's bytes on one row" "  here  ff ee" \
+    "$(sed -n 2p "$WORK/tmodshow4.out")"
+check "and the file's on the other" "  disk  10 11" \
+    "$(sed -n 3p "$WORK/tmodshow4.out")"
+check "and the selection survives the question" "[[3, 11], [3, 14]]" \
+    "$(sed -n 4p "$WORK/tmodshow4.out")"
+
 # --- Everything a user is given is in the release tarball -------------------
 # pack-release.py carries the file list by hand, and a new file that users
 # are told to source can be added to the repo, documented, and then simply
@@ -4998,6 +6391,327 @@ packed=$(sed -n '/^FILES/,/^]/p' "$ROOT/pack-release.py" \
     | tr '\n' ' ')
 check "the packaging list is what the repository gives a user" \
     "$shipped" "$packed"
+
+# The minimal package is the same list less a few entries, and the entries
+# are named as strings - so a rename or a typo would quietly omit nothing
+# and the package would go back over the size vim.org refuses.
+omits=$(sed -n '/^MINIMAL_OMITS/,/^]/p' "$ROOT/pack-release.py" \
+    | grep -o '"hexpair/[^"]*"' | tr -d '"' | sort | tr '\n' ' ')
+notpacked=
+for o in $omits; do
+    case " $(sed -n '/^FILES/,/^]/p' "$ROOT/pack-release.py" | grep -o '"hexpair/[^"]*"' | tr -d '"' | tr '\n' ' ') " in
+        *" $o "*) ;;
+        *) notpacked="$notpacked $o" ;;
+    esac
+done
+check "everything the minimal package omits is something it would have had" \
+    "" "$notpacked"
+
+# And that it still FITS. The reason the smaller package exists is a size
+# limit on vim.org - an upload somewhere between 224 and 250 KiB gets a
+# 413 - so what is worth pinning is the promise, not the byte count: a
+# figure copied into the prose drifts every time a document grows, and has
+# twice. 200 000 B leaves room under the lower end of that range.
+#
+# Built in memory through the packaging script's own functions, so nothing
+# is written and the answer is the one ./pack-release would give.
+minimal=$(cd "$ROOT" && "$PY" -c '
+import sys
+# Importing the script would otherwise leave a __pycache__ in the
+# repository on every run of the suite.
+sys.dont_write_bytecode = True
+import bz2, calendar, time, importlib.util, pathlib
+spec = importlib.util.spec_from_file_location("pr", "pack-release.py")
+pr = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(pr)
+root = pathlib.Path(".")
+version, date = pr.parse_header(root / "plugin" / "hexpair.vim")
+mtime = calendar.timegm(time.strptime(date, "%Y-%m-%d"))
+files = [f for f in pr.FILES if f not in pr.MINIMAL_OMITS]
+size = len(bz2.compress(pr.build_tar(root, mtime, files), 9))
+print("fits" if size < 200000 else "TOO BIG: %d B" % size)
+')
+check "and the minimal package fits under what vim.org will take" \
+    "fits" "$minimal"
+
+# --- A shipped document may only link to what ships beside it --------------
+# README.md links relatively to CHANGELOG.md, CLAUDE.md and CONTRIBUTING.md,
+# and to demo/hexpair-demo.gif - which is right in the repository and on
+# GitHub, and dead inside an archive: the minimal package omits the three
+# documents on purpose, and the 5.7 MB GIF ships in nothing. So
+# pack-release.py rewrites a link the archive cannot answer into a GitHub
+# URL, per archive - CHANGELOG.md stays relative in the complete tarball,
+# which carries it, and becomes a URL in the minimal one, which does not.
+#
+# This checks the PACKAGED documents rather than the repository's, which is
+# what makes it a check of that rewriting and not merely of the file list:
+# both archives are built in memory and every relative link in every .md
+# they contain has to resolve inside the same archive.
+links=$(cd "$ROOT" && "$PY" -c '
+import sys
+sys.dont_write_bytecode = True
+import calendar, io, re, tarfile, time, importlib.util, pathlib
+spec = importlib.util.spec_from_file_location("pr", "pack-release.py")
+pr = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(pr)
+root = pathlib.Path(".")
+version, date = pr.parse_header(root / "plugin" / "hexpair.vim")
+mtime = calendar.timegm(time.strptime(date, "%Y-%m-%d"))
+archives = [
+    ("the tarball", pr.FILES),
+    ("the minimal package", [f for f in pr.FILES if f not in pr.MINIMAL_OMITS]),
+]
+bad = []
+for label, files in archives:
+    tf = tarfile.open(fileobj=io.BytesIO(pr.build_tar(root, mtime, files)))
+    names = set(tf.getnames())
+    for member in sorted(n for n in names if n.endswith(".md")):
+        text = tf.extractfile(member).read().decode("utf-8")
+        for m in re.finditer(r"\]\((?!https?:|#|mailto:)([^)]+)\)", text):
+            target = m.group(1).split("#")[0]
+            if target and "hexpair/" + target not in names:
+                bad.append("%s in %s links to %s, which is not there"
+                           % (member, label, target))
+print("; ".join(bad) if bad else "every relative link resolves inside its archive")
+')
+check "a shipped document links only to what ships beside it" \
+    "every relative link resolves inside its archive" "$links"
+
+# The absolute ones name the release TAG, and the tag is derived from the
+# version in the plugin header - "-devel" being this project's marker for
+# the cycle in progress and no part of any tag, so 2.4.0-devel packs links
+# to v2.4.0. Pinned here because it is a guess about a name that does not
+# exist yet when a mid-cycle package is built: get it wrong and every
+# release ships dead links that nothing else would notice.
+tags=$(cd "$ROOT" && "$PY" -c '
+import sys
+sys.dont_write_bytecode = True
+import calendar, io, re, tarfile, time, importlib.util, pathlib
+spec = importlib.util.spec_from_file_location("pr", "pack-release.py")
+pr = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(pr)
+derived = [pr.release_tag(v) for v in
+           ("2.4.0-devel", "2.4.0", "2.4.0-rc1", "10.0.1-devel")]
+root = pathlib.Path(".")
+version, date = pr.parse_header(root / "plugin" / "hexpair.vim")
+mtime = calendar.timegm(time.strptime(date, "%Y-%m-%d"))
+files = [f for f in pr.FILES if f not in pr.MINIMAL_OMITS]
+tf = tarfile.open(fileobj=io.BytesIO(pr.build_tar(root, mtime, files)))
+text = tf.extractfile("hexpair/README.md").read().decode("utf-8")
+# The two forms the packer writes, and only those - the README has
+# other github.com links of its own (/actions, /releases).
+refs = sorted(set(
+    re.findall(r"https://github\.com/[\w-]+/hexpair/blob/([^/)]+)/", text)
+    + re.findall(r"https://raw\.githubusercontent\.com/[\w-]+/hexpair/([^/)]+)/", text)))
+print("%s packed %s" % (" ".join(derived), " ".join(refs)))
+')
+check "the links out of a package name the tag that version will carry" \
+    "v2.4.0 v2.4.0 v2.4.0-rc1 v10.0.1 packed $(sed -n 4p "$ROOT/plugin/hexpair.vim" \
+        | sed 's/.*Version:  *//; s/-devel$//; s/^/v/')" \
+    "$tags"
+
+# --- Every reader of a byte RANGE asks whether it may seek there ------------
+# The 2 GiB rule cannot be exercised off Windows, so what can be checked
+# everywhere is that each reader still ASKS. Taking the question out of one
+# of them passes every other check in this suite on Linux and macOS, and
+# breaks a large file on Windows silently - readblob() answers an
+# out-of-range read with an empty Blob AND success, and xxd's strtol()
+# saturates rather than failing, so neither reports anything. That is not a
+# hypothetical: this suite went green with the guard removed from
+# s:FileBlob() while it was being written.
+#
+# Mechanical and about the source text, like the packaging list: every
+# function that takes (file, off, len) and reads the file at that offset
+# has to consult s:XxdCanSeek() on the END of the range.
+"$PY" - "$ROOT" > "$WORK/tguard.out" <<'GUARD'
+import re, sys, os
+plug = open(os.path.join(sys.argv[1], 'plugin/hexpair.vim'), encoding='utf-8').read()
+bodies = dict(re.findall(r'^function!? ([A-Za-z0-9_:#]+)\([^)]*\) abort\n(.*?)^endfunction$',
+                         plug, re.M | re.S))
+want = ['s:FileHex', 's:FileBlob', 's:CopyRange']
+bad = []
+for name in want:
+    if name not in bodies:
+        bad.append('%s is gone' % name); continue
+    if 's:XxdCanSeek(a:off + a:len)' not in bodies[name]:
+        bad.append('%s does not ask s:XxdCanSeek(a:off + a:len)' % name)
+# and the readers must not call readblob() with an offset without asking
+for name, body in bodies.items():
+    if re.search(r'readblob\([^)]*,[^)]*,', body) and name not in want:
+        bad.append('%s reads a blob range without the guard' % name)
+print('; '.join(bad) if bad else '%d range readers, all guarded' % len(want))
+GUARD
+check "every reader of a byte range asks whether it may seek there" \
+    "3 range readers, all guarded" "$(cat "$WORK/tguard.out")"
+
+# --- Every command is in the README's command table -------------------------
+# The table promises to be the command reference and is kept by hand, so it
+# drifts silently: the whole :HexPairModified* family was missing from it -
+# three commands, one of them added a release earlier - while being
+# described in prose two screens above. The rule is the packaging list's:
+# a command the plugin DEFINES is a command a user gets.
+"$PY" - "$ROOT" > "$WORK/tcmds.out" <<'CMDS'
+import re, sys, os
+root = sys.argv[1]
+plug = open(os.path.join(root, 'plugin/hexpair.vim'), encoding='utf-8').read()
+# Fold Vim's line continuations first: two of these commands carry their
+# name on the continuation line, the argument list having filled the first.
+plug = re.sub(r'\n\s*\\', ' ', plug)
+rdme = open(os.path.join(root, 'README.md'), encoding='utf-8').read()
+# The command's NAME is the last HexPair... on its :command line - the
+# ones before it belong to -complete=custom, and the name may end the
+# line as well as be followed by the call.
+defined = set(re.findall(r'^command!.*\s(HexPair\w+)(?= |$)', plug, re.M))
+# The table rows: `:HexPairFoo`, `:HexPairFoo[!]`, `:HexPairFoo {arg}` ...
+listed = set(re.findall(r'`:(HexPair\w+)', rdme))
+missing = sorted(defined - listed)
+unknown = sorted(l for l in listed - defined if l != 'HexPair')
+out = []
+if missing:
+    out.append('not in README.md: ' + ' '.join(missing))
+if unknown:
+    out.append('in README.md but not a command: ' + ' '.join(unknown))
+print('; '.join(out) if out else '%d commands, all in the README' % len(defined))
+CMDS
+check "every command the plugin defines is named in the README" \
+    "36 commands, all in the README" "$(cat "$WORK/tcmds.out")"
+
+# --- Every option is listed everywhere an option is listed ------------------
+# Four places promise to be complete and are kept by hand: the option list
+# in plugin/hexpair.vim's own header, the tagged entries in doc/hexpair.txt,
+# the block in README.md that says "Every option, with its default", and
+# the Options block of hexpair.vimrc, which is the one a user actually
+# edits - it is meant to be copied into a vimrc, so an option missing from
+# it is an option nobody finds by reading the file they were handed.
+# g:hexpair_verify_writes was in none of the first three - it is read with
+# get(g:, ...) rather than given a default, so it slipped past the eye that
+# checks the others - while being described in prose in all of them. And
+# hexpair.vimrc, which was not checked at all until this line was written,
+# was missing four: that one, g:hexpair_scan_block, g:hexpair_show_inspect
+# and g:hexpair_insert_encoding, the last of which it MENTIONED in prose
+# without ever giving the line to uncomment. The rule is mechanical: an
+# option the PLUGIN reads is an option a user can set, however it is read
+# and wherever it is described.
+#
+# The vimrc writes the NON-default value and the README the default, which
+# is why this looks at the name and not at what follows it.
+"$PY" - "$ROOT" > "$WORK/topts.out" <<'OPTS'
+import re, sys, os
+root = sys.argv[1]
+read = lambda p: open(os.path.join(root, p), encoding='utf-8').read()
+plug, doc, rdme = read('plugin/hexpair.vim'), read('doc/hexpair.txt'), read('README.md')
+vrc = read('hexpair.vimrc')
+# What the plugin actually reads, both ways it reads one.
+opts = set(re.findall(r"if !exists\('(g:hexpair_[a-z_]+)'\)", plug))
+opts |= {'g:' + o for o in re.findall(r"get\(g:, '(hexpair_[a-z_]+)'", plug)}
+places = {
+    'the plugin header': set(re.findall(r'^"   (g:hexpair_[a-z_]+)', plug, re.M)),
+    'doc/hexpair.txt': set(re.findall(r'\*(g:hexpair_[a-z_]+)\*', doc)),
+    'the README block': set(re.findall(r'^" let (g:hexpair_[a-z_]+)', rdme, re.M)),
+    'hexpair.vimrc': set(re.findall(r'^"let (g:hexpair_[a-z_]+)', vrc, re.M)),
+}
+bad = []
+for where, listed in sorted(places.items()):
+    for missing in sorted(opts - listed):
+        bad.append('%s missing from %s' % (missing, where))
+    for extra in sorted(listed - opts):
+        bad.append('%s listed in %s but the plugin never reads it' % (extra, where))
+print('%d options; %s' % (len(opts), '; '.join(bad) if bad else 'all listed in all four'))
+OPTS
+check "every option the plugin reads is listed in all four places" \
+    "15 options; all listed in all four" "$(cat "$WORK/topts.out")"
+
+# --- And the same for what else promises to be complete ---------------------
+# Options were checked and <Plug> targets and highlight groups were not, so
+# they drifted the same way and were found by hand: <Plug>(HexPairModified)
+# reached the README and hexpair.vimrc but never the help - no tag, and no
+# line in the help's own copy of the mapping set - and the HexPairInspect
+# highlight group reached the README and the help but not hexpair.vimrc,
+# which listed the other seven. Both are the newest of their kind, which is
+# how a hand-kept list fails: the entry that is added last is added to the
+# places the author happened to have open.
+#
+# Names only, and each file matched in its own dialect: the help tags a
+# highlight group <name> or <name>-highlight, the README writes commented
+# `" highlight`, the vimrc `"highlight`.
+"$PY" - "$ROOT" > "$WORK/tlists.out" <<'LISTS'
+import re, sys, os
+root = sys.argv[1]
+read = lambda p: open(os.path.join(root, p), encoding='utf-8').read()
+plug, doc = read('plugin/hexpair.vim'), read('doc/hexpair.txt')
+rdme, vrc = read('README.md'), read('hexpair.vimrc')
+
+plugs = set(re.findall(r'^[nx]noremap <silent> <Plug>\((HexPair\w+)\)', plug, re.M))
+groups = (set(re.findall(r"hlexists\('(HexPair\w+)'\)", plug))
+          | set(re.findall(r'highlight default link (HexPair\w+)', plug))
+          | set(re.findall(r'highlight default (HexPair\w+)', plug)))
+
+bad = []
+def check(what, defined, places):
+    for where, listed in places:
+        for m in sorted(defined - listed):
+            bad.append('%s missing from %s' % (m, where))
+        for e in sorted(listed - defined):
+            bad.append('%s in %s is not a %s' % (e, where, what))
+
+anyplug = lambda t: set(re.findall(r'<Plug>\((HexPair\w+)\)', t))
+check('<Plug> target', plugs,
+      [('the help', anyplug(doc)), ('the README', anyplug(rdme)),
+       ('hexpair.vimrc', anyplug(vrc))])
+check('highlight group', groups,
+      [('the help', set(re.findall(r'\*(HexPair\w+)(?:-highlight)?\*', doc))),
+       ('the README', set(re.findall(r'^" highlight (?:link )?(HexPair\w+)', rdme, re.M))),
+       ('hexpair.vimrc', set(re.findall(r'^"highlight (?:link )?(HexPair\w+)', vrc, re.M)))])
+print('%d targets, %d groups; %s'
+      % (len(plugs), len(groups), '; '.join(bad) if bad else 'all listed everywhere'))
+LISTS
+check "every <Plug> target and highlight group is listed everywhere" \
+    "35 targets, 8 groups; all listed everywhere" "$(cat "$WORK/tlists.out")"
+
+# --- The diff runs are dropped when what they compare against moves ---------
+# In the text view s:DiffRuns() caches its answer against b:changedtick,
+# which reports an EDIT and nothing else. Two things change what is being
+# compared without touching the buffer - turning a page, and pointing
+# :HexPairDiff at another file - and both go through s:LoadDiffHex(), which
+# is where the cache is dropped. Without that the marking goes on painting
+# the previous page's differences, or the previous file's.
+cat > "$WORK/tdfcache.vim" <<EOF
+$(printf "$HEX")
+let out = []
+HexPairOpen $WORK/diffa.bin 1
+HexPairDiff $WORK/diffb.bin
+HexPairToggle
+" diffb.bin differs at bytes 101, 1501 and 5000; with 512-byte pages that
+" is one on page 1, none on page 2 and one on page 3.
+call add(out, 'page 1 ' . string(HexPairPagedMarkingPositions('diff', 1, line('\$'))))
+HexPairPageNext
+call add(out, 'page 2 ' . string(HexPairPagedMarkingPositions('diff', 1, line('\$'))))
+HexPairPageNext
+call add(out, 'page 3 ' . string(HexPairPagedMarkingPositions('diff', 1, line('\$'))))
+" And the same page against a file that does not differ on it: the answer
+" has to change with nothing in the buffer changing. diffc.bin is diffa.bin
+" with four bytes appended, so page 1 is identical.
+HexPairPageGoto 1
+" Asked here on purpose: it fills the cache at this tick, so the answer
+" below can only be right if pointing the comparison elsewhere dropped it.
+" A page turn bumps b:changedtick by itself and would have hidden that.
+call add(out, 'page 1 again ' . string(HexPairPagedMarkingPositions('diff', 1, line('\$'))))
+HexPairDiff $WORK/diffc.bin
+call add(out, 'page 1 vs diffc ' . string(HexPairPagedMarkingPositions('diff', 1, line('\$'))))
+call writefile(out, '$WORK/tdfcache.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tdfcache.vim" < /dev/null
+check "the first page marks its own difference" "page 1 [[3, 90, 1]]" \
+    "$(sed -n 1p "$WORK/tdfcache.out")"
+check "a page with none marks none, not the page before's" "page 2 []" \
+    "$(sed -n 2p "$WORK/tdfcache.out")"
+check "and the next page marks its own" "page 3 [[4, 210, 1]]" \
+    "$(sed -n 3p "$WORK/tdfcache.out")"
+check "coming back to it marks it again" "page 1 again [[3, 90, 1]]" \
+    "$(sed -n 4p "$WORK/tdfcache.out")"
+check "and pointing the comparison elsewhere changes the answer" \
+    "page 1 vs diffc []" "$(sed -n 5p "$WORK/tdfcache.out")"
 
 # --- The generated .reg says what it is supposed to say ---------------------
 # vimhex-contex-entry.add.reg carries its paths as REG_EXPAND_SZ, written as
@@ -5038,6 +6752,14 @@ print("lone-percent %s" % sorted(lone))
 print("all-cmd %s" % all(c.startswith('cmd.exe /c ""') for c in commands))
 print("sides %s" % sorted(re.findall(r'"(/[a-z]+)"', " ".join(commands))))
 print("all-icons-ico %s" % all(i.endswith(".ico") for i in icons))
+# And that each one is a file that ships. A menu entry whose "Icon" names
+# a path that is not there gets no icon and no error - Explorer simply
+# draws nothing - so a renamed .ico would be found by a user and not here.
+import os
+root = os.path.dirname(os.path.abspath(sys.argv[1]))
+print("icons-present %s" % sorted(
+    i.split("\\")[-1] for i in set(icons)
+    if not os.path.exists(os.path.join(root, "icons", i.split("\\")[-1]))))
 REGCHECK
 check "every registry value decodes back to the string it should be" \
     "values 7 commands 3 icons 4" \
@@ -5048,6 +6770,25 @@ check "and %1 is the only bare percent left after the variables expand" \
 check "and the two diff entries select a side each, either order" \
     "all-cmd True sides ['/left', '/right'] all-icons-ico True" \
     "$(sed -n '5,7p' "$WORK/regcheck.out" | tr '\n' ' ' | sed 's/ $//')"
+check "and every icon it names is a file the release ships" \
+    "icons-present []" "$(sed -n 8p "$WORK/regcheck.out")"
+
+# And that they are what the GENERATOR makes. The checks above read the
+# committed files and would pass just as well on a hand-edit, while
+# CONTRIBUTING.md calls make-context-entry-reg.py the source of these and
+# a maintainer regenerating them would then get a diff nobody expected.
+#
+# The script writes beside ITSELF, so it is copied to the work directory
+# and run there rather than in the repository - a check that rewrites the
+# files it is checking is not a check.
+cp "$ROOT/make-context-entry-reg.py" "$WORK/"
+(cd "$WORK" && "$PY" make-context-entry-reg.py >/dev/null)
+regen=
+for f in vimhex-contex-entry.add.reg vimhex-contex-entry.remove.reg; do
+    cmp -s "$ROOT/$f" "$WORK/$f" || regen="$regen $f"
+done
+check "the committed .reg files are the ones the generator writes" \
+    "" "$regen"
 
 # --- The mappings file the plugin ships ------------------------------------
 # hexpair.vimrc is the maintainer's own set of mappings, kept in the repo so
@@ -5085,6 +6826,10 @@ for line in split(execute('map <Plug>'), '\n')
 endfor
 call sort(missing)
 call add(out, 'unmapped targets: ' . string(missing))
+call add(out, string([maparg(',d', 'n'), maparg(',d', 'x')]))
+" The capital that is not a <Plug> target at all: a bang command mapped
+" directly, which is the file's own rule for a force variant.
+call add(out, string([maparg(',u', 'n'), maparg(',U', 'n')]))
 call writefile(out, '$WORK/tvimrc.out')
 qa!
 EOF
@@ -5111,6 +6856,127 @@ check "in Visual mode too, and puts 'cpoptions' back" \
     "$(sed -n 2p "$WORK/tvimrc.out")"
 check "and leaves no <Plug> target without a key" "unmapped targets: []" \
     "$(sed -n 3p "$WORK/tvimrc.out")"
+check "and the what-was-here question in both modes" \
+    "['<Plug>(HexPairModifiedShow)', '<Plug>(HexPairModifiedShow)']" \
+    "$(sed -n 4p "$WORK/tvimrc.out")"
+check "the way back out is the lowercase key, the capital discarding" \
+    "['<Plug>(HexPairUnhex)', ':HexPairUnhex!<CR>']" \
+    "$(sed -n 5p "$WORK/tvimrc.out")"
+
+# --- The quick-start key list is the mappings file, not a copy of it ------
+# README.md opens with a complete list of the keys hexpair.vimrc defines,
+# which is the first thing anyone reads and the easiest thing to forget
+# when a mapping is added, moved or dropped. Neither list is generated, so
+# the agreement is checked instead - in both directions, since a key that
+# only the README has is as wrong as one only the file has.
+sed -n '/^## TL;DR: Quick Start$/,/^## Features$/p' "$ROOT/README.md" \
+    > "$WORK/quickstart.md"
+# The keys each side names. '<Leader>' is stripped off both, so what is
+# compared is the key itself.
+sed -n "s/^call s:Map('[nx]', '<Leader>\\([^']*\\)'.*/\\1/p" \
+    "$ROOT/hexpair.vimrc" | sort -u > "$WORK/qs-mapped.txt"
+sed -n 's/^<Leader>\([^ ]*\)  *".*/\1/p' "$WORK/quickstart.md" | sort -u \
+    > "$WORK/qs-listed.txt"
+# A key may hold a regex or a glob character - ?, [, ], /, <, > and - are
+# all in there - so the comparison is by whole line, never by pattern, and
+# globbing is off while the shell holds one in a variable.
+set -f
+qs_missing=
+while IFS= read -r key; do
+    grep -qxF "$key" "$WORK/qs-listed.txt" || qs_missing="$qs_missing $key"
+done < "$WORK/qs-mapped.txt"
+qs_extra=
+while IFS= read -r key; do
+    grep -qxF "$key" "$WORK/qs-mapped.txt" || qs_extra="$qs_extra $key"
+done < "$WORK/qs-listed.txt"
+set +f
+check "the quick start lists every key hexpair.vimrc maps" "" "$qs_missing"
+check "and lists no key it does not" "" "$qs_extra"
+# A count, for the same reason the suite keeps one of its own: a block of
+# the list that stops being extracted at all would agree with an equally
+# empty other side.
+check "and there are as many of them as there are" "38" \
+    "$(wc -l < "$WORK/qs-mapped.txt" | tr -d ' ')"
+# The quick start types the SHORT command names, which is the point of
+# them - so those have to be commands, not a plausible abbreviation of
+# one. Asked of a Vim with the plugin loaded rather than of the alias
+# table in the source: what matters is that :HPOpen exists after
+# sourcing, which is also what g:hexpair_short_commands decides.
+sed -n 's/^:\(HP[A-Za-z]*\).*/\1/p' "$WORK/quickstart.md" | sort -u \
+    > "$WORK/qs-cmds.txt"
+# One statement a line: -u NONE starts in 'compatible', which puts C in
+# 'cpoptions' and turns a backslash continuation into a truncated
+# statement - the trap the gate-message test exists for.
+cat > "$WORK/tqscmd.vim" <<EOF
+source $PLUGIN
+let listed = readfile('$WORK/qs-cmds.txt')
+let missing = filter(copy(listed), 'exists(":" . v:val) != 2')
+call writefile(['undefined: ' . string(missing), 'listed: ' . len(listed)], '$WORK/tqscmd.out')
+qa!
+EOF
+"$HEXPAIR_VIM" -es -u NONE -S "$WORK/tqscmd.vim" < /dev/null
+check "and every short command it types is one" "undefined: []" \
+    "$(sed -n 1p "$WORK/tqscmd.out")"
+check "and it types six of them" "listed: 6" \
+    "$(sed -n 2p "$WORK/tqscmd.out")"
+
+# --- The outline is the README's own heading structure ---------------------
+# README.md carries a clickable outline of itself, which is a hand-kept
+# copy of its own headings - the same thing the quick-start list is, and
+# the same thing that rots. Every heading must be in it, in document
+# order, under an anchor that resolves; and it must link nothing that is
+# not a heading, which is what a renamed section leaves behind.
+"$PY" - "$ROOT/README.md" > "$WORK/toutline.out" <<'OUTLINE'
+import re, sys
+
+src = open(sys.argv[1], encoding='utf-8').read().split('\n')
+# Fenced blocks hold shell comments that start with '#'; blank them out
+# rather than parsing them as headings.
+lines, fence = [], False
+for line in src:
+    if line.startswith('```'):
+        fence = not fence
+        lines.append('')
+        continue
+    lines.append('' if fence else line)
+
+def slug(text):
+    # GitHub's rule, for the punctuation this file actually uses:
+    # lowercase, drop everything but word characters, spaces and hyphens,
+    # then spaces to hyphens.
+    return re.sub(r'\s+', '-', re.sub(r'[^\w\s-]', '', text.strip().lower()))
+
+# Every section heading below the title, in order - except the outline's
+# own, which would be a link to the list you are reading.
+heads = []
+for line in lines:
+    m = re.match(r'^(#{2,6})\s+(.*)$', line)
+    if m and m.group(2).strip() != 'Outline':
+        heads.append(slug(m.group(2)))
+
+# And what the outline links to, in the order it lists them.
+inside, linked = False, []
+for line in lines:
+    m = re.match(r'^(#{2,6})\s+(.*)$', line)
+    if m:
+        inside = m.group(2).strip() == 'Outline'
+        continue
+    if inside:
+        linked += re.findall(r'\]\(#([^)]*)\)', line)
+
+print('order: ' + ('match' if heads == linked else 'DIFFER'))
+print('missing: ' + repr([h for h in heads if h not in linked]))
+print('stale: ' + repr([l for l in linked if l not in heads]))
+print('sections: %d' % len(heads))
+OUTLINE
+check "the outline lists every section, in document order" "order: match" \
+    "$(sed -n 1p "$WORK/toutline.out")"
+check "and leaves none of them out" "missing: []" \
+    "$(sed -n 2p "$WORK/toutline.out")"
+check "and links no section that is gone" "stale: []" \
+    "$(sed -n 3p "$WORK/toutline.out")"
+check "and there are as many sections as there are" "sections: 22" \
+    "$(sed -n 4p "$WORK/toutline.out")"
 
 # --- Leaving the window is not free, and not always allowed ---------------
 # Refreshing another window means going to it and back, which is also what
