@@ -5124,6 +5124,20 @@ check "an edit is marked byte for byte, not character for character" \
 # without -N, so 'cpoptions' carries C by the time the plugin has put it
 # back the way it found it.
 cat > "$WORK/tbfind.vim" <<EOF
+" Hermetic runtimepath, and this is the block that most needs one: it is
+" the only one calling the autoload functions by name, and an autoload
+" lookup is not stopped by -u NONE. Vim searches the package start
+" directories under 'packpath' for autoload/hexpair.vim as well as
+" 'runtimepath', so on a machine with hexpair INSTALLED - the maintainer's
+" own, and any user's - the lookup reached ~/.vim/pack/*/start/hexpair and
+" sourced a SECOND copy of the Vim9 script the plugin had already sourced
+" by path, which is E1073 (name already defined) on every export. The
+" error is not the visible failure, though: it aborts the rest of the
+" enclosing :if, so exactly one call below never ran, every later line of
+" tbfind.out moved up one, and four checks silently compared their
+" neighbour's answer. Pointed at the repo, the lookup finds the file
+" already sourced and does nothing at all.
+let &runtimepath = '$ROOT,' . \$VIMRUNTIME
 source $PLUGIN
 let g:hexpair_page_size = 512
 let out = []
