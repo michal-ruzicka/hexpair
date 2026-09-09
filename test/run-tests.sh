@@ -6687,6 +6687,23 @@ check "and the two diff entries select a side each, either order" \
     "all-cmd True sides ['/left', '/right'] all-icons-ico True" \
     "$(sed -n '5,7p' "$WORK/regcheck.out" | tr '\n' ' ' | sed 's/ $//')"
 
+# And that they are what the GENERATOR makes. The checks above read the
+# committed files and would pass just as well on a hand-edit, while
+# CONTRIBUTING.md calls make-context-entry-reg.py the source of these and
+# a maintainer regenerating them would then get a diff nobody expected.
+#
+# The script writes beside ITSELF, so it is copied to the work directory
+# and run there rather than in the repository - a check that rewrites the
+# files it is checking is not a check.
+cp "$ROOT/make-context-entry-reg.py" "$WORK/"
+(cd "$WORK" && "$PY" make-context-entry-reg.py >/dev/null)
+regen=
+for f in vimhex-contex-entry.add.reg vimhex-contex-entry.remove.reg; do
+    cmp -s "$ROOT/$f" "$WORK/$f" || regen="$regen $f"
+done
+check "the committed .reg files are the ones the generator writes" \
+    "" "$regen"
+
 # --- The mappings file the plugin ships ------------------------------------
 # hexpair.vimrc is the maintainer's own set of mappings, kept in the repo so
 # that a vimrc can source it instead of copying it. Three things have to

@@ -235,8 +235,34 @@ def build_remove():
     return "\n".join(lines)
 
 
+USAGE = """\
+usage: make-context-entry-reg.py [INSTALL_PATH]
+
+Regenerates the two Explorer context-menu .reg files that ship with the
+plugin. INSTALL_PATH is where hexpair is installed on the target machine,
+in Windows form, and defaults to
+
+    %s
+
+Environment variables in it are expanded by Explorer at click time, not
+here, so %%USERPROFILE%% and friends are meant to be written literally.
+"""
+
+
 def main():
-    root = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_ROOT
+    args = sys.argv[1:]
+    # A path is what this takes, so an option-looking argument is a
+    # mistake - and an expensive one to make silently, since the answer is
+    # written straight over two files the release ships. `--help` used to
+    # generate a menu pointing at a directory called "--help".
+    if args and args[0].startswith("-"):
+        out = sys.stdout if args[0] in ("-h", "--help") else sys.stderr
+        out.write(USAGE % DEFAULT_ROOT)
+        raise SystemExit(0 if args[0] in ("-h", "--help") else 2)
+    if len(args) > 1:
+        sys.stderr.write(USAGE % DEFAULT_ROOT)
+        raise SystemExit(2)
+    root = args[0] if args else DEFAULT_ROOT
     root = root.rstrip("\\")
     here = Path(__file__).resolve().parent
 
