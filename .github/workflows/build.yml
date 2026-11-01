@@ -48,7 +48,7 @@ jobs:
         run: ./pack-release
       - name: Record the tarball hashes
         run: sha256sum dist/*.tar dist/*.tar.bz2 | tee linux.sha256
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: tarball-linux
           path: |
@@ -240,7 +240,7 @@ jobs:
           Get-ChildItem dist\*.tar, dist\*.tar.bz2 | Sort-Object Name | ForEach-Object {
             (Get-FileHash $_ -Algorithm SHA256).Hash.ToLower() + '  ' + $_.Name
           } | Tee-Object windows.sha256
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: tarball-windows
           path: |
